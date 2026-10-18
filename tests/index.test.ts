@@ -138,6 +138,18 @@ describe("plugin entry", () => {
     await vi.waitFor(() => expect(getCalled).toHaveBeenCalled())
     release()
   })
+  it("session.idle is dispatched to the controller without blocking the event hook", async () => {
+    const e = env()
+    let release!: () => void
+    const gate = new Promise<void>((r) => { release = r })
+    const getCalled = vi.fn()
+    const c: any = client([])
+    c.session.get = async () => { getCalled(); await gate; return { data: {} } }
+    const hooks: any = await createServer(e.env)({ client: c, directory: e.root })
+    await hooks.event({ event: { type: "session.idle", properties: { sessionID: "s9" } } })
+    await vi.waitFor(() => expect(getCalled).toHaveBeenCalled())
+    release()
+  })
   it("never throws when setup fails (state dir unusable / bad input)", async () => {
     const hooks: any = await createServer({})({ client: undefined, directory: "x" })
     await expect(hooks.event({ event: { type: "session.error", properties: { sessionID: "s" } } })).resolves.toBeUndefined()

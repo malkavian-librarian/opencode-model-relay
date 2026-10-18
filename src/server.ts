@@ -53,7 +53,7 @@ export function createServer(env: Record<string, string | undefined>): (input: a
     const log = (_m: string) => { /* v1.0: no file logging; keep silent to avoid leaking content */ }
     const narrate = createNarrator(cfg.narrator)
     const controller = new Controller({
-      client, cfg, lock: new SessionLock(), state, health: {}, narrate,
+      client, cfg, lock: new SessionLock(), state, health: state.health, narrate,
       switchLog: new SwitchLog(ledgerDir, cfg.ledger.enabled), env, now: Date.now, chat: orChat, log,
     })
     let warned = false
@@ -103,6 +103,10 @@ export function createServer(env: Record<string, string | undefined>): (input: a
               const attempt = typeof status.attempt === "number" ? status.attempt : 1
               void controller.onRetryStatus(sessionID, attempt, status.message).catch(() => {})
             }
+          } else if (event?.type === "session.idle") {
+            // A turn ended clean: mark its model healthy so a 24 h blacklist lifts on a successful turn (#39).
+            const { sessionID } = event.properties ?? {}
+            if (typeof sessionID === "string") void controller.onSessionIdle(sessionID).catch(() => {})
           }
         } catch { /* hooks must never throw */ }
       },

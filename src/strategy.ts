@@ -2,7 +2,7 @@ import type { RelayConfig } from "./config"
 import type { Classified, OcMessage } from "./types"
 import { RELAY_MARKER } from "./defaults"
 
-export interface ModelHealth { permanent?: boolean; cooldownUntil?: number; failures?: number }
+export interface ModelHealth { permanent?: boolean; permanentAt?: number; cooldownUntil?: number; failures?: number }
 
 export type Decision =
   | { action: "switch"; to: string }
@@ -139,7 +139,7 @@ export function recordFailure(
   health: Record<string, ModelHealth>, model: string, c: Classified, now: number, cooldownMs: number,
 ): void {
   const h = (health[model] ??= {})
-  if (c.permanent) { h.permanent = true; return }
+  if (c.permanent) { h.permanent = true; h.permanentAt = now; return }
   h.failures = (h.failures ?? 0) + 1
   const exp = Math.min(h.failures - 1, MAX_BACKOFF_EXPONENT)
   const ra = c.retryAfterMs

@@ -33,7 +33,7 @@ Subagent sessions (those with a `parentID`) are skipped. Any internal error leav
 
 ## Modes
 
-`mode` decides where a failure moves the session and whether it ever comes back. In every mode, a model is skipped while it cools down (a cooldown that ends exactly now counts as over) or after a permanent failure (quota, auth, model not found: blacklisted until OpenCode restarts), and `maxSwitchesPerSession` stops all switching.
+`mode` decides where a failure moves the session and whether it ever comes back. In every mode, a model is skipped while it cools down (a cooldown that ends exactly now counts as over) or after a permanent failure (quota, auth, model not found: blacklisted for 24 hours, or until a turn on that model finishes without a plugin-seen failure), and `maxSwitchesPerSession` stops all switching.
 
 | Mode | On a failure | Later turns |
 | --- | --- | --- |
@@ -47,7 +47,7 @@ Worked example with `primary: A`, `secondary: [B1, B2]`, `tertiary: [C]`, and A 
 - `chain-recover`: A fails -> B1. Your next message 30 s later still goes to B1 (A is cooling). Your message 60 s or more after the failure goes to A again and the pin is cleared. Had A failed permanently, the session would stay on B1.
 - `escalate`: A fails -> B1. If B1 fails -> C (B2 is not tried). If C fails -> exhausted.
 
-A return in `chain-recover` is not a failure: it does not count towards `maxSwitchesPerSession` and is written to the switch log with kind `recover`. It happens only on a message you send, never on the plugin's own handover message and never while a switch is in progress. There is a budget: recovery stops one switch before the cap (never strand the session on a failing model at the limit) and is itself capped, with both counts visible in `relay_status` as `switches` and `recoveries`. Picking a different model yourself still clears the pin in every mode. Model health is kept in memory, so after an OpenCode restart every model counts as healthy again and `chain-recover` returns to the primary on the next message.
+A return in `chain-recover` is not a failure: it does not count towards `maxSwitchesPerSession` and is written to the switch log with kind `recover`. It happens only on a message you send, never on the plugin's own handover message and never while a switch is in progress. There is a budget: recovery stops one switch before the cap (never strand the session on a failing model at the limit) and is itself capped, with both counts visible in `relay_status` as `switches` and `recoveries`. Picking a different model yourself still clears the pin in every mode. Model health (cooldowns and blacklists) is persisted in `state.json`, so it survives an OpenCode restart; a blacklist still expires after 24 hours and lifts as soon as a turn on that model ends cleanly.
 
 ## Configuration
 

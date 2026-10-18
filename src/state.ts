@@ -1,5 +1,6 @@
 import fs from "node:fs"
 import path from "node:path"
+import type { ModelHealth } from "./strategy"
 
 // recoveries: chain-recover returns so far; capped separately because a recovery is not a failure switch.
 // lastPin: the model the TUI kept sending after a re-pin (see decidePin); not the chain anchor.
@@ -7,8 +8,17 @@ export interface SessionRecord { sticky?: string; origin?: string; switchCount: 
 
 const TTL_MS = 14 * 24 * 3600 * 1000
 const MAX_SESSIONS = 500
+// Model health survives restarts: a permanent failure expires after 24 h (or a successful turn on that
+// model, see controller.onSessionIdle); cooldowns expire by their own timestamp.
+const MAX_HEALTH = 200
+const PERMANENT_TTL_MS = 24 * 3600 * 1000
 
 const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v)
+
+// Model keys are "provider/model" ids from config or OpenCode's own provider list; never transcript text.
+function isModelKey(v: unknown): v is string {
+  return typeof v === "string" && v.length > 0 && v.length <= 256 && !/[\u0000-\u001f]/.test(v)
+}
 
 function sanitize(v: unknown): SessionRecord | undefined {
   if (!v || typeof v !== "object" || Array.isArray(v)) return undefined
@@ -23,9 +33,42 @@ function sanitize(v: unknown): SessionRecord | undefined {
   return out
 }
 
+/** Drops dead entries: expired cooldowns (no permanent), permanent failures older than 24 h. */
+function sanitizeHealth(raw: unknown, now: number): Record<string, ModelHealth> {
+  const out: Record<string, ModelHealth> = Object.create(null)
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return out
+  let read = 0
+  for (const [model, h] of Object.entries(raw)) {
+    if (read >= MAX_HEALTH) break
+    if (!isModelKey(model) || !h || typeof h !== "object" || Array.isArray(h)) continue
+    const r = h as Record<string, unknown>
+    const clean: ModelHealth = Object.create(null)
+    if (r.cooldownUntil !== undefined) {
+      if (!isNum(r.cooldownUntil)) continue
+      clean.cooldownUntil = r.cooldownUntil
+    }
+    if (r.permanent === true) {
+      // A permanent entry without a timestamp is not dateable: drop it; the next failure re-marks it.
+      if (!isNum(r.permanentAt) || now - r.permanentAt > PERMANENT_TTL_MS) continue
+      clean.permanent = true
+      clean.permanentAt = r.permanentAt
+    } else if (r.permanent !== undefined) { continue }
+    if (r.failures !== undefined) {
+      if (!isNum(r.failures) || r.failures < 0) continue
+      clean.failures = Math.floor(r.failures)
+    }
+    if (clean.cooldownUntil === undefined && clean.permanent === undefined && clean.failures === undefined) continue
+    out[model] = clean
+    read++
+  }
+  return out
+}
+
 export class StateStore {
   // null-prototype so ids like "constructor" / "__proto__" are plain keys
   private sessions: Record<string, SessionRecord> = Object.create(null)
+  // The controller (and strategy) mutate this map in place; save() persists it.
+  readonly health: Record<string, ModelHealth> = Object.create(null)
   constructor(private file: string, private now: () => number = Date.now) {}
 
   load(): void {
@@ -33,15 +76,21 @@ export class StateStore {
     try {
       const raw: unknown = JSON.parse(fs.readFileSync(this.file, "utf8"))
       if (raw && typeof raw === "object" && !Array.isArray(raw)) {
-        const o = raw as { v?: unknown; sessions?: unknown }
+        const o = raw as { v?: unknown; sessions?: unknown; health?: unknown }
         if (o.v === 1 && o.sessions && typeof o.sessions === "object" && !Array.isArray(o.sessions)) {
           for (const [id, rec] of Object.entries(o.sessions)) {
             const clean = sanitize(rec)
             if (clean) this.sessions[id] = clean
           }
         }
+        const loadedHealth = sanitizeHealth(o.health, this.now())
+        for (const k of Object.keys(this.health)) delete this.health[k]
+        Object.assign(this.health, loadedHealth)
       }
-    } catch { this.sessions = Object.create(null) }
+    } catch {
+      this.sessions = Object.create(null)
+      for (const k of Object.keys(this.health)) delete this.health[k]
+    }
     this.prune()
   }
 
@@ -60,6 +109,17 @@ export class StateStore {
       for (const [id, r] of entries.slice(0, MAX_SESSIONS)) kept[id] = r
       this.sessions = kept
     }
+    for (const [model, h] of Object.entries(this.health)) {
+      const cooldownLive = h.cooldownUntil !== undefined && h.cooldownUntil > t
+      const permanentLive = h.permanent === true && h.permanentAt !== undefined && t - h.permanentAt <= PERMANENT_TTL_MS
+      if (!cooldownLive && !permanentLive) delete this.health[model]
+    }
+    const healthEntries = Object.entries(this.health)
+    if (healthEntries.length > MAX_HEALTH) {
+      const kept: Record<string, ModelHealth> = Object.create(null)
+      for (const [model, h] of healthEntries.slice(0, MAX_HEALTH)) kept[model] = h
+      for (const model of Object.keys(this.health)) if (kept[model] === undefined) delete this.health[model]
+    }
   }
 
   save(): void {
@@ -68,7 +128,7 @@ export class StateStore {
     try {
       this.prune()
       fs.mkdirSync(path.dirname(this.file), { recursive: true, mode: 0o700 })
-      fs.writeFileSync(tmp, JSON.stringify({ v: 1, sessions: this.sessions }), { mode: 0o600 })
+      fs.writeFileSync(tmp, JSON.stringify({ v: 1, sessions: this.sessions, health: this.health }), { mode: 0o600 })
       fs.renameSync(tmp, this.file)
     } catch {
       /* state is best effort; never affect the session */

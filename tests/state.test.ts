@@ -56,6 +56,83 @@ describe("StateStore", () => {
     expect(() => s.save()).not.toThrow()
   })
 
+  describe("model health persistence", () => {
+    it("persists health across instances and drops nothing fresh", () => {
+      const f = file(); const now = Date.now()
+      const a = new StateStore(f); a.load()
+      a.health["a/1"] = { permanent: true, permanentAt: now, failures: 2 }
+      a.health["b/2"] = { cooldownUntil: now + 1000, failures: 1 }
+      a.save()
+      const b = new StateStore(f); b.load()
+      expect(b.health["a/1"]).toEqual({ permanent: true, permanentAt: now, failures: 2 })
+      expect(b.health["b/2"]).toEqual({ cooldownUntil: now + 1000, failures: 1 })
+    })
+
+    it("expired cooldowns disappear at load and at save", () => {
+      const f = file(); let t = 1_000_000
+      const a = new StateStore(f, () => t); a.load()
+      a.health["b/2"] = { cooldownUntil: t - 1 }
+      a.health["c/3"] = { cooldownUntil: t + 1000 }
+      a.save()
+      const b = new StateStore(f, () => t); b.load()
+      expect(b.health["b/2"]).toBeUndefined()
+      expect(b.health["c/3"]).toEqual({ cooldownUntil: t + 1000 })
+      t += 1001
+      a.save()
+      expect(a.health["c/3"]).toBeUndefined()
+      expect(JSON.parse(fs.readFileSync(f, "utf8")).health).toEqual({})
+    })
+
+    it("a permanent blacklist expires after 24 h, or lifts on a successful turn", () => {
+      const f = file(); let t = 1_000_000
+      const a = new StateStore(f, () => t); a.load()
+      a.health["a/1"] = { permanent: true, permanentAt: t, failures: 1 }
+      a.health["b/2"] = { permanent: true, failures: 1 } // no stamp: not dateable, dropped
+      a.save()
+      const b = new StateStore(f, () => t); b.load()
+      expect(b.health["a/1"]).toEqual({ permanent: true, permanentAt: t, failures: 1 })
+      expect(b.health["b/2"]).toBeUndefined()
+      t += 24 * 3600 * 1000 + 1
+      b.save()
+      expect(b.health["a/1"]).toBeUndefined()
+    })
+
+    it("validates hostile health entries: bad shape, bad values, bad keys, cap", () => {
+      const f = file()
+      const many: Record<string, unknown> = Object.create(null)
+      for (let i = 0; i < 210; i++) many["m" + i + "/1"] = { permanent: true, permanentAt: Date.now() }
+      fs.writeFileSync(f, JSON.stringify({ v: 1, sessions: {}, health: {
+        "ok/1": { permanent: true, permanentAt: Date.now(), failures: 2 },
+        "noPing/1": { permanent: true }, // permanent without a timestamp -> dropped
+        "neg/1": { failures: -1 },
+        "str/1": { failures: "3" },
+        "nan/1": { cooldownUntil: Number.NaN },
+        "": { permanent: true, permanentAt: Date.now() },
+        "with null byte\u0000/1": { permanent: true, permanentAt: Date.now() },
+        "new\nline/1": { permanent: true, permanentAt: Date.now() },
+        notObject: 5,
+        arrModel: [{ permanent: true }],
+        ...many,
+      } }))
+      const s = new StateStore(f); s.load()
+      expect(s.health["ok/1"]).toEqual({ permanent: true, permanentAt: expect.any(Number), failures: 2 })
+      for (const k of ["noPing/1", "neg/1", "str/1", "nan/1", "", "with null byte\u0000/1", "new\nline/1", "notObject", "arrModel"]) {
+        expect(s.health[k]).toBeUndefined()
+      }
+      expect(Object.keys(s.health).length).toBeLessThanOrEqual(200)
+      expect(() => s.save()).not.toThrow()
+    })
+
+    it("controls/prototypes keys in health do not pollute", () => {
+      const f = file()
+      fs.writeFileSync(f, '{"v":1,"sessions":{},"health":{"__proto__":{"permanent":true,"permanentAt":' + Date.now() + '}}}')
+      const s = new StateStore(f); s.load()
+      expect(({} as Record<string, unknown>).permanent).toBeUndefined()
+      expect(Object.keys(s.health)).toEqual(["__proto__"]) // plain data on a null-prototype map
+      expect(() => s.save()).not.toThrow()
+    })
+  })
+
   describe("wrong-shape files", () => {
     const bad: Array<[string, unknown]> = [
       ["null", null],

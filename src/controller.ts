@@ -95,6 +95,7 @@ export class Controller {
       if (d.lock.isDuplicate(`${sessionID}:${ni.id}`)) return
 
       recordFailure(d.health, current, c, d.now(), d.cfg.cooldownMs)
+      d.state.save() // health (cooldowns, blacklists) is persisted together with the session record (#39)
       const rec = { ...d.state.get(sessionID) }
       const decision = decideSwitch({
         cfg: d.cfg, current, health: d.health, now: d.now(), switchCount: rec.switchCount, tried: triedThisTurn(msgs),
@@ -141,6 +142,28 @@ export class Controller {
       await this.toast("switch_done", { from: current, to: decision.to, reason: c.kind })
     } finally {
       d.lock.release(sessionID)
+    }
+  }
+
+  /**
+   * session.idle: a turn completed without a plugin-seen failure. The turn's model proves itself: its
+   * blacklist (permanent, 24 h) and cooldown clear, "#39". Reading the transcript outside the lock is safe
+   * here: the mark is idempotent (nothing to clear), never switches, and failures only clear after a full
+   * turn really ended on that model. Never throws.
+   */
+  async onSessionIdle(sessionID: string): Promise<void> {
+    try {
+      const session = await this.d.client.session.get({ path: { id: sessionID } })
+      if (session.data?.parentID) return // failures are recorded on top-level sessions only; keep success symmetric
+      const msgs = await this.fetchMessages(sessionID)
+      const newest = [...msgs].reverse().find((m) => m.info.role === "assistant" && m.info.providerID && m.info.modelID)
+      if (!newest) return
+      const model = `${newest.info.providerID}/${newest.info.modelID}`
+      if (this.d.health[model] === undefined) return
+      delete this.d.health[model]
+      this.d.state.save()
+    } catch (e) {
+      try { this.d.log(`onSessionIdle failed: ${e instanceof Error ? e.message : String(e)}`) } catch { /* ignore */ }
     }
   }
 
