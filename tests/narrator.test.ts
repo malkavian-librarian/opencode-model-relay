@@ -30,24 +30,33 @@ describe("british tone", () => {
     }
   })
   it("fact-only events: every variant states the real condition and stays short", () => {
-    const facts: Partial<Record<NarrationEvent, RegExp[]>> = {
-      exhausted: [/no healthy model|unavailable/i],
-      cap_reached: [/switch/i, /limit/i],
-      no_consent: [/privacy\.consent/],
-      no_key: [/OpenRouter key/, /openrouter\.keyEnv/],
-      handover_failed: [/handover summary failed|could not be written/i, /transcript/i],
+    // One explicit condition phrase per variant, in pool order.
+    const facts: Partial<Record<NarrationEvent, string[]>> = {
+      exhausted: ["No healthy model left in the chain", "Every model in the chain is unavailable", "No healthy model available", "No healthy model left"],
+      cap_reached: ["Switch limit for this session reached", "Too many switches this session (limit reached)", "Switch limit reached", "switch limit for this session"],
+      no_consent: ["set privacy.consent to allow LLM handover summaries", "Handover summaries are off (no consent)", "No consent given, so no LLM handover summaries", "privacy.consent is not set"],
+      no_key: ["No OpenRouter key found", "the OpenRouter key is missing (see openrouter.keyEnv)", "need an OpenRouter key and none turned up (openrouter.keyEnv)", "no OpenRouter key (see openrouter.keyEnv)"],
+      handover_failed: ["Handover summary failed; I do apologise", "handover summary could not be written", "Handover summary failed. Using the recent transcript", "Handover summary failed, rather a shame"],
     }
-    for (const [ev, res] of Object.entries(facts) as [NarrationEvent, RegExp[]][]) {
+    for (const [ev, phrases] of Object.entries(facts) as [NarrationEvent, string[]][]) {
       const pool = BRITISH_POOLS[ev]
+      expect(phrases).toHaveLength(pool.length)
       for (let i = 0; i < pool.length; i++) {
         const m = createNarrator({ verbosity: "normal", tone: "british" }, pick(i, pool.length))(ev)!
         expect(m).toBe(pool[i])
+        expect(m).toContain(phrases[i])
         expect(m).not.toMatch(/\{[a-z]+\}/)
         expect(m.length).toBeLessThanOrEqual(LINE_CAP)
-        // no_consent variants either name the field or say consent is off/missing
-        if (ev === "no_consent") expect(m).toMatch(/privacy\.consent|no consent|off/i)
-        else for (const re of res) expect(m).toMatch(re)
       }
+    }
+  })
+  it("does not promise recovery and keeps each joke to one event", () => {
+    const all = EVENTS.flatMap((ev) => BRITISH_POOLS[ev].map((l) => [ev, l] as const))
+    expect(all.filter(([, l]) => /recover/i.test(l))).toEqual([])
+    for (const word of [/kettle/i, /Plan B/]) {
+      const hits = all.filter(([, l]) => word.test(l))
+      expect(hits).toHaveLength(1)
+      expect(hits[0]![0]).toBe("switch_done")
     }
   })
   it("config_invalid: every variant carries the detail verbatim; template stays short", () => {
@@ -104,11 +113,34 @@ describe("british tone", () => {
     expect(d.length).toBeLessThanOrEqual(LINE_CAP + 200)
   })
   it("plain stays unchanged and is not British", () => {
-    expect(PLAIN_POOLS.switch_done).toEqual([
-      "[relay] {from} stopped ({reason}). Continuing on {to}.",
-      "[relay] Switched {from} -> {to} ({reason}).",
-    ])
-    expect(PLAIN_POOLS.exhausted).toHaveLength(2)
+    // Snapshot of the origin/main pools; plain must never change silently.
+    expect(PLAIN_POOLS).toEqual({
+      switch_done: [
+        "[relay] {from} stopped ({reason}). Continuing on {to}.",
+        "[relay] Switched {from} -> {to} ({reason}).",
+      ],
+      exhausted: [
+        "[relay] No healthy model left in the chain. Staying put.",
+        "[relay] No healthy model available: every model in the chain is unavailable right now.",
+      ],
+      cap_reached: [
+        "[relay] Switch limit for this session reached. Not switching again.",
+        "[relay] Too many switches in this session (limit reached); stopping here.",
+      ],
+      no_consent: [
+        "[relay] Running local-only: set privacy.consent to enable LLM handover summaries.",
+        "[relay] Handover summaries are off (no consent). Using the plain transcript tail.",
+      ],
+      no_key: [
+        "[relay] Handover summaries need an OpenRouter key: set the environment variable named in openrouter.keyEnv.",
+        "[relay] Consent is on but no OpenRouter key was found (see openrouter.keyEnv). Using the plain transcript tail.",
+      ],
+      handover_failed: [
+        "[relay] Handover summary failed; used the plain transcript tail instead.",
+        "[relay] Handover summary failed (could not write one); passing the recent transcript instead.",
+      ],
+      config_invalid: ["[relay] Config problem: {detail}"],
+    })
     const plain = createNarrator({ verbosity: "normal", tone: "plain" }, () => 0)("switch_done", { from: "a", to: "b", reason: "x" })
     expect(plain).toBe("[relay] a stopped (x). Continuing on b.")
   })

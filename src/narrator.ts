@@ -39,14 +39,14 @@ export const BRITISH_POOLS: Record<NarrationEvent, string[]> = {
     "[relay] Rather unfortunate: {from} dropped out ({reason}). {to} steps in; do carry on.",
   ],
   exhausted: [
-    "[relay] No healthy model left in the chain. I do apologise; staying put until one recovers.",
+    "[relay] No healthy model left in the chain. I do apologise; staying put.",
     "[relay] Every model in the chain is unavailable, rather like the trains. Staying put.",
-    "[relay] No healthy model available: the whole chain is unwell. Do put the kettle on.",
+    "[relay] No healthy model available: the whole chain is unwell. Staying put.",
     "[relay] No healthy model left. The chain has gone quiet; staying put, stiff upper lip.",
   ],
   cap_reached: [
     "[relay] Switch limit for this session reached. Not switching again; one must draw the line somewhere.",
-    "[relay] Too many switches this session (limit reached). Rather than queue forever, I am stopping here.",
+    "[relay] Too many switches this session (limit reached). Not switching again.",
     "[relay] Switch limit reached. Not switching again; even the most patient queue has an end.",
     "[relay] That is the switch limit for this session. No further switching; I do apologise.",
   ],
@@ -65,7 +65,7 @@ export const BRITISH_POOLS: Record<NarrationEvent, string[]> = {
   handover_failed: [
     "[relay] Handover summary failed; I do apologise. Passing the plain transcript tail instead.",
     "[relay] The handover summary could not be written, so here is the plain transcript tail. Make do and mend.",
-    "[relay] Handover summary failed. Plan B: the recent transcript, delivered as it stands.",
+    "[relay] Handover summary failed. Using the recent transcript as it stands instead.",
     "[relay] Handover summary failed, rather a shame; used the plain transcript tail instead.",
   ],
   config_invalid: [
@@ -75,7 +75,7 @@ export const BRITISH_POOLS: Record<NarrationEvent, string[]> = {
     "[relay] Config problem. Do have a look: {detail}",
   ],
 }
-const QUIET_OK =new Set<NarrationEvent>(["exhausted", "cap_reached", "config_invalid"])
+const QUIET_OK = new Set<NarrationEvent>(["exhausted", "cap_reached", "config_invalid"])
 
 const CONTROL = new RegExp("[\\u0000-\\u001f\\u007f-\\u009f"+String.fromCharCode(0x2028,0x2029)+"]", "g")
 const VALUE_CAP = 80
