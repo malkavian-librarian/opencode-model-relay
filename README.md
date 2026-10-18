@@ -99,8 +99,7 @@ This table reflects the author's reading of both projects; check their READMEs f
 
 ## Known limits
 
-- v1.0 has not yet been recorded running end to end against a live OpenCode. Treat it as unverified until that run is documented.
-- Model pinning (a model change made in the `chat.message` hook) is verified in a headless OpenCode run (see [docs/spike.md](docs/spike.md)). TUI behaviour (toast, the Esc keypress, `/relay`) is still unconfirmed (#19).
+- Verified headless against a real OpenCode server (see [docs/e2e-v1.0.md](docs/e2e-v1.0.md)); behaviour in the TUI (toast, the Esc keypress, `/relay`) is unconfirmed (#19). Model pinning is covered in [docs/spike.md](docs/spike.md).
 - Real 403, 429 and quota error payloads have not been captured yet; those classifications rely on message and status matching tested with hand-written payloads (#18).
 - `/relay` always costs one small model turn, because OpenCode plugin commands cannot run without the model.
 - `free_tier_403` detection is by error-message match and may miss other wordings.
@@ -124,4 +123,4 @@ Work is tracked as GitHub issues and follows one documented process. Start with 
 
 ## License
 
-MIT
+MIT. The bundled dist/index.js includes zod and jsonc-parser (MIT); see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
