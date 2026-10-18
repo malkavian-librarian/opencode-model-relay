@@ -126,14 +126,15 @@ describe("chain-recover", () => {
   })
 })
 
-describe("chain-sticky stays v1.0", () => {
-  it("re-chooses a recovered primary within the same turn (no tried rule) and never auto-returns on a new turn", async () => {
+describe("chain-sticky", () => {
+  it("a model tried for the same failing turn is never re-chosen (incl. a 0 ms Retry-After) and never auto-returns on a new turn", async () => {
     const { c, d, calls, messages, clock } = setup("chain-sticky")
-    await c.onSessionError("s1", err429("0"))
+    await c.onSessionError("s1", err429("0")) // a/1 cools down for 0 ms: healthy again at once
+    expect(calls.prompt[0].body.model).toEqual({ providerID: "b", modelID: "2" })
     messages.push(user("h1", `${RELAY_MARKER}\nhandover`, "b", "2"), asst("b1", "b", "2"))
     await c.onSessionError("s1", err429())
-    expect(calls.prompt[1].body.model).toEqual({ providerID: "a", modelID: "1" })
-    expect(d.state.get("s1")).toMatchObject({ sticky: "a/1", origin: "a/1", switchCount: 2 })
+    expect(calls.prompt[1].body.model).toEqual({ providerID: "c", modelID: "3" })
+    expect(d.state.get("s1")).toMatchObject({ sticky: "c/3", switchCount: 2 })
 
     d.state.set("s1", { sticky: "b/2", origin: "a/1", switchCount: 1, updated: T0 })
     clock.now = T0 + 100 * COOLDOWN

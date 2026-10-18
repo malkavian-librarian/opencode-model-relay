@@ -37,7 +37,7 @@ Subagent sessions (those with a `parentID`) are skipped. Any internal error leav
 
 | Mode | On a failure | Later turns |
 | --- | --- | --- |
-| `chain-sticky` (default) | First healthy model of the flat list `primary`, `secondary...`, `tertiary...` other than the failing one (the v1.0 behaviour). | Stay on the model that took over. No automatic return. |
+| `chain-sticky` (default) | First healthy model of the flat list `primary`, `secondary...`, `tertiary...` other than the failing one; a model already tried for the same failing turn is never chosen again. | Stay on the model that took over. No automatic return. |
 | `chain-recover` | Same flat list, but a model already tried for the same failing turn is never chosen again, even if its cooldown has run out meanwhile. | On your next message, if a model ranked above the current one is healthy again, the session returns to the highest-ranked one (primary first). Back on the original model, the pin is cleared. |
 | `escalate` | Tiers read cheap to strong. A failure in tier T moves to the first healthy model of tier T+1; a tier with no healthy model (or no model at all) is skipped. Siblings in the same tier and lower tiers are never tried, so the session never moves down or sideways. Exhausted once the top tier fails. | Stay on the model that took over. No automatic return. |
 

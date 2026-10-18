@@ -92,12 +92,12 @@ const run = (mode: string, t: object, r: Row) => decideSwitch({
   switchCount: r.switchCount ?? 0, tried: r.tried ?? [],
 })
 
-describe("decideSwitch: chain-sticky (unchanged v1.0 walk of the flat chain)", () => {
+describe("decideSwitch: chain-sticky (flat chain, tried models excluded)", () => {
   const rows: Row[] = [
     { name: "primary fails -> first secondary", current: "a/1", want: sw("b/2") },
     { name: "walks the flat list incl. same-tier siblings", current: "b/2", health: { "a/1": { permanent: true } }, want: sw("b/3") },
     { name: "goes back up the list to a healthy primary", current: "b/2", want: sw("a/1") },
-    { name: "ignores `tried` (v1.0 behaviour)", current: "b/2", tried: ["a/1", "b/2"], want: sw("a/1") },
+    { name: "a model tried for the same failing turn is never re-chosen, even after its cooldown ran out", current: "b/2", tried: ["a/1", "b/2"], want: sw("b/3") },
     { name: "cooldown ending exactly now is expired", current: "a/1", health: { "b/2": { cooldownUntil: 1000 } }, want: sw("b/2") },
     { name: "cooldown ending after now is skipped", current: "a/1", health: { "b/2": { cooldownUntil: 1001 } }, want: sw("b/3") },
     { name: "switch cap", current: "a/1", switchCount: 6, want: CAP },

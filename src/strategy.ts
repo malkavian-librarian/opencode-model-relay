@@ -78,9 +78,8 @@ export function escalateModel(i: {
 }
 
 /**
- * The failure-switch decision per mode. chain-sticky ignores `tried` on purpose so its behaviour stays exactly
- * as in v1.0 (a tried model is normally still cooling anyway); chain-recover and escalate never re-choose a
- * model already tried for the same failing turn, even when its cooldown has run out meanwhile.
+ * The failure-switch decision per mode. A model already tried for the same failing turn is never re-chosen,
+ * even when its cooldown has run out meanwhile.
  */
 export function decideSwitch(i: {
   cfg: RelayConfig; current: string; health: Record<string, ModelHealth>
@@ -89,7 +88,7 @@ export function decideSwitch(i: {
   const base = { current: i.current, health: i.health, now: i.now, switchCount: i.switchCount, maxSwitches: i.cfg.maxSwitchesPerSession }
   if (i.cfg.mode === "escalate") return escalateModel({ ...base, tiers: buildTiers(i.cfg), tried: i.tried })
   if (i.cfg.mode === "chain-recover") return nextModel({ ...base, chain: buildChain(i.cfg, i.current), tried: i.tried })
-  return nextModel({ ...base, chain: buildChain(i.cfg, i.current) })
+  return nextModel({ ...base, chain: buildChain(i.cfg, i.current), tried: i.tried })
 }
 
 /**
