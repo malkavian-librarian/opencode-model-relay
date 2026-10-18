@@ -133,7 +133,7 @@ export function triedThisTurn(msgs: OcMessage[]): string[] {
   return [...tried]
 }
 
-const MAX_COOLDOWN_MS = 3_600_000
+export const MAX_COOLDOWN_MS = 3_600_000
 const MAX_BACKOFF_EXPONENT = 30
 export function recordFailure(
   health: Record<string, ModelHealth>, model: string, c: Classified, now: number, cooldownMs: number,

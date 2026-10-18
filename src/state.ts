@@ -1,6 +1,6 @@
 import fs from "node:fs"
 import path from "node:path"
-import type { ModelHealth } from "./strategy"
+import { MAX_COOLDOWN_MS, type ModelHealth } from "./strategy"
 
 // recoveries: chain-recover returns so far; capped separately because a recovery is not a failure switch.
 // lastPin: the model the TUI kept sending after a re-pin (see decidePin); not the chain anchor.
@@ -17,7 +17,7 @@ const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFin
 
 // Model keys are "provider/model" ids from config or OpenCode's own provider list; never transcript text.
 function isModelKey(v: unknown): v is string {
-  return typeof v === "string" && v.length > 0 && v.length <= 256 && !/[\u0000-\u001f]/.test(v)
+  return typeof v === "string" && v.length > 0 && v.length <= 256 && !/[\u0000-\u001f\u007f\u0080-\u009f]/.test(v)
 }
 
 function sanitize(v: unknown): SessionRecord | undefined {
@@ -45,11 +45,14 @@ function sanitizeHealth(raw: unknown, now: number): Record<string, ModelHealth> 
     const clean: ModelHealth = Object.create(null)
     if (r.cooldownUntil !== undefined) {
       if (!isNum(r.cooldownUntil)) continue
-      clean.cooldownUntil = r.cooldownUntil
+      // Clamp a hostile far-future cooldown to the runtime cap (MAX_COOLDOWN_MS): a poisoned file must not
+      // be able to keep a model unhealthy longer than a real failure could.
+      clean.cooldownUntil = Math.min(r.cooldownUntil, now + MAX_COOLDOWN_MS)
     }
     if (r.permanent === true) {
       // A permanent entry without a timestamp is not dateable: drop it; the next failure re-marks it.
-      if (!isNum(r.permanentAt) || now - r.permanentAt > PERMANENT_TTL_MS) continue
+      // A stamp in the future is equally not trustable: drop it so the model is not blacklisted forever.
+      if (!isNum(r.permanentAt) || r.permanentAt > now || now - r.permanentAt > PERMANENT_TTL_MS) continue
       clean.permanent = true
       clean.permanentAt = r.permanentAt
     } else if (r.permanent !== undefined) { continue }

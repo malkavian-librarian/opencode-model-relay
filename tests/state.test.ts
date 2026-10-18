@@ -97,6 +97,19 @@ describe("StateStore", () => {
       expect(b.health["a/1"]).toBeUndefined()
     })
 
+    it("far-future hostile timestamps are clamped or dropped: a poisoned file cannot blacklist forever", () => {
+      const f = file(); const now = 1_000_000
+      fs.writeFileSync(f, JSON.stringify({ v: 1, sessions: {}, health: {
+        "cool/1": { cooldownUntil: 1e18 },
+        "future/1": { permanent: true, permanentAt: now + 5000 },
+      } }))
+      const s = new StateStore(f, () => now); s.load()
+      expect(s.health["cool/1"]!.cooldownUntil).toBe(now + 3_600_000) // the runtime cooldown cap
+      expect(s.health["future/1"]).toBeUndefined()
+      s.save()
+      expect(JSON.parse(fs.readFileSync(f, "utf8")).health["future/1"]).toBeUndefined()
+    })
+
     it("validates hostile health entries: bad shape, bad values, bad keys, cap", () => {
       const f = file()
       const many: Record<string, unknown> = Object.create(null)
