@@ -33,7 +33,7 @@ function setup(o: { cfg?: object; messages?: OcMessage[]; parentID?: string; env
   const state = new StateStore(path.join(fs.mkdtempSync(path.join(os.tmpdir(), "relay-c-")), "state.json"), () => 1_000_000); state.load()
   const lock = new SessionLock()
   const d: Deps = {
-    client, cfg, lock, state, health: {}, narrate: createNarrator({ verbosity: "normal", tone: "plain" }),
+    client, cfg, lock, state, health: state.health, narrate: createNarrator({ verbosity: "normal", tone: "plain" }),
     switchLog: { append: (r) => calls.logs.push(r) }, env: o.env ?? {}, now: () => 1_000_000,
     chat: o.chat ?? (async (a: any) => { calls.chat.push(a); return { text: "SUMMARY", costUsd: 0.01 } }),
     log: () => {}, switchOpts: { abortTimeoutMs: 20, abortDelayMs: 0 },
@@ -276,6 +276,46 @@ describe("Controller.onSessionError", () => {
         expect(calls).toHaveLength(1)
       })
     }
+  })
+})
+
+describe("Controller.onSessionIdle", () => {
+  it("lifts the failing model's blacklist on the next successful turn and persists the clear", async () => {
+    const { c, d } = setup({ cfg: { privacy: { consent: true } }, env: { OPENROUTER_API_KEY: "k" } })
+    await c.onSessionError("s1", { name: "APIError", data: { statusCode: 402, responseBody: "insufficient credits" } })
+    expect(d.health["a/1"]?.permanent).toBe(true)
+    const f = (d.state as any).file as string
+    let reloaded = new StateStore(f, () => 1_000_000); reloaded.load()
+    expect(reloaded.health["a/1"]?.permanent).toBe(true) // survives an OpenCode restart
+    await c.onSessionIdle("s1")
+    expect(d.health["a/1"]).toBeUndefined()
+    reloaded = new StateStore(f, () => 1_000_000); reloaded.load()
+    expect(reloaded.health["a/1"]).toBeUndefined()
+  })
+  it("clears cooldowns and failure counts too", async () => {
+    const { c, d } = setup()
+    d.health["a/1"] = { cooldownUntil: 2_000_000, failures: 3 }
+    await c.onSessionIdle("s1")
+    expect(d.health["a/1"]).toBeUndefined()
+  })
+  it("skips subagent sessions and sessions with no assistant model both ways", async () => {
+    const sub = setup({ parentID: "p" }); sub.d.health["a/1"] = { permanent: true, permanentAt: 1 }
+    await sub.c.onSessionIdle("s1")
+    expect(sub.d.health["a/1"]?.permanent).toBe(true)
+    const title = setup({ messages: [{ info: { id: "t1", role: "assistant" }, parts: [] }] })
+    title.d.health["a/1"] = { permanent: true, permanentAt: 1 }
+    await title.c.onSessionIdle("s1")
+    expect(title.d.health["a/1"]?.permanent).toBe(true)
+  })
+  it("does not poison health with unknown models", async () => {
+    const { c, d } = setup({ messages: msgs({ providerID: "z", modelID: "9" }) })
+    await c.onSessionIdle("s1")
+    expect(d.health["z/9"]).toBeUndefined()
+  })
+  it("never throws when the client fails", async () => {
+    const { c, d } = setup()
+    ;(d.client.session as any).get = async () => { throw new Error("down") }
+    await expect(c.onSessionIdle("s1")).resolves.toBeUndefined()
   })
 })
 
