@@ -33,6 +33,8 @@ Subagent sessions (those with a `parentID`) are skipped. Any internal error leav
 
 ## Configuration
 
+Run `/relay-init` inside OpenCode to create a commented default config. It asks the model to call the `relay_init` tool (one small model turn), which writes the file below with `privacy.consent: false`, lists the `provider/model` ids from your configured providers (first 40), and prints next steps: edit the tiers, set consent only if you accept sending a redacted transcript to OpenRouter, and set `OPENROUTER_API_KEY` (never written to the file). It never overwrites an existing file, only writes inside the config directory (directory mode 0700, file mode 0600), and if it cannot list models it still writes the file. The tiers in the file are always commented-out examples (the file is harmless until you edit it); up to 10 of your configured models are listed in a comment block to pick from.
+
 File: `~/.config/opencode/opencode-model-relay.jsonc` (JSONC, max 64 KB). It is read from the user config directory only, never from a project. `XDG_CONFIG_HOME` overrides the base directory. An invalid file falls back to defaults and shows a warning toast. Unknown keys are rejected.
 
 | Field | Type | Default | Notes |

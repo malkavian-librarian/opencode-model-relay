@@ -1,4 +1,6 @@
+import os from "node:os"
 import path from "node:path"
+import { initConfig } from "./init"
 import { Controller } from "./controller"
 import { configFile, confineToDir, dataDir, loadConfig } from "./config"
 import { StateStore } from "./state"
@@ -12,6 +14,21 @@ import { modelKey, parseModel, type ClientLike } from "./types"
 // Spike (docs/spike.md): clearing command parts does not stop the model turn, so /relay asks the model to call the tool.
 const RELAY_COMMAND_TEMPLATE = "Call the relay_status tool and print its output verbatim in a code block. Do nothing else."
 const RELAY_TOOL_DESCRIPTION = "Show the opencode-model-relay failover status (model chain, current model, switch count, API key set or missing). Use it when the user asks for relay or failover status."
+
+const INIT_COMMAND_TEMPLATE = "Call the relay_init tool and print its output verbatim. Do nothing else."
+const INIT_TOOL_DESCRIPTION = "Create a commented default opencode-model-relay config file (never overwrites an existing one) and list the configured models. Use it only when the user asks to set up or initialise the relay."
+
+/** Lists "provider/model" ids from OpenCode's configured providers. Reads only ids, never provider options or keys. */
+async function listProviderModels(client: ClientLike): Promise<string[]> {
+  if (!client.config) throw new Error("client.config unavailable")
+  const res = await client.config.providers()
+  const out: string[] = []
+  for (const p of res?.data?.providers ?? []) {
+    if (typeof p?.id !== "string") continue
+    for (const modelId of Object.keys(p.models ?? {})) out.push(`${p.id}/${modelId}`)
+  }
+  return out
+}
 
 /** Hooks that do nothing; returned when setup fails so OpenCode keeps working untouched. */
 function noopHooks(): Record<string, (...a: any[]) => Promise<void>> {
@@ -55,10 +72,22 @@ export function createServer(env: Record<string, string | undefined>): (input: a
           args: {},
           execute: async (_args: unknown, ctx: { sessionID: string }) => controller.status(ctx.sessionID),
         },
+        relay_init: {
+          description: INIT_TOOL_DESCRIPTION,
+          args: {},
+          execute: async () => {
+            try { return await initConfig({ env, home: os.homedir(), listModels: () => listProviderModels(client) }) }
+            catch { return "relay_init failed unexpectedly; no config was written." }
+          },
+        },
       },
       config: async (c: any) => {
         try {
-          c.command = { ...(c.command ?? {}), relay: { template: RELAY_COMMAND_TEMPLATE, description: "Show model relay status" } }
+          c.command = {
+            ...(c.command ?? {}),
+            relay: { template: RELAY_COMMAND_TEMPLATE, description: "Show model relay status" },
+            "relay-init": { template: INIT_COMMAND_TEMPLATE, description: "Create a commented default model relay config" },
+          }
         } catch { /* ignore */ }
       },
       event: async ({ event }: any) => {
