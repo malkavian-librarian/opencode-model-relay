@@ -28,4 +28,5 @@ Out of scope: vulnerabilities in OpenCode itself, OpenRouter, or the models; and
 - The only direct network call is the optional handover summary request to OpenRouter. It happens only when `privacy.consent` is true and the key environment variable is set. The URL must be `https` on `openrouter.ai` unless `openrouter.allowCustomBaseUrl` is true; redirects are not followed.
 - The transcript is redacted before sending, output of sensitive files is dropped, and requests carry `provider.data_collection: "deny"`.
 - Local files in `~/.local/share/opencode-model-relay`: `switches.jsonl` (metadata only, session ids HMAC'd with a random per-install salt), `state.json`, and `salt`.
-- The API key is read from an environment variable only.
+- The API key is read from an environment variable only. The `relay_status` tool and `/relay` report only whether the key is set or missing.
+- The published package has no runtime dependencies: `zod` and `jsonc-parser` are bundled into `dist/index.js` at build time (`@opencode-ai/plugin` is a peer dependency provided by OpenCode).
