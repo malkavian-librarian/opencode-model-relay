@@ -11,6 +11,7 @@ over with a structured summary. Design: `docs/superpowers/specs/2026-10-18-model
 
 - Install: `npm ci` - Test: `npm test` (vitest run) - Types: `npm run typecheck`
   (`tsc --noEmit`) - Build: `npm run build` (tsup) - Package check: `npm pack --dry-run`
+- Development and tests need Node >= 20.19 (vitest 4 / vite 8; CI uses 22, see `.node-version`); the published plugin itself runs on Node >= 20.
 - There is no linter or formatter. Do not add Biome, ESLint or Prettier.
 - Gates, scoped runs and test rules: `docs/testing.md`. CI job `test` runs
   typecheck, tests, build and `npm pack --dry-run` on every push and PR.

@@ -3,6 +3,8 @@
 The stack is TypeScript with vitest, `tsc --noEmit` and a tsup build. There is no
 linter or formatter. CI (`.github/workflows/ci.yml`, job `test`) runs the same gates.
 
+Development and tests need Node >= 20.19 (vitest 4 / vite 8; CI uses 22, see `.node-version`); the published plugin itself runs on Node >= 20.
+
 ## Gates
 
 | Gate | Command | When |
