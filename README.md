@@ -28,6 +28,7 @@ Models are written `providerID/modelID`; only the first `/` splits them (`openro
 3. It builds a structured handover: a summary, the tool calls so far (with DONE / FAILED / UNKNOWN status), files touched, open todos, and your last request verbatim. The summary is written by a helper model through OpenRouter only if you opted in (see Privacy); otherwise the handover carries the plain tail of the redacted transcript.
 4. The plugin aborts the failed turn, sends the handover to the next model, and the work resumes there.
 5. The choice is sticky for the session: later messages are pinned to the model that took over (`chain-recover` can move them back once a higher-ranked model recovers). If you pick a different model yourself, the pin is cleared.
+6. Optional (off by default): a quality judge watches finished turns on secondary/tertiary models. Local heuristics flag a silent turn, repeated identical tool calls or repeated tool errors; only then does a cheap judge model see the redacted transcript tail and decide. Two consecutive `switch: true` verdicts switch to the next healthy, untried chain model — logged as `quality`, never counting as a failure for cooldowns. See the `judge.*` config rows.
 
 Subagent sessions (those with a `parentID`) are skipped. Any internal error leaves the session on its current model; hooks never throw. Main-model traffic always goes through OpenCode; the plugin does not proxy it.
 
@@ -72,6 +73,12 @@ File: `~/.config/opencode/opencode-model-relay.jsonc` (JSONC, max 64 KB). It is 
 | `handover.maxToolChars` | positive integer | `1500` | Per tool output cap before truncation. |
 | `handover.maxTranscriptChars` | positive integer | `60000` | Transcript cap (internally limited to 60000). |
 | `handover.maxCallsPerSession` | integer >= 0 | `3` | Helper-model calls per session; after that the plain tail is used. |
+| `judge.enabled` | boolean | `false` | Opt-in quality judge: after a finished turn, if the local heuristics find the turn suspicious, a judge model decides whether to switch to a healthier chain model. Never applies to the primary tier or its own handover turns. Two consecutive `switch: true` verdicts are required for a switch (no cooldown recorded for it). |
+| `judge.model` | string | `"google/gemini-2.5-flash-lite"` | OpenRouter model that judges. Keep it cheap: it runs after idle turns. |
+| `judge.prompt` | string | built-in prompt | System prompt for the judge; must answer strict JSON `{switch, reason, confidence}`. |
+| `judge.maxCallsPerSession` | integer >= 0 | `3` | Judge calls per session (failed calls count). |
+| `judge.minIntervalMs` | integer >= 0 | `60000` | Minimum time between judge calls per session. |
+| `judge.maxDailyUsd` | number | `0.5` (max 100) | Per-day judge spend cap across all sessions. |
 | `cooldownMs` | positive integer | `60000` | Base cooldown for a temporarily failed model; doubles per repeat, capped at 1 hour. A `Retry-After` header is honoured. |
 | `maxSwitchesPerSession` | positive integer | `6` | Hard cap on switches per session. |
 | `onExhausted` | `"stop"` | `"stop"` | Only behaviour in v1.0. |
@@ -82,15 +89,15 @@ File: `~/.config/opencode/opencode-model-relay.jsonc` (JSONC, max 64 KB). It is 
 
 ## Privacy
 
-- Nothing leaves your machine except through OpenCode itself, unless you opt in. The only direct call the plugin makes is the optional handover summary to OpenRouter.
-- Opt in with `"privacy.consent": true` and an OpenRouter key in the environment variable named by `openrouter.keyEnv`. Without both, no network call is made and the handover uses the plain transcript tail. You get a one-time toast saying so.
+- Nothing leaves your machine except through OpenCode itself, unless you opt in. The only direct calls the plugin makes are the optional handover summary and (if `judge.enabled`) the optional quality judge, both to OpenRouter.
+- Opt in with `"privacy.consent": true` and an OpenRouter key in the environment variable named by `openrouter.keyEnv`. Without both, no network call is made: the handover uses the plain transcript tail and the judge does not run. You get a one-time toast saying so.
 - Every helper request sends `provider.data_collection: "deny"`. With `privacy.zdr: true` it also requests zero-data-retention routing.
 - Everything sent passes through a redaction step first (private keys, common API token formats, bearer tokens, `KEY=value` lines, auth and cookie headers, URL credentials, secret-looking query parameters and CLI flags). Output of tools that touched sensitive paths (`.env`, SSH keys, `.pem`, `.npmrc`, `.netrc`, `credentials`, `secrets.json` and similar) is dropped. Redaction is pattern-based and best effort, not a guarantee.
 - The helper request goes only to the configured base URL over `https`, with redirects not followed. The key is never written to config, logs, the switch log or error messages.
 - Transcripts and tool output are treated as untrusted data. The handover message says it is a model-generated summary, not user instructions.
 - Stored locally under `~/.local/share/opencode-model-relay` (or `$XDG_DATA_HOME/opencode-model-relay`):
   - `switches.jsonl`: one row per switch with timestamp, HMAC'd session id, from/to model, failure kind (or `recover` for a `chain-recover` return) and optional helper cost. Metadata only, no prompt or response text.
-  - `state.json`: per-session sticky model and counters.
+  - `state.json`: per-session sticky model and counters (helper/judge call counts, cooldowns, the optional daily judge spend bucket).
   - `salt`: the random per-install salt used for the session-id HMAC.
 
 ## Compared to opencode-auto-fallback
@@ -108,13 +115,12 @@ An honest comparison; pick what fits your setup.
 | Consent and redaction for data egress | n/a | explicit consent gate, redaction, `data_collection: "deny"` |
 | Config | per-agent chains | `tiers` (primary, secondary, tertiary) |
 | Sticky per session | not documented | yes |
-| Quality-failure judge | no | not yet (planned v1.1) |
+| Quality-failure judge | no | optional, opt-in: local heuristics + a cheap LLM judge (`judge.enabled`) |
 
 This table reflects the author's reading of both projects; check their READMEs for current behaviour.
 
 ## Roadmap
 
-- v1.1: a judge model for quality failures (not only hard errors) and a quality path for tiers.
 - v1.2: per-model statistics.
 
 ## Known limits

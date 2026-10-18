@@ -5,7 +5,7 @@ import type { FailureKind } from "./types"
 
 const SALT_BYTES = 32
 
-/** A failure-switch logs its FailureKind; a chain-recover return to a recovered model logs "recover". */
+/** A failure-switch logs its FailureKind; a chain-recover return logs "recover"; a judge switch logs "quality". */
 export type SwitchKind = FailureKind | "recover"
 
 function readSalt(f: string): Buffer | null {

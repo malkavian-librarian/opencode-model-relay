@@ -110,6 +110,7 @@ over with a structured summary. Design: `docs/superpowers/specs/2026-10-18-model
 - zod 3 nested `.default({})` applies inner defaults but zod 4 changes this -> keep zod `^3` (2026-10-18)
 - PowerShell 5.1 mangles multiline strings passed to `gh issue create --body $var` -> pipe `$body | gh issue create --body-file -` with `$OutputEncoding` set to UTF8 without BOM (2026-10-18)
 - Dependency majors that need code or Node-floor changes (zod 4, vitest 5) -> ignore the major in .github/dependabot.yml with a reason, do not merge them (2026-10-18)
+- Judge test failures that look like "the judge is blocked" are usually off-by-one idle expectations: messages are pushed BEFORE the idle, and a turn with assistant text is healthy (heuristics skip it) -> assert in push -> idle -> expect order, and diff against a passing replica test when tallying gates by hand (2026-10-19)
 
 ## Bugs - [open]/[fixed] + repro (max 10)
 

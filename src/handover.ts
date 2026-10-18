@@ -14,7 +14,7 @@ export interface Extracted {
 
 const EDIT_TOOLS = new Set(["edit", "write", "patch", "multiedit", "apply_patch"])
 const MAX_LAST_REQUEST = 4000
-const MAX_REDACT_INPUT = 60_000
+export const MAX_REDACT_INPUT = 60_000
 const neutralizeTags = (s: string): string => s.replace(/<\s*(\/?)\s*transcript/gi, "<\u200b$1transcript")
 const statusOf = (s: string): "DONE" | "FAILED" | "UNKNOWN" =>
   s === "completed" ? "DONE" : s === "error" ? "FAILED" : "UNKNOWN"

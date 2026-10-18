@@ -4,7 +4,11 @@ import { MAX_COOLDOWN_MS, type ModelHealth } from "./strategy"
 
 // recoveries: chain-recover returns so far; capped separately because a recovery is not a failure switch.
 // lastPin: the model the TUI kept sending after a re-pin (see decidePin); not the chain anchor.
-export interface SessionRecord { sticky?: string; origin?: string; switchCount: number; helperCalls?: number; recoveries?: number; lastPin?: string; updated: number }
+// judgeCalls/lastJudgeAt: quality-judge usage counters; both persist so the caps survive a restart (#26).
+export interface SessionRecord { sticky?: string; origin?: string; switchCount: number; helperCalls?: number; recoveries?: number; lastPin?: string; judgeCalls?: number; lastJudgeAt?: number; updated: number }
+
+/** Global per-day judge budget, keyed by UTC date so it resets itself at midnight. */
+export interface JudgeDaily { date?: string; calls?: number; costUsd?: number }
 
 const TTL_MS = 14 * 24 * 3600 * 1000
 const MAX_SESSIONS = 500
@@ -30,6 +34,19 @@ function sanitize(v: unknown): SessionRecord | undefined {
   if (typeof r.lastPin === "string") out.lastPin = r.lastPin
   if (isNum(r.helperCalls) && r.helperCalls >= 0) out.helperCalls = Math.floor(r.helperCalls)
   if (isNum(r.recoveries) && r.recoveries >= 0) out.recoveries = Math.floor(r.recoveries)
+  if (isNum(r.judgeCalls) && r.judgeCalls >= 0) out.judgeCalls = Math.floor(r.judgeCalls)
+  if (isNum(r.lastJudgeAt) && r.lastJudgeAt >= 0) out.lastJudgeAt = Math.floor(r.lastJudgeAt)
+  return out
+}
+
+/** Hostile judge-daily section: only the rebuildable counters are kept, anything else is dropped. */
+export function sanitizeJudgeDaily(raw: unknown): JudgeDaily {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {}
+  const r = raw as Record<string, unknown>
+  const out: JudgeDaily = {}
+  if (typeof r.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(r.date)) out.date = r.date
+  if (isNum(r.calls) && r.calls >= 0) out.calls = Math.floor(r.calls)
+  if (isNum(r.costUsd) && r.costUsd >= 0) out.costUsd = Math.min(r.costUsd, 1e6)
   return out
 }
 
@@ -72,6 +89,8 @@ export class StateStore {
   private sessions: Record<string, SessionRecord> = Object.create(null)
   // The controller (and strategy) mutate this map in place; save() persists it.
   readonly health: Record<string, ModelHealth> = Object.create(null)
+  // Global judge budget of the current UTC day; the controller writes, this class owns persistence.
+  readonly judgeDaily: JudgeDaily = Object.create(null)
   constructor(private file: string, private now: () => number = Date.now) {}
 
   load(): void {
@@ -79,7 +98,7 @@ export class StateStore {
     try {
       const raw: unknown = JSON.parse(fs.readFileSync(this.file, "utf8"))
       if (raw && typeof raw === "object" && !Array.isArray(raw)) {
-        const o = raw as { v?: unknown; sessions?: unknown; health?: unknown }
+        const o = raw as { v?: unknown; sessions?: unknown; health?: unknown; judgeDaily?: unknown }
         if (o.v === 1 && o.sessions && typeof o.sessions === "object" && !Array.isArray(o.sessions)) {
           for (const [id, rec] of Object.entries(o.sessions)) {
             const clean = sanitize(rec)
@@ -89,10 +108,12 @@ export class StateStore {
         const loadedHealth = sanitizeHealth(o.health, this.now())
         for (const k of Object.keys(this.health)) delete this.health[k]
         Object.assign(this.health, loadedHealth)
+        Object.assign(this.judgeDaily, sanitizeJudgeDaily(o.judgeDaily))
       }
     } catch {
       this.sessions = Object.create(null)
       for (const k of Object.keys(this.health)) delete this.health[k]
+      for (const k of Object.keys(this.judgeDaily) as (keyof JudgeDaily)[]) delete this.judgeDaily[k]
     }
     this.prune()
   }
@@ -131,7 +152,7 @@ export class StateStore {
     try {
       this.prune()
       fs.mkdirSync(path.dirname(this.file), { recursive: true, mode: 0o700 })
-      fs.writeFileSync(tmp, JSON.stringify({ v: 1, sessions: this.sessions, health: this.health }), { mode: 0o600 })
+      fs.writeFileSync(tmp, JSON.stringify({ v: 1, sessions: this.sessions, health: this.health, judgeDaily: this.judgeDaily }), { mode: 0o600 })
       fs.renameSync(tmp, this.file)
     } catch {
       /* state is best effort; never affect the session */
