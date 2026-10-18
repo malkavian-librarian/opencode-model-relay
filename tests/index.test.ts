@@ -60,6 +60,37 @@ describe("plugin entry", () => {
     expect(cfg.command.relay.template).toContain("relay_status")
     expect(cfg.command.relay.description).toBeTruthy()
   })
+  it("registers /relay-init whose template asks the model to call relay_init", async () => {
+    const e = env()
+    const hooks: any = await createServer(e.env)({ client: client([]), directory: e.root })
+    const cfg: any = {}
+    await hooks.config(cfg)
+    expect(cfg.command["relay-init"].template).toContain("relay_init")
+    expect(cfg.command["relay-init"].description).toBeTruthy()
+    expect(cfg.command.relay).toBeTruthy()
+  })
+  it("registers relay_init as a plain tool, writes the config via client.config.providers and never leaks the key", async () => {
+    const e = env()
+    const c: any = client([])
+    c.config = { providers: async () => ({ data: { providers: [{ id: "anthropic", key: "sk-LEAK", models: { "claude-x": {} } }] } }) }
+    const hooks: any = await createServer({ ...e.env, XDG_CONFIG_HOME: path.join(e.root, "cfg2"), OPENROUTER_API_KEY: "sk-or-SECRETVALUE" })({ client: c, directory: e.root })
+    const t = hooks.tool.relay_init
+    expect(typeof t.description).toBe("string")
+    expect(t.args).toEqual({})
+    const out = await t.execute({}, { sessionID: "s1" })
+    expect(out).toContain("anthropic/claude-x")
+    expect(out).not.toMatch(/SECRETVALUE|sk-LEAK/)
+    const file = path.join(e.root, "cfg2", "opencode", "opencode-model-relay.jsonc")
+    expect(fs.existsSync(file)).toBe(true)
+    expect(await t.execute({}, { sessionID: "s1" })).toMatch(/already exists/)
+  })
+  it("relay_init still writes the file when the client has no config API", async () => {
+    const e = env()
+    const hooks: any = await createServer(e.env)({ client: client([]), directory: e.root })
+    const out = await hooks.tool.relay_init.execute({}, { sessionID: "s1" })
+    expect(out).toMatch(/Could not list/)
+    expect(fs.existsSync(path.join(e.root, "cfg", "opencode", "opencode-model-relay.jsonc"))).toBe(true)
+  })
   it("no longer registers a command.execute.before hook", async () => {
     const e = env()
     const hooks: any = await createServer(e.env)({ client: client([]), directory: e.root })

@@ -12,6 +12,7 @@ Targeting 1.0.0 (not yet released).
 - Secret redaction and sensitive-path output dropping before any data is sent.
 - Local switch log (`switches.jsonl`, metadata only, HMAC'd session ids) and `state.json`.
 - Toast narration with verbosity levels, and a `relay_status` tool and a `/relay` command that asks the model to call it (it costs one small model turn; plugin commands cannot skip the model turn).
+- `relay_init` tool and `/relay-init` command: create a commented default config (never overwrites, confined to the config directory, consent off), listing your configured models.
 - Config from the user config directory only, validated with a strict schema.
 - Subagent sessions are skipped; hooks never throw.
 - Opt-in British narrator tone (`narrator.tone: "british"`): four variants per event, facts always stated first; `plain` stays the default and is unchanged.

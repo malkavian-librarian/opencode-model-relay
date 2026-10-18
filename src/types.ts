@@ -39,5 +39,6 @@ export interface ClientLike {
       body: { model: ModelRef; agent?: string; parts: { type: "text"; text: string }[] }
     }): Promise<unknown>
   }
+  config?: { providers(): Promise<{ data?: { providers?: { id: string; models?: Record<string, unknown> }[] } }> }
   tui: { showToast(a: { body: { message: string; variant?: "info" | "success" | "warning" | "error" } }): Promise<unknown> }
 }
