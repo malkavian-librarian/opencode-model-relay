@@ -38,7 +38,7 @@ Subagent sessions (those with a `parentID`) are skipped. Any internal error leav
 | Mode | On a failure | Later turns |
 | --- | --- | --- |
 | `chain-sticky` (default) | First healthy model of the flat list `primary`, `secondary...`, `tertiary...` other than the failing one; a model already tried for the same failing turn is never chosen again. | Stay on the model that took over. No automatic return. |
-| `chain-recover` | Same flat list, but a model already tried for the same failing turn is never chosen again, even if its cooldown has run out meanwhile. | On your next message, if a model ranked above the current one is healthy again, the session returns to the highest-ranked one (primary first). Back on the original model, the pin is cleared. |
+| `chain-recover` | Same flat list, but a model already tried for the same failing turn is never chosen again, even if its cooldown has run out meanwhile. | On your next message, if a model ranked above the current one is healthy again, the session returns to the highest-ranked one (primary first). Back on the original model, the pin is cleared; if the turn instead arrives on the old fallback, it re-pins to the recovered model (the TUI may keep sending the old one). |
 | `escalate` | Tiers read cheap to strong. A failure in tier T moves to the first healthy model of tier T+1; a tier with no healthy model (or no model at all) is skipped. Siblings in the same tier and lower tiers are never tried, so the session never moves down or sideways. Exhausted once the top tier fails. | Stay on the model that took over. No automatic return. |
 
 Worked example with `primary: A`, `secondary: [B1, B2]`, `tertiary: [C]`, and A hitting a rate limit (60 s cooldown):
@@ -47,7 +47,7 @@ Worked example with `primary: A`, `secondary: [B1, B2]`, `tertiary: [C]`, and A 
 - `chain-recover`: A fails -> B1. Your next message 30 s later still goes to B1 (A is cooling). Your message 60 s or more after the failure goes to A again and the pin is cleared. Had A failed permanently, the session would stay on B1.
 - `escalate`: A fails -> B1. If B1 fails -> C (B2 is not tried). If C fails -> exhausted.
 
-A return in `chain-recover` is not a failure: it does not count towards `maxSwitchesPerSession` and is written to the switch log with kind `recover`. It happens only on a message you send, never on the plugin's own handover message and never while a switch is in progress. Picking a different model yourself still clears the pin in every mode. Model health is kept in memory, so after an OpenCode restart every model counts as healthy again and `chain-recover` returns to the primary on the next message.
+A return in `chain-recover` is not a failure: it does not count towards `maxSwitchesPerSession` and is written to the switch log with kind `recover`. It happens only on a message you send, never on the plugin's own handover message and never while a switch is in progress. There is a budget: recovery stops one switch before the cap (never strand the session on a failing model at the limit) and is itself capped, with both counts visible in `relay_status` as `switches` and `recoveries`. Picking a different model yourself still clears the pin in every mode. Model health is kept in memory, so after an OpenCode restart every model counts as healthy again and `chain-recover` returns to the primary on the next message.
 
 ## Configuration
 
