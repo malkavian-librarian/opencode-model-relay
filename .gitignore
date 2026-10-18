@@ -1,0 +1,8 @@
+﻿node_modules/
+dist/
+.env
+.env.*
+*.jsonl
+stats.json
+state.json
+.DS_Store
