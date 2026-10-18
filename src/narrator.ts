@@ -1,4 +1,4 @@
-export type NarrationEvent = "switch_done" | "exhausted" | "cap_reached" | "no_consent" | "no_key" | "handover_failed" | "config_invalid"
+export type NarrationEvent = "switch_done" | "recovered" | "exhausted" | "cap_reached" | "no_consent" | "no_key" | "handover_failed" | "config_invalid"
 type Vars = { from?: string; to?: string; reason?: string; detail?: string }
 type Verbosity = "off" | "quiet" | "normal" | "chatty"
 
@@ -6,6 +6,10 @@ export const PLAIN_POOLS: Record<NarrationEvent, string[]> = {
   switch_done: [
     "[relay] {from} stopped ({reason}). Continuing on {to}.",
     "[relay] Switched {from} -> {to} ({reason}).",
+  ],
+  recovered: [
+    "[relay] {to} is healthy again. Moving back from {from}.",
+    "[relay] Returning to {to} (recovered); leaving {from}.",
   ],
   exhausted: [
     "[relay] No healthy model left in the chain. Staying put.",
@@ -37,6 +41,12 @@ export const BRITISH_POOLS: Record<NarrationEvent, string[]> = {
     "[relay] Do forgive the interruption: {from} gave up ({reason}). Moving on to {to}.",
     "[relay] {from} is down ({reason}), so it is Plan B: {to}. Kettle's on.",
     "[relay] Rather unfortunate: {from} dropped out ({reason}). {to} steps in; do carry on.",
+  ],
+  recovered: [
+    "[relay] Splendid news: {to} has recovered. Heading back from {from}; all in order.",
+    "[relay] {to} has recovered, so back we go from {from}. Steady as she goes.",
+    "[relay] {to} is back on its feet after that {from} interlude. Resuming there.",
+    "[relay] Right then, {to} has recovered. Back there we go; leaving {from} behind.",
   ],
   exhausted: [
     "[relay] No healthy model left in the chain. I do apologise; staying put.",
