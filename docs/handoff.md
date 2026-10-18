@@ -15,6 +15,14 @@ GitHub issue comments hold the detailed notes; this file indexes the latest stat
 
 ## Entries (newest first)
 
+### 2026-10-18 - #2 spike and #4 e2e done (orchestrator)
+
+- Status: live-session spike and recorded end-to-end run are done by the orchestrator.
+  Results: `docs/spike.md` (#2) and `docs/e2e-v1.0.md` (#4). Real captured shapes live in
+  `tests/fixtures/` and are exercised by `tests/real-fixtures.test.ts`.
+- Next: #3 (plugin entry implementation).
+- Blockers: #5 (npm publish) remains owner-gated (`needs-owner`).
+
 ### 2026-10-18 - v1.0 code merged; process adopted
 
 - Status: v1.0 code is on `main` via PR #10 (squash, 236 tests, CI green, independent

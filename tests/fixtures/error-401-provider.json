@@ -1,0 +1,21 @@
+{
+  "event": "session.error",
+  "properties": {
+    "sessionID": "ses_example",
+    "error": {
+      "name": "APIError",
+      "data": {
+        "message": "Incorrect API key provided: sk-REDACTED. You can find your API key at https://platform.openai.com/account/api-keys.",
+        "statusCode": 401,
+        "isRetryable": false,
+        "responseHeaders": {
+          "content-type": "text/plain"
+        },
+        "responseBody": "{\n  \"error\": {\n    \"message\": \"Incorrect API key provided: sk-REDACTED. You can find your API key at https://platform.openai.com/account/api-keys.\",\n    \"type\": \"invalid_request_error\",\n    \"code\": \"invalid_api_key\",\n    \"param\": null\n  },\n  \"status\": 401\n}",
+        "metadata": {
+          "url": "https://api.openai.com/v1/responses"
+        }
+      }
+    }
+  }
+}
