@@ -1,7 +1,8 @@
 import fs from "node:fs"
 import path from "node:path"
 
-export interface SessionRecord { sticky?: string; origin?: string; switchCount: number; helperCalls?: number; updated: number }
+// recoveries: chain-recover returns so far; capped separately because a recovery is not a failure switch.
+export interface SessionRecord { sticky?: string; origin?: string; switchCount: number; helperCalls?: number; recoveries?: number; updated: number }
 
 const TTL_MS = 14 * 24 * 3600 * 1000
 const MAX_SESSIONS = 500
@@ -16,6 +17,7 @@ function sanitize(v: unknown): SessionRecord | undefined {
   if (typeof r.sticky === "string") out.sticky = r.sticky
   if (typeof r.origin === "string") out.origin = r.origin
   if (isNum(r.helperCalls) && r.helperCalls >= 0) out.helperCalls = Math.floor(r.helperCalls)
+  if (isNum(r.recoveries) && r.recoveries >= 0) out.recoveries = Math.floor(r.recoveries)
   return out
 }
 

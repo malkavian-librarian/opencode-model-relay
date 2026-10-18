@@ -131,6 +131,7 @@ export class Controller {
 
       d.state.set(sessionID, {
         sticky: decision.to, origin: rec.origin ?? current, switchCount: rec.switchCount + 1, helperCalls, updated: d.now(),
+        ...(rec.recoveries !== undefined ? { recoveries: rec.recoveries } : {}),
       })
       d.state.save()
       d.switchLog.append({
@@ -156,7 +157,11 @@ export class Controller {
       const rec = d.state.get(sessionID)
       // Recover only on a real user turn: never on our own handover prompt (same failing turn) and never while
       // a switch holds the lock (the failure path owns the session then).
-      locked = d.cfg.mode === "chain-recover" && !!rec.sticky && !hasRelayMarker(parts) && d.lock.tryAcquire(sessionID)
+      // Budget: a recovery is free but the failure switch away from a model that relapses is not, so leave one
+      // switch of headroom (never strand the session on a failing model at the cap), and cap recoveries too.
+      const max = d.cfg.maxSwitchesPerSession
+      const budget = rec.switchCount < max - 1 && (rec.recoveries ?? 0) < max
+      locked = d.cfg.mode === "chain-recover" && budget && !!rec.sticky && !hasRelayMarker(parts) && d.lock.tryAcquire(sessionID)
       const p = decidePin(rec, inputModelKey, locked
         ? { mode: d.cfg.mode, chain: buildChain(d.cfg, rec.origin ?? rec.sticky ?? inputModelKey), health: d.health, now: d.now() }
         : undefined)
@@ -165,10 +170,14 @@ export class Controller {
       // Drop sticky/origin but keep the switch and helper-call counters (caps must survive).
       const next: typeof rec = { switchCount: rec.switchCount, updated: d.now() }
       if (rec.helperCalls !== undefined) next.helperCalls = rec.helperCalls
+      if (rec.recoveries !== undefined) next.recoveries = rec.recoveries
       if (p.action === "recover") {
+        next.recoveries = (rec.recoveries ?? 0) + 1
         if (!p.clearSticky) {
+          // The turn arrived on another model than the recovered one (TUI still showing origin or the old sticky
+          // model; which one is unconfirmed, #19): keep pinning that incoming model to the recovered one.
           next.sticky = p.to
-          if (rec.origin !== undefined) next.origin = rec.origin
+          next.origin = inputModelKey
         }
         d.state.set(sessionID, next); d.state.save()
         d.switchLog.append({ ts: d.now(), sessionID, from: rec.sticky as string, to: p.to, kind: "recover" })
@@ -193,6 +202,7 @@ export class Controller {
       `mode: ${d.cfg.mode}`,
       `sticky: ${rec?.sticky ?? "none"}`,
       `switches: ${rec?.switchCount ?? 0}`,
+      `recoveries: ${rec?.recoveries ?? 0}`,
       `consent: ${d.cfg.privacy.consent ? "on" : "off"}`,
       `key: ${d.env[d.cfg.openrouter.keyEnv] ? "set" : "missing"}`,
     ].join("\n")

@@ -5,7 +5,8 @@ export type PinDecision =
   | { action: "pin"; to: string }
   | { action: "clear" }
   | { action: "none" }
-  // chain-recover: send this turn to `to`; clearSticky when `to` is the session's origin (nothing left to pin).
+  // chain-recover: send this turn to `to`. clearSticky only when the turn already arrives on `to` (nothing left
+  // to pin); otherwise the caller keeps sticky=`to` so later turns on the incoming model stay pinned.
   | { action: "recover"; to: string; clearSticky: boolean }
 
 /**
@@ -13,6 +14,7 @@ export type PinDecision =
  * chain-recover) this is the v1.0 sticky rule. In chain-recover, a turn arriving on the origin or the sticky
  * model returns to the highest-priority healthy model ranked above the sticky one. An explicit pick of any
  * other model still clears stickiness first: the user's choice always wins over recovery.
+ * Which model the TUI sends after a plugin prompt (origin or sticky) is unconfirmed (#19); both are handled.
  */
 export function decidePin(
   rec: SessionRecord, inputModelKey: string,
@@ -23,7 +25,7 @@ export function decidePin(
   if (inputModelKey !== rec.sticky && !onOrigin) return { action: "clear" }
   if (recovery?.mode === "chain-recover") {
     const to = recoverTarget({ chain: recovery.chain, sticky: rec.sticky, health: recovery.health, now: recovery.now })
-    if (to) return { action: "recover", to, clearSticky: to === rec.origin }
+    if (to) return { action: "recover", to, clearSticky: to === inputModelKey }
   }
   return onOrigin && inputModelKey !== rec.sticky ? { action: "pin", to: rec.sticky } : { action: "none" }
 }

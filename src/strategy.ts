@@ -101,12 +101,15 @@ export function recoverTarget(i: { chain: string[]; sticky: string; health: Reco
   return above.find((m) => m !== i.sticky && isHealthy(i.health[m], i.now))
 }
 
-/** True when parts hold a relay handover (our own prompt), recognised by RELAY_MARKER in a text part. */
+/**
+ * True when parts hold a relay handover (our own prompt): a non-synthetic text part that STARTS with
+ * RELAY_MARKER (buildHandover always puts it first). A marker pasted mid-message by the user does not count.
+ */
 export function hasRelayMarker(parts: unknown): boolean {
   if (!Array.isArray(parts)) return false
   return parts.some((p) => {
-    const t = p && typeof p === "object" ? (p as { type?: unknown; text?: unknown }) : undefined
-    return t?.type === "text" && typeof t.text === "string" && t.text.includes(RELAY_MARKER)
+    const t = p && typeof p === "object" ? (p as { type?: unknown; text?: unknown; synthetic?: unknown }) : undefined
+    return t?.type === "text" && !t.synthetic && typeof t.text === "string" && t.text.startsWith(RELAY_MARKER)
   })
 }
 

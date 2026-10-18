@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest"
 import { defaultConfig } from "../src/config"
 import {
-  buildChain, buildTiers, decideSwitch, nextModel, recordFailure, recoverTarget, tierOf, triedThisTurn,
+  buildChain, buildTiers, decideSwitch, hasRelayMarker, nextModel, recordFailure, recoverTarget, tierOf, triedThisTurn,
   type Decision, type ModelHealth,
 } from "../src/strategy"
 import { RELAY_MARKER } from "../src/defaults"
@@ -169,6 +169,19 @@ describe("triedThisTurn", () => {
       user("h1", `${RELAY_MARKER}\nhandover`, { providerID: "b", modelID: "2" }), asst("b1", "b", "2"),
     ]
     expect(triedThisTurn(msgs).sort()).toEqual(["a/1", "b/2"])
+  })
+  it("a marker pasted mid-message or in a synthetic part does not make a handover", () => {
+    const pasted = user("u2", `look: ${RELAY_MARKER} odd`, { providerID: "b", modelID: "2" })
+    const synthetic: OcMessage = { info: { id: "u3", role: "user", model: { providerID: "c", modelID: "3" } }, parts: [{ type: "text", text: `${RELAY_MARKER}\nx`, synthetic: true }] }
+    expect(triedThisTurn([user("u1", "x", { providerID: "a", modelID: "1" }), pasted])).toEqual(["b/2"])
+    expect(triedThisTurn([user("u1", "x", { providerID: "a", modelID: "1" }), synthetic])).toEqual(["c/3"])
+    expect(hasRelayMarker(pasted.parts)).toBe(false)
+    expect(hasRelayMarker(synthetic.parts)).toBe(false)
+    expect(hasRelayMarker([{ type: "text", text: `${RELAY_MARKER}\nhandover` }])).toBe(true)
+    expect(hasRelayMarker(undefined)).toBe(false)
+  })
+  it("first failure before any assistant reply: the user message's model is tried", () => {
+    expect(triedThisTurn([user("u1", "hi", { providerID: "a", modelID: "1" })])).toEqual(["a/1"])
   })
   it("is empty for no messages and tolerates malformed entries", () => {
     expect(triedThisTurn([])).toEqual([])
