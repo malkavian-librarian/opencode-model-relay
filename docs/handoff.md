@@ -15,6 +15,16 @@ GitHub issue comments hold the detailed notes; this file indexes the latest stat
 
 ## Entries (newest first)
 
+### 2026-10-18 - #36, #37, #25, #40 merged; recover hardening queued (opencode)
+
+- Status: four PRs squash-merged to `main` this session, each with QA/security PASS and CI green:
+  #41 (#36 dependabot ignore), #46 (#37 workflow hardening, LOW advisory tracked as #45), #47 (#25 modes),
+  #48 (#40 tried-model rule in chain-sticky + transcript read under the lock). Recover hardening WIP lives
+  on branch `wip/recover-hardening` and is groomed as #49 (not started).
+- Next: #49 (implement, reuse the WIP; rebase onto `main`), then #38/#39/#26 in that order; #26 needs #25 done, now satisfied.
+- Blockers: #45 (workflow_dispatch scope) is an owner decision; #5 release and #19 TUI checks remain owner-gated.
+- Note: CodeRabbit is enabled on the repo (CHILL profile) but returned no review on this session's PRs; internal QA/security subagent review remains the effective gate.
+
 ### 2026-10-18 - #2 spike and #4 e2e done (orchestrator)
 
 - Status: live-session spike and recorded end-to-end run are done by the orchestrator.
