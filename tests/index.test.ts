@@ -52,27 +52,45 @@ describe("plugin entry", () => {
     const hooks: any = await (server as any)({ client: client([]), directory: "x" })
     await expect(hooks.config({})).resolves.toBeUndefined()
   })
-  it("/relay status clears the prompt parts and shows status in a toast", async () => {
-    const e = env(); const toasts: string[] = []
-    const hooks: any = await createServer(e.env)({ client: client(toasts), directory: e.root })
-    const out: any = { parts: [{ type: "text", text: "relay status" }] }
-    await hooks["command.execute.before"]({ command: "relay", sessionID: "s1", arguments: "status" }, out)
-    expect(out.parts).toEqual([])
-    expect(toasts.join(" ")).toContain("chain:")
-  })
-  it("/relay status never reveals the API key value", async () => {
-    const e = env(); const toasts: string[] = []
-    const hooks: any = await createServer({ ...e.env, OPENROUTER_API_KEY: "sk-or-SECRETVALUE" })({ client: client(toasts), directory: e.root })
-    await hooks["command.execute.before"]({ command: "relay", sessionID: "s1", arguments: "status" }, { parts: [] })
-    expect(toasts.join(" ")).toContain("key: set")
-    expect(toasts.join(" ")).not.toContain("SECRETVALUE")
-  })
-  it("ignores other commands and unrelated events without throwing", async () => {
+  it("/relay command template tells the model to call relay_status", async () => {
     const e = env()
     const hooks: any = await createServer(e.env)({ client: client([]), directory: e.root })
-    const out: any = { parts: [{ type: "text", text: "x" }] }
-    await hooks["command.execute.before"]({ command: "other", sessionID: "s1", arguments: "" }, out)
-    expect(out.parts).toHaveLength(1)
+    const cfg: any = {}
+    await hooks.config(cfg)
+    expect(cfg.command.relay.template).toContain("relay_status")
+    expect(cfg.command.relay.description).toBeTruthy()
+  })
+  it("no longer registers a command.execute.before hook", async () => {
+    const e = env()
+    const hooks: any = await createServer(e.env)({ client: client([]), directory: e.root })
+    expect(hooks["command.execute.before"]).toBeUndefined()
+  })
+  it("registers relay_status as a plain tool definition and returns the status string", async () => {
+    const e = env()
+    const hooks: any = await createServer(e.env)({ client: client([]), directory: e.root })
+    const t = hooks.tool.relay_status
+    expect(typeof t.description).toBe("string")
+    expect(t.description).toMatch(/status/i)
+    expect(t.args).toEqual({})
+    const out = await t.execute({}, { sessionID: "s1" })
+    expect(typeof out).toBe("string")
+    expect(out).toContain("chain:")
+  })
+  it("relay_status never reveals the API key value", async () => {
+    const e = env()
+    const hooks: any = await createServer({ ...e.env, OPENROUTER_API_KEY: "sk-or-SECRETVALUE" })({ client: client([]), directory: e.root })
+    const out = await hooks.tool.relay_status.execute({}, { sessionID: "s1" })
+    expect(out).toContain("key: set")
+    expect(out).not.toContain("SECRETVALUE")
+  })
+  it("relay_status reports a missing key", async () => {
+    const e = env()
+    const hooks: any = await createServer(e.env)({ client: client([]), directory: e.root })
+    expect(await hooks.tool.relay_status.execute({}, { sessionID: "s1" })).toContain("key: missing")
+  })
+  it("ignores unrelated events without throwing", async () => {
+    const e = env()
+    const hooks: any = await createServer(e.env)({ client: client([]), directory: e.root })
     await expect(hooks.event({ event: { type: "file.edited", properties: {} } })).resolves.toBeUndefined()
     await expect(hooks.event({ event: { type: "session.error", properties: {} } })).resolves.toBeUndefined()
   })
@@ -92,7 +110,6 @@ describe("plugin entry", () => {
   it("never throws when setup fails (state dir unusable / bad input)", async () => {
     const hooks: any = await createServer({})({ client: undefined, directory: "x" })
     await expect(hooks.event({ event: { type: "session.error", properties: { sessionID: "s" } } })).resolves.toBeUndefined()
-    await expect(hooks["command.execute.before"]({ command: "relay", sessionID: "s" }, { parts: [] })).resolves.toBeUndefined()
     await expect(hooks["chat.message"]({ sessionID: "s", model: { providerID: "a", modelID: "1" } }, { message: {} })).resolves.toBeUndefined()
     await expect(hooks.config({})).resolves.toBeUndefined()
   })
