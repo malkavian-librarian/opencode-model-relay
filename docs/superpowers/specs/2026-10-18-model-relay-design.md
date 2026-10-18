@@ -49,7 +49,7 @@ TypeScript, ESM, dependencies kept to `zod` and a JSONC parser; `@opencode-ai/pl
 
 | Unit | Job |
 |---|---|
-| `config` | Load/validate settings, resolve env key, defaults, path confinement. Config dir via a `getConfigDir()` that handles Windows (`%APPDATA%\opencode`) and XDG. |
+| `config` | Load/validate settings, resolve env key, defaults, path confinement. Config dir is `~/.config/opencode` on every platform (matches OpenCode itself, including Windows); `XDG_CONFIG_HOME` overrides. |
 | `classifier` | Input: `session.error` (APIError{statusCode,isRetryable,responseBody}, ProviderAuthError, UnknownError, MessageAbortedError) and `session.status {type:"retry"}`. `FreeTierError` matched on responseBody. Pure. |
 | `strategy` | Pure `(sessionState, trigger) -> nextModel | exhausted`, one implementation per mode. |
 | `session-lock` | Per-session state machine `idle | switching | cooling` with single-flight mutex; dedup errors by `(sessionID, messageID, kind)`; plugin-abort marks with TTL (swallow the next abort/idle caused by us; an abort we did not mark is a user cancel and sets `userCancelled`). Judge and switcher share the lock. |
@@ -88,7 +88,7 @@ Facts first, flavour second: every message carries from-model, to-model and reas
 
 ## 9. Performance ledger
 
-- Location: user data dir (`%LOCALAPPDATA%\opencode-model-relay` on Windows, XDG data dir elsewhere), never under the project tree. Directory 0700 / files 0600 on POSIX; on Windows rely on the user-private location and say so in docs.
+- Location: user data dir `~/.local/share/opencode-model-relay` (`XDG_DATA_HOME` overrides), never under the project tree. Directory 0700 / files 0600 on POSIX; on Windows rely on the user-private location and say so in docs.
 - Raw: per-process `events-<pid>.jsonl` (or a lockfile), one line per append, readers skip corrupt lines, monthly rotation. Fields: epoch-ms ts, HMAC session id (random per-install salt), model, tier, mode, latencyMs, tokens, cost, errorKind enum, judge verdict, switch from/to/reason enum, helper-call cost. Every completed turn is recorded (needed as the denominator).
 - Derived: `stats.json` (schema-versioned, atomic temp+rename write), per-model UTC daily buckets over a rolling 30 days: turns, failures by kind, judge rejection rate (tier 2/3), switch-away rate, survival, median latency, tokens, cost, helper overhead. Prune by `ts`, not bucket label; rebuild on startup.
 - Survival: the next assistant turn on the same model in the same session completes with no switch within 30 minutes or 5 turns; sessions with no next turn are censored and excluded from the denominator.
