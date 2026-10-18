@@ -25,7 +25,7 @@
     "@types/node": "^22.0.0",
     "jsonc-parser": "^3.3.1",
     "tsup": "^8.3.0",
-    "typescript": "^5.6.0",
+    "typescript": "^7.0.2",
     "vitest": "^4.1.12",
     "zod": "^3.23.8"
   }
