@@ -14,4 +14,5 @@ Targeting 1.0.0 (not yet released).
 - Toast narration with verbosity levels, and a `relay_status` tool and a `/relay` command that asks the model to call it (it costs one small model turn; plugin commands cannot skip the model turn).
 - Config from the user config directory only, validated with a strict schema.
 - Subagent sessions are skipped; hooks never throw.
+- Opt-in British narrator tone (`narrator.tone: "british"`): four variants per event, facts always stated first; `plain` stays the default and is unchanged.
 - Self-contained `dist/index.js`: `zod` and `jsonc-parser` are bundled, so the package has no runtime dependencies and copying the file into the plugins directory works.

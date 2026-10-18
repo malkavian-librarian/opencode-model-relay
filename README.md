@@ -56,7 +56,7 @@ File: `~/.config/opencode/opencode-model-relay.jsonc` (JSONC, max 64 KB). It is 
 | `maxSwitchesPerSession` | positive integer | `6` | Hard cap on switches per session. |
 | `onExhausted` | `"stop"` | `"stop"` | Only behaviour in v1.0. |
 | `narrator.verbosity` | `"off"` \| `"quiet"` \| `"normal"` \| `"chatty"` | `"normal"` | `quiet` shows only exhausted, cap and config problems. |
-| `narrator.tone` | `"plain"` \| `"british"` | `"plain"` | Accepted, but v1.0 has only plain messages; `british` has no effect yet. |
+| `narrator.tone` | `"plain"` \| `"british"` | `"plain"` | `plain` is terse. `british` is opt-in dry humour (tea, queueing, "Plan B"): every message still states the facts first (models, reason, or the actual condition), static text only, no repeats back to back. |
 | `ledger.enabled` | boolean | `true` | Write the local switch log. |
 | `ledger.dir` | string | unset (data dir) | Must resolve inside the data directory, otherwise the data directory is used. |
 
@@ -94,7 +94,7 @@ This table reflects the author's reading of both projects; check their READMEs f
 
 ## Roadmap
 
-- v1.1: a judge model for quality failures (not only hard errors), a quality path for tiers, and the British narrator tone.
+- v1.1: a judge model for quality failures (not only hard errors) and a quality path for tiers.
 - v1.2: per-model statistics.
 
 ## Known limits
