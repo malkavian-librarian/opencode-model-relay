@@ -23,7 +23,7 @@ describe("decidePin with recovery inputs", () => {
   const opts = (mode: string, health: Record<string, ModelHealth> = {}) => ({ mode: mode as any, chain, health, now: 1000 })
   const rows: { name: string; mode: string; input: string; health?: Record<string, ModelHealth>; want: object }[] = [
     { name: "recover: primary recovered -> back to origin, stickiness cleared", mode: "chain-recover", input: "a/1", health: { "a/1": { cooldownUntil: 1000 } }, want: { action: "recover", to: "a/1", clearSticky: true } },
-    { name: "recover: works when the turn arrives on the sticky model too", mode: "chain-recover", input: "c/3", want: { action: "recover", to: "a/1", clearSticky: true } },
+    { name: "recover: a turn arriving on the sticky model recovers but keeps a pin (TUI may still send it, #19)", mode: "chain-recover", input: "c/3", want: { action: "recover", to: "a/1", clearSticky: false } },
     { name: "recover: primary cooling, secondary healthy -> sticky moves up, not cleared", mode: "chain-recover", input: "a/1", health: { "a/1": { cooldownUntil: 1001 } }, want: { action: "recover", to: "b/2", clearSticky: false } },
     { name: "recover: nothing recovered -> plain pin", mode: "chain-recover", input: "a/1", health: { "a/1": { permanent: true }, "b/2": { cooldownUntil: 9999 } }, want: { action: "pin", to: "c/3" } },
     { name: "recover: nothing recovered on the sticky model -> none", mode: "chain-recover", input: "c/3", health: { "a/1": { permanent: true }, "b/2": { permanent: true } }, want: { action: "none" } },

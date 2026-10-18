@@ -23,7 +23,7 @@ const asst = (id: string, providerID: string, modelID: string): OcMessage =>
 const handoverParts = [{ type: "text", text: `${RELAY_MARKER}\nhandover` }]
 const userParts = [{ type: "text", text: "next question" }]
 
-function setup(mode: string, tiers: object = { primary: "a/1", secondary: ["b/2"], tertiary: ["c/3"] }) {
+function setup(mode: string, tiers: object = { primary: "a/1", secondary: ["b/2"], tertiary: ["c/3"] }, extra: object = {}) {
   const calls = { prompt: [] as any[], logs: [] as any[] }
   const messages: OcMessage[] = [user("u1", "fix the bug", "a", "1"), asst("a1", "a", "1")]
   const client: any = {
@@ -38,7 +38,7 @@ function setup(mode: string, tiers: object = { primary: "a/1", secondary: ["b/2"
   const clock = { now: T0 }
   const state = new StateStore(path.join(fs.mkdtempSync(path.join(os.tmpdir(), "relay-m-")), "state.json"), () => clock.now); state.load()
   const d: Deps = {
-    client, cfg: ConfigSchema.parse({ mode, tiers, cooldownMs: COOLDOWN }), lock: new SessionLock(), state, health: {},
+    client, cfg: ConfigSchema.parse({ mode, tiers, cooldownMs: COOLDOWN, ...extra }), lock: new SessionLock(), state, health: {},
     narrate: createNarrator({ verbosity: "off", tone: "plain" }), switchLog: { append: (r) => calls.logs.push(r) },
     env: {}, now: () => clock.now, chat: async () => ({ text: "" }), log: () => {}, switchOpts: { abortTimeoutMs: 20, abortDelayMs: 0 },
   }
@@ -66,12 +66,74 @@ describe("chain-recover", () => {
     expect(c.onChatMessage("s1", "a/1", userParts)).toBeUndefined() // nothing sticky any more
     expect(calls.logs).toHaveLength(2)
   })
-  it("recovers from the sticky model too (TUI showing the sticky model)", async () => {
-    const { c, d, clock } = setup("chain-recover")
+  it("recovers from the sticky model too and keeps pinning it (TUI may keep sending the sticky model, #19)", async () => {
+    const { c, d, calls, clock } = setup("chain-recover")
     await c.onSessionError("s1", err429())
     clock.now = T0 + COOLDOWN
     expect(c.onChatMessage("s1", "b/2", userParts)).toBe("a/1")
-    expect(d.state.get("s1").sticky).toBeUndefined()
+    expect(d.state.get("s1")).toMatchObject({ sticky: "a/1", origin: "a/1", lastPin: "b/2", switchCount: 1, recoveries: 1 })
+    // the second message still arrives on B: it must run on the recovered A, not silently on B
+    expect(c.onChatMessage("s1", "b/2", userParts)).toBe("a/1")
+    expect(c.onChatMessage("s1", "a/1", userParts)).toBeUndefined()
+    expect(calls.logs.filter((l) => l.kind === "recover")).toHaveLength(1)
+  })
+  it("re-pinning preserves the chain head: no primary, C->B recovery keeps origin A and later favours A", async () => {
+    // Chain A -> B -> C built from origin (no primary). Sticky C recovers to B while A is cooling; the turn
+    // still arrives on C. Origin must stay A (NOT the arriving C): the next recovery must prioritise A.
+    const { c, d, clock } = setup("chain-recover", { secondary: ["a/1", "b/2"], tertiary: ["c/3"] })
+    d.health["a/1"] = { cooldownUntil: T0 + COOLDOWN + 1 }
+    d.state.set("s1", { sticky: "c/3", origin: "a/1", switchCount: 1, updated: T0 })
+    clock.now = T0 + COOLDOWN
+    expect(c.onChatMessage("s1", "c/3", userParts)).toBe("b/2") // to B, to !== incoming C: re-pin
+    expect(d.state.get("s1")).toMatchObject({ sticky: "b/2", origin: "a/1", lastPin: "c/3" })
+    clock.now = T0 + 2 * COOLDOWN // A has recovered
+    expect(c.onChatMessage("s1", "b/2", userParts)).toBe("a/1") // next recovery prioritises the chain head A
+  })
+  it("no recovery at switchCount == cap - 1: the session stays on the working fallback", async () => {
+    const { c, d, calls, clock } = setup("chain-recover", undefined, { maxSwitchesPerSession: 3 })
+    d.state.set("s1", { sticky: "b/2", origin: "a/1", switchCount: 2, updated: T0 })
+    clock.now = T0 + 100 * COOLDOWN
+    expect(c.onChatMessage("s1", "a/1", userParts)).toBe("b/2")
+    expect(d.state.get("s1").sticky).toBe("b/2")
+    expect(calls.logs).toHaveLength(0)
+  })
+  it("stops recovering once recoveries reach the cap; relay_status shows the count", async () => {
+    const { c, d, clock } = setup("chain-recover", undefined, { maxSwitchesPerSession: 3 })
+    d.state.set("s1", { sticky: "b/2", origin: "a/1", switchCount: 1, recoveries: 3, updated: T0 })
+    clock.now = T0 + 100 * COOLDOWN
+    expect(c.onChatMessage("s1", "a/1", userParts)).toBe("b/2")
+    expect(c.status("s1")).toContain("recoveries: 3")
+    d.state.set("s1", { sticky: "b/2", origin: "a/1", switchCount: 1, recoveries: 2, updated: T0 })
+    expect(c.onChatMessage("s1", "a/1", userParts)).toBe("a/1")
+    expect(d.state.get("s1").recoveries).toBe(3)
+    expect(c.status("s1")).toContain("recoveries: 3")
+  })
+  it("fail / recover cycles end on the working fallback, never stuck on the failing model at the cap", async () => {
+    const { c, d, calls, messages, clock } = setup("chain-recover", { primary: "a/1", secondary: ["b/2"] }, { maxSwitchesPerSession: 3 })
+    await c.onSessionError("s1", err429()) // a -> b (switch 1)
+    clock.now += 10 * COOLDOWN
+    expect(c.onChatMessage("s1", "a/1", userParts)).toBe("a/1") // recovery 1
+    messages.push(user("u2", "again", "a", "1"), asst("a2", "a", "1"))
+    await c.onSessionError("s1", err429()) // a -> b (switch 2)
+    expect(d.state.get("s1")).toMatchObject({ sticky: "b/2", switchCount: 2, recoveries: 1 })
+    clock.now += 10 * COOLDOWN
+    expect(c.onChatMessage("s1", "a/1", userParts)).toBe("b/2") // cap - 1 reached: no more recovery
+    expect(calls.prompt.map((p) => p.body.model.modelID)).toEqual(["2", "2"])
+    expect(calls.logs.map((l) => l.kind)).toEqual(["rate_limit", "recover", "rate_limit"])
+  })
+  it("first failure with no assistant message yet switches away from the user message's model", async () => {
+    const { c, calls, messages } = setup("chain-recover")
+    messages.splice(0, messages.length, user("u1", "hi", "a", "1"))
+    await c.onSessionError("s1", err429("0"))
+    expect(calls.prompt[0].body.model).toEqual({ providerID: "b", modelID: "2" })
+  })
+  it("a marker pasted mid-message or in a synthetic part is a real user turn, so recovery still happens", async () => {
+    const { c, d, clock } = setup("chain-recover")
+    d.state.set("s1", { sticky: "b/2", origin: "a/1", switchCount: 1, updated: T0 })
+    clock.now = T0 + COOLDOWN
+    expect(c.onChatMessage("s1", "a/1", [{ type: "text", text: "see <!-- opencode-model-relay --> here" }])).toBe("a/1")
+    d.state.set("s1", { sticky: "b/2", origin: "a/1", switchCount: 1, updated: T0 })
+    expect(c.onChatMessage("s1", "a/1", [{ type: "text", synthetic: true, text: `${RELAY_MARKER}\nx` }, ...userParts])).toBe("a/1")
   })
   it("moves sticky up to a recovered secondary while the primary still cools; origin kept", async () => {
     const { c, d, calls, clock } = setup("chain-recover")

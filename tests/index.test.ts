@@ -184,7 +184,8 @@ describe("plugin entry", () => {
     await hooks["chat.message"](input, out)
     expect(out.message.model).toEqual({ providerID: "a", modelID: "1" }) // no health recorded in this process: primary is healthy
     expect(JSON.parse(fs.readFileSync(file, "utf8")).sessions.s1).toMatchObject({ switchCount: 1 })
-    expect(JSON.parse(fs.readFileSync(file, "utf8")).sessions.s1.sticky).toBeUndefined()
+    // the last message arrived on the old sticky model (b/2): it is re-pinned to the recovered origin (#49)
+    expect(JSON.parse(fs.readFileSync(file, "utf8")).sessions.s1.sticky).toBe("a/1")
   })
 })
 

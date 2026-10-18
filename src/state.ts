@@ -1,7 +1,9 @@
 import fs from "node:fs"
 import path from "node:path"
 
-export interface SessionRecord { sticky?: string; origin?: string; switchCount: number; helperCalls?: number; updated: number }
+// recoveries: chain-recover returns so far; capped separately because a recovery is not a failure switch.
+// lastPin: the model the TUI kept sending after a re-pin (see decidePin); not the chain anchor.
+export interface SessionRecord { sticky?: string; origin?: string; switchCount: number; helperCalls?: number; recoveries?: number; lastPin?: string; updated: number }
 
 const TTL_MS = 14 * 24 * 3600 * 1000
 const MAX_SESSIONS = 500
@@ -15,7 +17,9 @@ function sanitize(v: unknown): SessionRecord | undefined {
   const out: SessionRecord = { switchCount: r.switchCount, updated: r.updated }
   if (typeof r.sticky === "string") out.sticky = r.sticky
   if (typeof r.origin === "string") out.origin = r.origin
+  if (typeof r.lastPin === "string") out.lastPin = r.lastPin
   if (isNum(r.helperCalls) && r.helperCalls >= 0) out.helperCalls = Math.floor(r.helperCalls)
+  if (isNum(r.recoveries) && r.recoveries >= 0) out.recoveries = Math.floor(r.recoveries)
   return out
 }
 
