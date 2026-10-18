@@ -71,11 +71,23 @@ describe("chain-recover", () => {
     await c.onSessionError("s1", err429())
     clock.now = T0 + COOLDOWN
     expect(c.onChatMessage("s1", "b/2", userParts)).toBe("a/1")
-    expect(d.state.get("s1")).toMatchObject({ sticky: "a/1", origin: "b/2", switchCount: 1, recoveries: 1 })
+    expect(d.state.get("s1")).toMatchObject({ sticky: "a/1", origin: "a/1", lastPin: "b/2", switchCount: 1, recoveries: 1 })
     // the second message still arrives on B: it must run on the recovered A, not silently on B
     expect(c.onChatMessage("s1", "b/2", userParts)).toBe("a/1")
     expect(c.onChatMessage("s1", "a/1", userParts)).toBeUndefined()
     expect(calls.logs.filter((l) => l.kind === "recover")).toHaveLength(1)
+  })
+  it("re-pinning preserves the chain head: no primary, C->B recovery keeps origin A and later favours A", async () => {
+    // Chain A -> B -> C built from origin (no primary). Sticky C recovers to B while A is cooling; the turn
+    // still arrives on C. Origin must stay A (NOT the arriving C): the next recovery must prioritise A.
+    const { c, d, clock } = setup("chain-recover", { secondary: ["a/1", "b/2"], tertiary: ["c/3"] })
+    d.health["a/1"] = { cooldownUntil: T0 + COOLDOWN + 1 }
+    d.state.set("s1", { sticky: "c/3", origin: "a/1", switchCount: 1, updated: T0 })
+    clock.now = T0 + COOLDOWN
+    expect(c.onChatMessage("s1", "c/3", userParts)).toBe("b/2") // to B, to !== incoming C: re-pin
+    expect(d.state.get("s1")).toMatchObject({ sticky: "b/2", origin: "a/1", lastPin: "c/3" })
+    clock.now = T0 + 2 * COOLDOWN // A has recovered
+    expect(c.onChatMessage("s1", "b/2", userParts)).toBe("a/1") // next recovery prioritises the chain head A
   })
   it("no recovery at switchCount == cap - 1: the session stays on the working fallback", async () => {
     const { c, d, calls, clock } = setup("chain-recover", undefined, { maxSwitchesPerSession: 3 })

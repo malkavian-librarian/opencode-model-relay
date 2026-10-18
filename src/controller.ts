@@ -175,9 +175,12 @@ export class Controller {
         next.recoveries = (rec.recoveries ?? 0) + 1
         if (!p.clearSticky) {
           // The turn arrived on another model than the recovered one (TUI still showing origin or the old sticky
-          // model; which one is unconfirmed, #19): keep pinning that incoming model to the recovered one.
+          // model; which one is unconfirmed, #19): keep pinning that incoming model to the recovered one, so
+          // remember it as lastPin (seen by decidePin, not a user pick). Keep the session's origin as the chain
+          // anchor (no primary: buildChain puts it first); fallback only when state had none (seeded session).
           next.sticky = p.to
-          next.origin = inputModelKey
+          next.origin = rec.origin ?? inputModelKey
+          next.lastPin = inputModelKey
         }
         d.state.set(sessionID, next); d.state.save()
         d.switchLog.append({ ts: d.now(), sessionID, from: rec.sticky as string, to: p.to, kind: "recover" })

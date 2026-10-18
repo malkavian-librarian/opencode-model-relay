@@ -36,11 +36,14 @@ describe("StateStore", () => {
       ok: { switchCount: 1, recoveries: 2.7, updated: now },
       neg: { switchCount: 1, recoveries: -1, updated: now },
       str: { switchCount: 1, recoveries: "3", updated: now },
+      pin: { switchCount: 1, lastPin: 5, updated: now },
     } }))
     const s = new StateStore(f); s.load()
     expect(s.get("ok").recoveries).toBe(2)
     expect(s.get("neg").recoveries).toBeUndefined()
     expect(s.get("str").recoveries).toBeUndefined()
+    expect(s.get("ok").lastPin).toBeUndefined()
+    expect(s.get("pin").lastPin).toBeUndefined()
   })
   it("survives a corrupt file", () => {
     const f = file(); fs.writeFileSync(f, "{not json")

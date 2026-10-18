@@ -11,21 +11,23 @@ export type PinDecision =
 
 /**
  * Decides what the chat.message hook does with a new user turn. Without `recovery` (or in any mode other than
- * chain-recover) this is the v1.0 sticky rule. In chain-recover, a turn arriving on the origin or the sticky
- * model returns to the highest-priority healthy model ranked above the sticky one. An explicit pick of any
- * other model still clears stickiness first: the user's choice always wins over recovery.
- * Which model the TUI sends after a plugin prompt (origin or sticky) is unconfirmed (#19); both are handled.
+ * chain-recover) this is the v1.0 sticky rule. In chain-recover, a turn arriving on the origin, the last
+ * re-pinned model or the sticky one returns to the highest-priority healthy model ranked above the sticky one.
+ * An explicit pick of any other model still clears stickiness first: the user's choice always wins.
+ * Which model the TUI sends after a plugin prompt (origin, sticky or the last pinned-from model) is
+ * unconfirmed (#19); all are treated as "the TUI is here", not as a user pick.
  */
 export function decidePin(
   rec: SessionRecord, inputModelKey: string,
   recovery?: { mode: Mode; chain: string[]; health: Record<string, ModelHealth>; now: number },
 ): PinDecision {
   if (!rec.sticky) return { action: "none" }
-  const onOrigin = inputModelKey === rec.origin
-  if (inputModelKey !== rec.sticky && !onOrigin) return { action: "clear" }
+  // lastPin: the model the turn arrived on when we re-pinned after a recovery (the TUI kept sending it).
+  const onSessionModel = inputModelKey === rec.origin || inputModelKey === rec.lastPin
+  if (inputModelKey !== rec.sticky && !onSessionModel) return { action: "clear" }
   if (recovery?.mode === "chain-recover") {
     const to = recoverTarget({ chain: recovery.chain, sticky: rec.sticky, health: recovery.health, now: recovery.now })
     if (to) return { action: "recover", to, clearSticky: to === inputModelKey }
   }
-  return onOrigin && inputModelKey !== rec.sticky ? { action: "pin", to: rec.sticky } : { action: "none" }
+  return onSessionModel && inputModelKey !== rec.sticky ? { action: "pin", to: rec.sticky } : { action: "none" }
 }
