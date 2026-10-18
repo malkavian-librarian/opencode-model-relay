@@ -74,8 +74,9 @@ describe("classifyRetryMessage", () => {
   it("billing/usage-limit mentions in a transient retry message stay transient (#8)", () => {
     const c = classifyRetryMessage("Rate limit reached for requests, usage limit resets at 5pm, see your billing page")
     expect(c).toMatchObject({ kind: "rate_limit", permanent: false, retryable: true })
-    expect(classifyRetryMessage("Usage limit reached, resets at 5pm").kind).not.toBe("quota")
-    expect(classifyRetryMessage("Usage limit reached, try again later").permanent).toBe(false)
+    expect(classifyRetryMessage("Usage limit reached, resets at 5pm")).toMatchObject({ kind: "rate_limit", permanent: false, switchable: true })
+    expect(classifyRetryMessage("You've hit your usage limit. Please try again at 5:00 PM")).toMatchObject({ kind: "rate_limit", permanent: false, switchable: true })
+    expect(classifyRetryMessage("Usage limit reached, try again later")).toMatchObject({ permanent: false, switchable: true })
     expect(classifyRetryMessage("Rate limit reached for gpt-4 in organization. Please try again in 20s").kind).toBe("rate_limit")
     expect(classifyRetryMessage("Rate limit reached, see your billing settings").kind).toBe("rate_limit")
     expect(classifyRetryMessage("Too many requests").kind).toBe("rate_limit")

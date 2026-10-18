@@ -64,9 +64,12 @@ export function classifyRetryMessage(message: string): Classified {
   const c = classify({ name: "UnknownError", data: { message } })
   if (c.kind !== "unknown") return c
   if (RETRY_TEXT.permanent.test(message)) return mk("quota", true)
-  // A usage limit is permanent only when exhausted with no reset/retry wording; this runs before
-  // the transient check so "usage limit reached" alone is quota, but a reset hint falls through.
-  if (RETRY_TEXT.usageLimit.test(message) && !RETRY_TEXT.resetHint.test(message)) return mk("quota", true)
+  // A usage limit is permanent only when exhausted with no reset/retry wording. With a reset hint the
+  // user is still blocked (possibly for hours), so it is transient but switchable. Parsing the reset
+  // time to set a long cooldown is a possible follow-up (not implemented).
+  if (RETRY_TEXT.usageLimit.test(message)) {
+    return RETRY_TEXT.resetHint.test(message) ? mk("rate_limit", false) : mk("quota", true)
+  }
   if (RETRY_TEXT.transient.test(message)) return mk("rate_limit", false)
   return unknown
 }
