@@ -24,12 +24,30 @@ Models are written `providerID/modelID`; only the first `/` splits them (`openro
 ## How it works
 
 1. A `session.error` event arrives. The failure is classified: `rate_limit`, `quota`, `auth`, `free_tier_403`, `model_not_found`, `server_5xx` or `timeout` can trigger a switch. `overflow`, `user_abort` (pressing Esc) and `unknown` never do.
-2. The plugin picks the next model in the chain (`primary`, then `secondary`, then `tertiary`) that is not permanently failed or cooling down. If none is left, or the per-session switch cap is reached, it tells you and stays on the current model.
+2. The plugin picks the next model according to `mode` (see [Modes](#modes)) among models that are not permanently failed or cooling down. If none is left, or the per-session switch cap is reached, it tells you and stays on the current model.
 3. It builds a structured handover: a summary, the tool calls so far (with DONE / FAILED / UNKNOWN status), files touched, open todos, and your last request verbatim. The summary is written by a helper model through OpenRouter only if you opted in (see Privacy); otherwise the handover carries the plain tail of the redacted transcript.
 4. The plugin aborts the failed turn, sends the handover to the next model, and the work resumes there.
-5. The choice is sticky for the session: later messages are pinned to the model that took over. If you pick a different model yourself, the pin is cleared.
+5. The choice is sticky for the session: later messages are pinned to the model that took over (`chain-recover` can move them back once a higher-ranked model recovers). If you pick a different model yourself, the pin is cleared.
 
 Subagent sessions (those with a `parentID`) are skipped. Any internal error leaves the session on its current model; hooks never throw. Main-model traffic always goes through OpenCode; the plugin does not proxy it.
+
+## Modes
+
+`mode` decides where a failure moves the session and whether it ever comes back. In every mode, a model is skipped while it cools down (a cooldown that ends exactly now counts as over) or after a permanent failure (quota, auth, model not found: blacklisted until OpenCode restarts), and `maxSwitchesPerSession` stops all switching.
+
+| Mode | On a failure | Later turns |
+| --- | --- | --- |
+| `chain-sticky` (default) | First healthy model of the flat list `primary`, `secondary...`, `tertiary...` other than the failing one (the v1.0 behaviour). | Stay on the model that took over. No automatic return. |
+| `chain-recover` | Same flat list, but a model already tried for the same failing turn is never chosen again, even if its cooldown has run out meanwhile. | On your next message, if a model ranked above the current one is healthy again, the session returns to the highest-ranked one (primary first). Back on the original model, the pin is cleared. |
+| `escalate` | Tiers read cheap to strong. A failure in tier T moves to the first healthy model of tier T+1; a tier with no healthy model (or no model at all) is skipped. Siblings in the same tier and lower tiers are never tried, so the session never moves down or sideways. Exhausted once the top tier fails. | Stay on the model that took over. No automatic return. |
+
+Worked example with `primary: A`, `secondary: [B1, B2]`, `tertiary: [C]`, and A hitting a rate limit (60 s cooldown):
+
+- `chain-sticky`: A fails -> B1. If B1 fails too -> B2, then C. Later messages stay on whichever model took over.
+- `chain-recover`: A fails -> B1. Your next message 30 s later still goes to B1 (A is cooling). Your message 60 s or more after the failure goes to A again and the pin is cleared. Had A failed permanently, the session would stay on B1.
+- `escalate`: A fails -> B1. If B1 fails -> C (B2 is not tried). If C fails -> exhausted.
+
+A return in `chain-recover` is not a failure: it does not count towards `maxSwitchesPerSession` and is written to the switch log with kind `recover`. It happens only on a message you send, never on the plugin's own handover message and never while a switch is in progress. Picking a different model yourself still clears the pin in every mode. Model health is kept in memory, so after an OpenCode restart every model counts as healthy again and `chain-recover` returns to the primary on the next message.
 
 ## Configuration
 
@@ -39,7 +57,7 @@ File: `~/.config/opencode/opencode-model-relay.jsonc` (JSONC, max 64 KB). It is 
 
 | Field | Type | Default | Notes |
 | --- | --- | --- | --- |
-| `mode` | `"chain-sticky"` | `"chain-sticky"` | Only mode in v1.0. |
+| `mode` | `"chain-sticky"` \| `"chain-recover"` \| `"escalate"` | `"chain-sticky"` | See [Modes](#modes). An unknown value falls back to the defaults with a warning toast. |
 | `tiers.primary` | `"provider/model"` | unset | If unset, the model currently in use heads the chain. |
 | `tiers.secondary` | `"provider/model"[]` | `[]` | Tried after primary, in order. |
 | `tiers.tertiary` | `"provider/model"[]` | `[]` | Tried after secondary, in order. |
@@ -71,7 +89,7 @@ File: `~/.config/opencode/opencode-model-relay.jsonc` (JSONC, max 64 KB). It is 
 - The helper request goes only to the configured base URL over `https`, with redirects not followed. The key is never written to config, logs, the switch log or error messages.
 - Transcripts and tool output are treated as untrusted data. The handover message says it is a model-generated summary, not user instructions.
 - Stored locally under `~/.local/share/opencode-model-relay` (or `$XDG_DATA_HOME/opencode-model-relay`):
-  - `switches.jsonl`: one row per switch with timestamp, HMAC'd session id, from/to model, failure kind and optional helper cost. Metadata only, no prompt or response text.
+  - `switches.jsonl`: one row per switch with timestamp, HMAC'd session id, from/to model, failure kind (or `recover` for a `chain-recover` return) and optional helper cost. Metadata only, no prompt or response text.
   - `state.json`: per-session sticky model and counters.
   - `salt`: the random per-install salt used for the session-id HMAC.
 

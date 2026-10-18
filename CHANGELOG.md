@@ -17,4 +17,5 @@ Targeting 1.0.0 (not yet released).
 - Subagent sessions are skipped; hooks never throw.
 - Opt-in British narrator tone (`narrator.tone: "british"`): four variants per event, facts always stated first; `plain` stays the default and is unchanged.
 - CI hardening: `persist-credentials: false` on checkout, and a manual dry-run-only path for the release workflow (`workflow_dispatch`); real publishing stays tag-only and owner-only.
+- `mode` gains `chain-recover` (return to the highest-priority recovered model on the next user message, logged as switch kind `recover`, not counted as a switch; models tried for the same failing turn are never re-chosen) and `escalate` (failures move up one tier at a time, cheap to strong, never down or sideways). `chain-sticky` stays the default and is unchanged (#25).
 - Self-contained `dist/index.js`: `zod` and `jsonc-parser` are bundled, so the package has no runtime dependencies and copying the file into the plugins directory works.

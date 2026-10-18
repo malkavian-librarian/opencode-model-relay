@@ -8,7 +8,6 @@ import { SessionLock } from "./session-lock"
 import { SwitchLog } from "./switchlog"
 import { createNarrator } from "./narrator"
 import { orChat } from "./openrouter"
-import { decidePin } from "./pin"
 import { modelKey, parseModel, type ClientLike } from "./types"
 
 // Spike (docs/spike.md): clearing command parts does not stop the model turn, so /relay asks the model to call the tool.
@@ -110,15 +109,9 @@ export function createServer(env: Record<string, string | undefined>): (input: a
       "chat.message": async (i: any, out: any) => {
         try {
           if (!i?.sessionID || !i.model) return
-          const rec = state.get(i.sessionID)
-          const d = decidePin(rec, modelKey(i.model))
-          if (d.action === "pin") out.message.model = parseModel(d.to)
-          else if (d.action === "clear") {
-            // Drop sticky/origin but keep the switch and helper-call counters (caps must survive).
-            const next: typeof rec = { switchCount: rec.switchCount, updated: Date.now() }
-            if (rec.helperCalls !== undefined) next.helperCalls = rec.helperCalls
-            state.set(i.sessionID, next); state.save()
-          }
+          // Pin / clear / chain-recover decisions live in the controller (it owns model health and the switch log).
+          const to = controller.onChatMessage(i.sessionID, modelKey(i.model), out?.parts)
+          if (to) out.message.model = parseModel(to)
         } catch { /* ignore */ }
       },
     }

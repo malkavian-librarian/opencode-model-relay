@@ -169,6 +169,23 @@ describe("plugin entry", () => {
     expect(saved.switchCount).toBe(2)
     expect(saved.helperCalls).toBe(5)
   })
+  it("chain-recover: chat.message returns a recovered origin and passes the parts through (handover is never recovered)", async () => {
+    const e = env()
+    fs.writeFileSync(path.join(e.root, "cfg", "opencode", "opencode-model-relay.jsonc"), JSON.stringify({ mode: "chain-recover", tiers: { primary: "a/1", secondary: ["b/2"] } }))
+    const file = path.join(e.root, "data", "opencode-model-relay", "state.json")
+    fs.mkdirSync(path.dirname(file), { recursive: true })
+    fs.writeFileSync(file, JSON.stringify({ v: 1, sessions: { s1: { sticky: "b/2", origin: "a/1", switchCount: 1, updated: Date.now() } } }))
+    const hooks: any = await createServer(e.env)({ client: client([]), directory: e.root })
+    const input = { sessionID: "s1", model: { providerID: "b", modelID: "2" } }
+    const handover: any = { message: { model: { providerID: "b", modelID: "2" } }, parts: [{ type: "text", text: "<!-- opencode-model-relay -->\nx" }] }
+    await hooks["chat.message"](input, handover)
+    expect(handover.message.model).toEqual({ providerID: "b", modelID: "2" })
+    const out: any = { message: { model: { providerID: "b", modelID: "2" } }, parts: [{ type: "text", text: "next" }] }
+    await hooks["chat.message"](input, out)
+    expect(out.message.model).toEqual({ providerID: "a", modelID: "1" }) // no health recorded in this process: primary is healthy
+    expect(JSON.parse(fs.readFileSync(file, "utf8")).sessions.s1).toMatchObject({ switchCount: 1 })
+    expect(JSON.parse(fs.readFileSync(file, "utf8")).sessions.s1.sticky).toBeUndefined()
+  })
 })
 
 describe("session.status retry events", () => {

@@ -9,7 +9,9 @@ const modelStr = z.string().regex(/^[^/\s]+\/\S+$/, 'expected "provider/model"')
 
 export const ConfigSchema = z
   .object({
-    mode: z.literal("chain-sticky").default("chain-sticky"),
+    // Failover strategy (spec section 4; semantics in src/strategy.ts and src/pin.ts). An unknown value fails
+    // validation, so the whole config falls back to defaults with the usual warning.
+    mode: z.enum(["chain-sticky", "chain-recover", "escalate"]).default("chain-sticky"),
     tiers: z
       .object({
         primary: modelStr.optional(),
