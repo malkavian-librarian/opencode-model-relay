@@ -20,14 +20,16 @@ HTTP API) with an isolated config and data directory. Plugin: a self-contained b
 | LLM summary written with consent | **Pass.** GLM 5.2 produced a structured summary inside the `handover-data` fence; recorded helper cost $0.0027. |
 | Handover framed as data, not instructions | **Pass.** The message states the fenced block is data and not user instructions. |
 | Second message still naming the failing primary stays on the secondary (pinning) | **Pass.** `openai/gpt-4o-mini` was requested; the secondary answered with no error. |
-| Esc / abort mid-turn does not trigger a switch | **Pass.** A `MessageAbortedError` on a user abort produced no switch (switch log still had one row). |
+| Abort mid-turn does not trigger a switch | **Pass.** API-level abort (HTTP abort during a turn), not a TUI Esc keypress; no switch occurred (switch log still had one row). Keypress confirmation tracked in #19. |
 | Switch log metadata only, HMAC'd session id | **Pass.** One row: timestamp, hashed session id, from, to, `auth`, helper cost. No prompt or response text, no raw session id. |
 | Sticky state persisted | **Pass.** `state.json` held the sticky model, origin, `switchCount: 1`, `helperCalls: 1`. |
+| Failure toast displayed | **Not observed** (headless). The toast calls are covered only by mocked-client tests; tracked in #19. |
+| Handover model slug exists on OpenRouter | **Pass.** Checked against the public OpenRouter models list on 2026-10-18 (`z-ai/glm-5.2` listed). |
 | Plugin load | **Pass** once bundled with `mainFields: ["module", "main"]` (see `docs/spike.md`). |
 
 ## Not covered
 
 - `/relay status` as a command (does not work as designed; see `docs/spike.md`, tracked in #3).
 - A real 429, quota, or gateway `FreeTierError` (could not be produced on demand).
-- The OpenCode desktop/TUI front end (the hooks are identical; only the HTTP driver was used).
+- The OpenCode desktop/TUI front end: not exercised in the TUI; hook behaviour there is assumed identical (confirmation tracked in #19). Only the HTTP driver was used.
 - Retry-status switching (`session.status` with `type: "retry"`) against a live provider.

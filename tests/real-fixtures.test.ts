@@ -12,7 +12,7 @@ import { StateStore } from "../src/state"
 import { createNarrator } from "../src/narrator"
 import type { OcMessage } from "../src/types"
 
-// Real shapes captured from a live OpenCode session (see docs/spike.md).
+// Real shapes captured from a live OpenCode session (see docs/spike.md); fixtures are sanitised real captures (session ids replaced, secrets redacted).
 const FIXTURES = path.join(__dirname, "fixtures")
 const readJson = (name: string): any => JSON.parse(fs.readFileSync(path.join(FIXTURES, name), "utf8"))
 const errorEvent = readJson("error-401-provider.json")
