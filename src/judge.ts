@@ -43,7 +43,7 @@ export function buildJudgeInput(ex: Extracted, reasons: HeuristicReason[]): { pa
   let transcript = ex.transcript
   if (transcript.length > MAX_REDACT_INPUT) transcript = transcript.slice(transcript.length - MAX_REDACT_INPUT)
   transcript = redact(truncate(transcript, MAX_REDACT_INPUT))
-  const lastRequest = redact(truncate(ex.lastUserText, 4000))
+  const lastRequest = neutralizeDataTags(redact(truncate(ex.lastUserText, 4000)))
   const calls = ex.toolCalls.slice(-40).map((t) => `- ${t.status} ${t.name}${t.target ? " " + t.target : ""}`).join("\n") || "- (none)"
   const payload = [
     "OBSERVED.heuristics: " + (reasons.length ? reasons.join(", ") : "(none)"),

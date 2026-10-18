@@ -5,7 +5,7 @@ import { MAX_COOLDOWN_MS, type ModelHealth } from "./strategy"
 // recoveries: chain-recover returns so far; capped separately because a recovery is not a failure switch.
 // lastPin: the model the TUI kept sending after a re-pin (see decidePin); not the chain anchor.
 // judgeCalls/lastJudgeAt: quality-judge usage counters; both persist so the caps survive a restart (#26).
-export interface SessionRecord { sticky?: string; origin?: string; switchCount: number; helperCalls?: number; recoveries?: number; lastPin?: string; judgeCalls?: number; lastJudgeAt?: number; updated: number }
+export interface SessionRecord { sticky?: string; origin?: string; switchCount: number; helperCalls?: number; recoveries?: number; lastPin?: string; judgeCalls?: number; lastJudgeAt?: number; lastJudgeMessageId?: string; updated: number }
 
 /** Global per-day judge budget, keyed by UTC date so it resets itself at midnight. */
 export interface JudgeDaily { date?: string; calls?: number; costUsd?: number }
@@ -36,6 +36,9 @@ function sanitize(v: unknown): SessionRecord | undefined {
   if (isNum(r.recoveries) && r.recoveries >= 0) out.recoveries = Math.floor(r.recoveries)
   if (isNum(r.judgeCalls) && r.judgeCalls >= 0) out.judgeCalls = Math.floor(r.judgeCalls)
   if (isNum(r.lastJudgeAt) && r.lastJudgeAt >= 0) out.lastJudgeAt = Math.floor(r.lastJudgeAt)
+  if (typeof r.lastJudgeMessageId === "string" && r.lastJudgeMessageId.length <= 200) {
+    out.lastJudgeMessageId = r.lastJudgeMessageId
+  }
   return out
 }
 

@@ -47,7 +47,9 @@ export function extractFromMessages(msgs: OcMessage[], o: { maxToolChars: number
       if (p.type === "text") {
         const raw = (p as any).text
         if (typeof raw !== "string") continue
-        if (raw.includes(RELAY_MARKER) || (p as any).synthetic || (p as any).ignored) continue
+        // Same rule as hasRelayMarker: only a text part that STARTS with the marker (ours) is dropped;
+        // a user message merely mentioning it stays visible (it may not impersonate the handover).
+        if (raw.startsWith(RELAY_MARKER) || (p as any).synthetic || (p as any).ignored) continue
         if (role === "user") lastUserText = raw
         lines.push(`${role === "user" ? "USER" : "ASSISTANT"}: ${redact(truncate(raw, o.maxToolChars * 4))}`)
       } else if (p.type === "tool") {

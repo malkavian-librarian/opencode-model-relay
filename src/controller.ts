@@ -194,6 +194,7 @@ export class Controller {
     const d = this.d
     try {
       const cfg = d.cfg.judge
+      if (!cfg.enabled) return
       const now = d.now()
       // The primary tier never uses the judge; a model in no tier is never judged either.
       if (tierOf(buildTiers(d.cfg), current) <= 0) return
@@ -214,6 +215,10 @@ export class Controller {
       const rec = d.state.get(sessionID)
       if ((rec.judgeCalls ?? 0) >= cfg.maxCallsPerSession) return
       if (now < (rec.lastJudgeAt ?? 0) + cfg.minIntervalMs) return
+      // Once-per-turn is authoritative and persisted: a TTL map alone would let a re-fired idle
+      // (after the TTL, before or even after minIntervalMs) answer the same turn twice, and two
+      // switch:true verdicts for one turn would produce a switch.
+      if (last.info.id === rec.lastJudgeMessageId) return
       const daily = d.state.judgeDaily
       // The bucket may carry yesterday's counters (file loaded, no save yet): reset it before reading.
       const today = new Date(now).toISOString().slice(0, 10)
@@ -223,7 +228,8 @@ export class Controller {
         daily.date = today
       }
       if (daily.costUsd !== undefined && daily.costUsd >= cfg.maxDailyUsd) return
-      if (d.lock.isDuplicate(`${sessionID}:judge:${last.info.id}`)) return // never twice for the same turn
+      // Cheap pre-filter: an immediate re-fire of the same idle (same in-memory lock turn).
+      if (d.lock.isDuplicate(`${sessionID}:judge:${last.info.id}`)) return
 
       // Cheap local heuristics first: only suspicious turns may reach the LLM judge.
       const reasons = heuristicReasons(observeTurn(msgs))
@@ -233,7 +239,7 @@ export class Controller {
       const judgeCalls = (rec.judgeCalls ?? 0) + 1
       daily.calls = (daily.calls ?? 0) + 1
       const fresh = d.state.get(sessionID)
-      d.state.set(sessionID, { ...fresh, judgeCalls, lastJudgeAt: now, updated: now })
+      d.state.set(sessionID, { ...fresh, judgeCalls, lastJudgeAt: now, lastJudgeMessageId: last.info.id, updated: now })
       d.state.save()
 
       const ex = extractFromMessages(msgs, d.cfg.handover)
@@ -242,12 +248,11 @@ export class Controller {
         baseUrl: d.cfg.openrouter.baseUrl, key, model: cfg.model, system: cfg.prompt, user: payload,
         maxTokens: call.maxTokens, timeoutMs: call.timeoutMs, zdr: d.cfg.privacy.zdr,
       })
+      // Spend counts whenever the call returned a cost: a billed reply that fails to parse is still spent.
+      const cost = typeof r.costUsd === "number" && Number.isFinite(r.costUsd) && r.costUsd >= 0 ? r.costUsd : 0
+      daily.costUsd = (daily.costUsd ?? 0) + cost
+      d.state.save()
       const verdict = parseVerdict(r.text)
-      if (verdict) {
-        const cost = typeof r.costUsd === "number" && Number.isFinite(r.costUsd) && r.costUsd >= 0 ? r.costUsd : 0
-        daily.costUsd = (daily.costUsd ?? 0) + cost
-        d.state.save()
-      }
       // Invalid JSON / timeout / error => no switch (the verdict object itself carries the decision only).
       if (!verdict) return
 

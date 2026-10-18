@@ -52,7 +52,7 @@ export const ConfigSchema = z
         prompt: z.string().min(1).default(DEFAULT_JUDGE_PROMPT),
         maxCallsPerSession: z.number().int().nonnegative().default(3),
         minIntervalMs: z.number().int().nonnegative().default(60000),
-        maxDailyUsd: z.number().max(100).default(0.5),
+        maxDailyUsd: z.number().max(100).nonnegative().default(0.5),
       })
       .strict()
       .default({}),

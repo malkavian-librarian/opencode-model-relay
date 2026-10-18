@@ -359,7 +359,7 @@ describe("Controller quality judge (#26)", () => {
     expect(calls.chat[0].user).toContain("OBSERVED.heuristics")
     expect(d.state.get("s1")).toMatchObject({ judgeCalls: 1 })
     expect(d.state.judgeDaily).toMatchObject({ calls: 1 })
-    expect(d.state.judgeDaily.costUsd).toBeUndefined() // verdict was invalid ("SUMMARY"), cost not counted
+    expect(d.state.judgeDaily.costUsd).toBe(0.01) // spend counts even though the verdict failed to parse
     expect(calls.prompt).toHaveLength(0) // one switch:true is not enough
   })
 
@@ -370,6 +370,12 @@ describe("Controller quality judge (#26)", () => {
     const b = judgeSetup({ env: {} })
     await b.c.onSessionIdle("s1")
     expect(b.calls.chat).toHaveLength(0)
+  })
+
+  it("judge.enabled false: the judge never runs even with consent and a key", async () => {
+    const { c, calls } = judgeSetup({ cfg: { judge: { enabled: false } }, messages: judgedTurn("a1") })
+    await c.onSessionIdle("s1")
+    expect(calls.chat).toHaveLength(0)
   })
 
   for (const [name, o] of Object.entries({
@@ -491,6 +497,18 @@ describe("Controller quality judge (#26)", () => {
     await Promise.all([c.onSessionIdle("s1"), c.onSessionIdle("s1")])
     await c.onSessionIdle("s1")
     expect(calls.chat).toHaveLength(1)
+  })
+
+  it("dedup is persisted: a restarted controller with a fresh lock still refuses the same turn", async () => {
+    const first = judgeSetup({ cfg: { judge: { enabled: true, minIntervalMs: 0 } }, messages: judgedTurn("a1") })
+    await first.c.onSessionIdle("s1")
+    expect(first.calls.chat).toHaveLength(1)
+    expect(first.d.state.get("s1")).toMatchObject({ lastJudgeMessageId: "a1" })
+    // A new Controller = empty in-memory TTL map; only the persisted message id may stop the re-judge.
+    const second = new Controller({ ...first.d, lock: new SessionLock(), chat: async () => ({ text: "SUMMARY", costUsd: 0.01 }) })
+    await second.onSessionIdle("s1")
+    expect(first.calls.chat).toHaveLength(1)
+    expect(first.d.state.get("s1")).toMatchObject({ judgeCalls: 1 })
   })
 
   it("judge failure never throws: chat down -> no switch, the attempt still counts against the cap", async () => {
