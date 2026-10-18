@@ -1,0 +1,42 @@
+# CodeRabbit configuration. Not active until the owner installs the GitHub app
+# (see docs/coderabbit.md).
+language: en-US
+reviews:
+  profile: chill
+  request_changes_workflow: false
+  high_level_summary: true
+  poem: false
+  auto_review:
+    enabled: true
+    drafts: false
+  path_instructions:
+    - path: "src/**"
+      instructions: |
+        This is an OpenCode plugin. Enforce the hard constraints:
+        - No request proxying: main-model traffic always goes through OpenCode;
+          only the helper calls (judge, handover) go to OpenRouter.
+        - The API key comes only from an environment variable; it must never reach
+          config, logs, the switch log, errors or toasts.
+        - Network egress only when privacy.consent is true; https only,
+          redirect "manual", provider.data_collection "deny".
+        - Redact after truncate: redact() must only see input already truncated.
+        - Config is read from the user config dir only; paths must stay inside the
+          data dir; never eval or require config.
+        - Logs hold metadata only (enums, HMAC'd ids), never prompt or response text.
+        - Hooks must never throw; skip subagent sessions (parentID).
+        - Validate boundaries with zod 3; no new dependencies without justification.
+    - path: "tests/**"
+      instructions: |
+        Tests must be deterministic: no real network or OpenCode session, fake timers
+        for cooldowns, generous bounds for timing checks. Security rules need a
+        negative test. Prefer captured fixtures over hand-written payloads.
+    - path: ".github/workflows/**"
+      instructions: |
+        Third-party actions must be pinned to a full commit SHA with a version
+        comment. Use least-privilege `permissions`. Flag untrusted input in `run:`
+        steps and any new secret use.
+  path_filters:
+    - "!package-lock.json"
+    - "!dist/**"
+chat:
+  auto_reply: true
