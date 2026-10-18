@@ -3,7 +3,8 @@ import { parseModel } from "./types"
 import type { RelayConfig } from "./config"
 import { classify, classifyRetryMessage } from "./classifier"
 import type { Classified } from "./types"
-import { buildChain, nextModel, recordFailure, type ModelHealth } from "./strategy"
+import { buildChain, decideSwitch, hasRelayMarker, recordFailure, triedThisTurn, type ModelHealth } from "./strategy"
+import { decidePin } from "./pin"
 import type { SessionLock } from "./session-lock"
 import type { StateStore } from "./state"
 import type { createNarrator, NarrationEvent } from "./narrator"
@@ -95,9 +96,8 @@ export class Controller {
 
       recordFailure(d.health, current, c, d.now(), d.cfg.cooldownMs)
       const rec = { ...d.state.get(sessionID) }
-      const decision = nextModel({
-        chain: buildChain(d.cfg, current), current, health: d.health, now: d.now(),
-        switchCount: rec.switchCount, maxSwitches: d.cfg.maxSwitchesPerSession,
+      const decision = decideSwitch({
+        cfg: d.cfg, current, health: d.health, now: d.now(), switchCount: rec.switchCount, tried: triedThisTurn(msgs),
       })
       if (decision.action === "exhausted") {
         await this.toast(decision.reason === "switch_cap" ? "cap_reached" : "exhausted", {}, "warning")
@@ -140,6 +140,47 @@ export class Controller {
       await this.toast("switch_done", { from: current, to: decision.to, reason: c.kind })
     } finally {
       d.lock.release(sessionID)
+    }
+  }
+
+  /**
+   * chat.message: returns the model key the new user turn must run on, or undefined to leave it alone.
+   * Pins the sticky model, clears stickiness on an explicit user pick, and in chain-recover returns the session
+   * to a recovered higher-priority model. A recovery is not a failure: switchCount is untouched, the switch log
+   * gets kind "recover". Never throws; on any error the turn keeps its model.
+   */
+  onChatMessage(sessionID: string, inputModelKey: string, parts: unknown): string | undefined {
+    const d = this.d
+    let locked = false
+    try {
+      const rec = d.state.get(sessionID)
+      // Recover only on a real user turn: never on our own handover prompt (same failing turn) and never while
+      // a switch holds the lock (the failure path owns the session then).
+      locked = d.cfg.mode === "chain-recover" && !!rec.sticky && !hasRelayMarker(parts) && d.lock.tryAcquire(sessionID)
+      const p = decidePin(rec, inputModelKey, locked
+        ? { mode: d.cfg.mode, chain: buildChain(d.cfg, rec.origin ?? rec.sticky ?? inputModelKey), health: d.health, now: d.now() }
+        : undefined)
+      if (p.action === "pin") return p.to
+      if (p.action === "none") return undefined
+      // Drop sticky/origin but keep the switch and helper-call counters (caps must survive).
+      const next: typeof rec = { switchCount: rec.switchCount, updated: d.now() }
+      if (rec.helperCalls !== undefined) next.helperCalls = rec.helperCalls
+      if (p.action === "recover") {
+        if (!p.clearSticky) {
+          next.sticky = p.to
+          if (rec.origin !== undefined) next.origin = rec.origin
+        }
+        d.state.set(sessionID, next); d.state.save()
+        d.switchLog.append({ ts: d.now(), sessionID, from: rec.sticky as string, to: p.to, kind: "recover" })
+        return p.to
+      }
+      d.state.set(sessionID, next); d.state.save()
+      return undefined
+    } catch (e) {
+      try { d.log(`onChatMessage failed: ${e instanceof Error ? e.message : String(e)}`) } catch { /* ignore */ }
+      return undefined
+    } finally {
+      if (locked) d.lock.release(sessionID)
     }
   }
 

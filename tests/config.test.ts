@@ -46,6 +46,21 @@ describe("config", () => {
     expect(r.warnings[0]).toMatch(/tiers\.secondary/)
     expect(r.config.tiers.secondary).toEqual([])
   })
+  it("accepts every mode; an unknown mode falls back to defaults with one warning", () => {
+    const d = tmp()
+    for (const mode of ["chain-sticky", "chain-recover", "escalate"]) {
+      fs.writeFileSync(path.join(d, `${mode}.jsonc`), JSON.stringify({ mode, cooldownMs: 5 }))
+      const r = loadConfig(path.join(d, `${mode}.jsonc`))
+      expect(r.warnings).toEqual([])
+      expect(r.config.mode).toBe(mode)
+    }
+    fs.writeFileSync(path.join(d, "bad.jsonc"), JSON.stringify({ mode: "round-robin", cooldownMs: 5 }))
+    const r = loadConfig(path.join(d, "bad.jsonc"))
+    expect(r.warnings).toHaveLength(1)
+    expect(r.warnings[0]).toMatch(/^invalid config \(mode: /)
+    expect(r.config.mode).toBe("chain-sticky")
+    expect(r.config.cooldownMs).toBe(60000)
+  })
   it("rejects unknown keys (strict)", () => {
     const f = path.join(tmp(), "c.jsonc")
     fs.writeFileSync(f, `{ "bogus": 1 }`)

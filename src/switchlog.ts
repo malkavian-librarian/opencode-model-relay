@@ -5,6 +5,9 @@ import type { FailureKind } from "./types"
 
 const SALT_BYTES = 32
 
+/** A failure-switch logs its FailureKind; a chain-recover return to a recovered model logs "recover". */
+export type SwitchKind = FailureKind | "recover"
+
 function readSalt(f: string): Buffer | null {
   try {
     const txt = fs.readFileSync(f, "utf8").trim()
@@ -58,7 +61,7 @@ export class SwitchLog {
     return this.salt
   }
 
-  append(r: { ts: number; sessionID: string; from: string; to: string; kind: FailureKind; helperCostUsd?: number }): void {
+  append(r: { ts: number; sessionID: string; from: string; to: string; kind: SwitchKind; helperCostUsd?: number }): void {
     if (!this.enabled) return
     try {
       const session = createHmac("sha256", this.getSalt()).update(r.sessionID).digest("hex").slice(0, 16)
