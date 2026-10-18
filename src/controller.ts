@@ -184,6 +184,8 @@ export class Controller {
         }
         d.state.set(sessionID, next); d.state.save()
         d.switchLog.append({ ts: d.now(), sessionID, from: rec.sticky as string, to: p.to, kind: "recover" })
+        // Fire-and-forget: toast never rejects internally; recovery must not delay the turn.
+        void this.toast("recovered", { from: rec.sticky as string, to: p.to })
         return p.to
       }
       d.state.set(sessionID, next); d.state.save()

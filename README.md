@@ -75,7 +75,7 @@ File: `~/.config/opencode/opencode-model-relay.jsonc` (JSONC, max 64 KB). It is 
 | `cooldownMs` | positive integer | `60000` | Base cooldown for a temporarily failed model; doubles per repeat, capped at 1 hour. A `Retry-After` header is honoured. |
 | `maxSwitchesPerSession` | positive integer | `6` | Hard cap on switches per session. |
 | `onExhausted` | `"stop"` | `"stop"` | Only behaviour in v1.0. |
-| `narrator.verbosity` | `"off"` \| `"quiet"` \| `"normal"` \| `"chatty"` | `"normal"` | `quiet` shows only exhausted, cap and config problems. |
+| `narrator.verbosity` | `"off"` \| `"quiet"` \| `"normal"` \| `"chatty"` | `"normal"` | `quiet` shows only exhausted, cap and config problems. `chain-recover` returns to a recovered model get their own `recovered` toast (facts: from, to) at `normal` and up. |
 | `narrator.tone` | `"plain"` \| `"british"` | `"plain"` | `plain` is terse. `british` is opt-in dry humour (tea, queueing, "Plan B"): every message still states the facts first (models, reason, or the actual condition), static text only, no repeats back to back. |
 | `ledger.enabled` | boolean | `true` | Write the local switch log. |
 | `ledger.dir` | string | unset (data dir) | Must resolve inside the data directory, otherwise the data directory is used. |

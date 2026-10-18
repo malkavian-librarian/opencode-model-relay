@@ -24,7 +24,7 @@ const handoverParts = [{ type: "text", text: `${RELAY_MARKER}\nhandover` }]
 const userParts = [{ type: "text", text: "next question" }]
 
 function setup(mode: string, tiers: object = { primary: "a/1", secondary: ["b/2"], tertiary: ["c/3"] }, extra: object = {}) {
-  const calls = { prompt: [] as any[], logs: [] as any[] }
+  const calls = { prompt: [] as any[], logs: [] as any[], toasts: [] as any[] }
   const messages: OcMessage[] = [user("u1", "fix the bug", "a", "1"), asst("a1", "a", "1")]
   const client: any = {
     session: {
@@ -33,7 +33,7 @@ function setup(mode: string, tiers: object = { primary: "a/1", secondary: ["b/2"
       abort: async () => ({}),
       prompt: (a: any) => { calls.prompt.push(a); return Promise.resolve({}) },
     },
-    tui: { showToast: async () => ({}) },
+    tui: { showToast: async (b: any) => { calls.toasts.push(b) } },
   }
   const clock = { now: T0 }
   const state = new StateStore(path.join(fs.mkdtempSync(path.join(os.tmpdir(), "relay-m-")), "state.json"), () => clock.now); state.load()
@@ -172,6 +172,29 @@ describe("chain-recover", () => {
     expect(c.onChatMessage("s1", "z/9", userParts)).toBeUndefined()
     expect(d.state.get("s1")).toEqual({ switchCount: 3, helperCalls: 2, updated: T0 })
     expect(calls.logs).toHaveLength(0)
+  })
+  it("a recovery shows the recovered toast with the from/to facts (verbosity normal)", async () => {
+    const { c, d, calls, clock } = setup("chain-recover")
+    d.narrate = createNarrator({ verbosity: "normal", tone: "plain" })
+    await c.onSessionError("s1", err429())
+    clock.now = T0 + COOLDOWN
+    expect(c.onChatMessage("s1", "a/1", userParts)).toBe("a/1")
+    await new Promise((r) => setTimeout(r, 0)) // let the detached toast settle
+    const recovered = calls.toasts.filter((t) => t.body.message.includes("healthy again") || t.body.message.includes("Returning to"))
+    expect(recovered).toHaveLength(1)
+    expect(recovered[0].body.message).toContain("b/2")
+    expect(recovered[0].body.message).toContain("a/1")
+    expect(recovered[0].body.variant).toBe("info")
+    expect(d.state.get("s1").sticky).toBeUndefined() // arriving on the recovered origin: pin cleared
+  })
+  it("the recovered toast is not spoken at quiet verbosity (not a condition worth interrupting for)", async () => {
+    const { c, d, calls, clock } = setup("chain-recover")
+    d.narrate = createNarrator({ verbosity: "quiet", tone: "plain" })
+    await c.onSessionError("s1", err429())
+    clock.now = T0 + COOLDOWN
+    expect(c.onChatMessage("s1", "a/1", userParts)).toBe("a/1")
+    await new Promise((r) => setTimeout(r, 0))
+    expect(calls.toasts.filter((t) => t.body.message.includes("healthy again") || t.body.message.includes("Returning to"))).toHaveLength(0)
   })
   it("a model tried for the same failing turn is never re-chosen, even after its cooldown ran out", async () => {
     const { c, calls, messages } = setup("chain-recover")

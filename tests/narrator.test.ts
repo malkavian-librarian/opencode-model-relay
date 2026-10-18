@@ -50,13 +50,24 @@ describe("british tone", () => {
       }
     }
   })
-  it("does not promise recovery and keeps each joke to one event", () => {
+  it("only the recovered event mentions recovery, and keeps each joke to one event", () => {
     const all = EVENTS.flatMap((ev) => BRITISH_POOLS[ev].map((l) => [ev, l] as const))
-    expect(all.filter(([, l]) => /recover/i.test(l))).toEqual([])
+    expect(all.filter(([ev, l]) => ev === "recovered" ? false : /recover/i.test(l))).toEqual([])
     for (const word of [/kettle/i, /Plan B/]) {
       const hits = all.filter(([, l]) => word.test(l))
       expect(hits).toHaveLength(1)
       expect(hits[0]![0]).toBe("switch_done")
+    }
+  })
+  it("recovered: every variant carries from and to verbatim, with no placeholder left", () => {
+    const pool = BRITISH_POOLS.recovered
+    for (let i = 0; i < pool.length; i++) {
+      const m = createNarrator({ verbosity: "normal", tone: "british" }, pick(i, pool.length))("recovered", {
+        from: "prov/model-a", to: "other/model-b",
+      })!
+      for (const s of ["prov/model-a", "other/model-b"]) expect(m).toContain(s)
+      expect(m).not.toMatch(/\{(from|to|reason|detail)\}/)
+      expect(m.length).toBeLessThanOrEqual(LINE_CAP)
     }
   })
   it("config_invalid: every variant carries the detail verbatim; template stays short", () => {
@@ -138,6 +149,10 @@ describe("british tone", () => {
       handover_failed: [
         "[relay] Handover summary failed; used the plain transcript tail instead.",
         "[relay] Handover summary failed (could not write one); passing the recent transcript instead.",
+      ],
+      recovered: [
+        "[relay] {to} is healthy again. Moving back from {from}.",
+        "[relay] Returning to {to} (recovered); leaving {from}.",
       ],
       config_invalid: ["[relay] Config problem: {detail}"],
     })
