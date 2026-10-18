@@ -77,21 +77,21 @@ export class Controller {
 
     const session = await d.client.session.get({ path: { id: sessionID } })
     if (session.data?.parentID) return
-
-    const msgs = await this.fetchMessages(sessionID)
-    // The newest message identifies the failing turn: an assistant message carries the model that ran; if the
-    // error came before any assistant reply (first turn, model resolution), the user message carries the model.
-    const newest = msgs[msgs.length - 1]
-    if (!newest) return
-    const ni = newest.info
-    // The title/summary agent produces assistant messages without provider/model: ignore.
-    const m = ni.role === "assistant" ? (ni.providerID && ni.modelID ? { providerID: ni.providerID, modelID: ni.modelID } : undefined) : ni.model
-    if (!m?.providerID || !m.modelID) return
-    const current = `${m.providerID}/${m.modelID}`
-
-    // Acquire first so an event dropped because a switch is running does not poison the dedup cache.
     if (!d.lock.tryAcquire(sessionID)) return
     try {
+      // The transcript is read under the lock (#40): a user message arriving while a switch runs must not
+      // make this failure handler blame the freshly switched (recovered) model.
+      const msgs = await this.fetchMessages(sessionID)
+      // The newest message identifies the failing turn: an assistant message carries the model that ran; if the
+      // error came before any assistant reply (first turn, model resolution), the user message carries the model.
+      const newest = msgs[msgs.length - 1]
+      if (!newest) return
+      const ni = newest.info
+      // The title/summary agent produces assistant messages without provider/model: ignore.
+      const m = ni.role === "assistant" ? (ni.providerID && ni.modelID ? { providerID: ni.providerID, modelID: ni.modelID } : undefined) : ni.model
+      if (!m?.providerID || !m.modelID) return
+      const current = `${m.providerID}/${m.modelID}`
+
       if (d.lock.isDuplicate(`${sessionID}:${ni.id}`)) return
 
       recordFailure(d.health, current, c, d.now(), d.cfg.cooldownMs)
