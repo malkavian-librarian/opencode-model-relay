@@ -16,4 +16,5 @@ Targeting 1.0.0 (not yet released).
 - Config from the user config directory only, validated with a strict schema.
 - Subagent sessions are skipped; hooks never throw.
 - Opt-in British narrator tone (`narrator.tone: "british"`): four variants per event, facts always stated first; `plain` stays the default and is unchanged.
+- CI hardening: `persist-credentials: false` on checkout, and a manual dry-run-only path for the release workflow (`workflow_dispatch`); real publishing stays tag-only and owner-only.
 - Self-contained `dist/index.js`: `zod` and `jsonc-parser` are bundled, so the package has no runtime dependencies and copying the file into the plugins directory works.

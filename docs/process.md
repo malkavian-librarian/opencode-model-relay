@@ -80,6 +80,21 @@ OWNER-ONLY, never done by an agent: npm publish / pushing release tags, creating
 changing repository secrets, changing repository settings or branch protection,
 force-pushes, deleting anything other than the merged PR branch, installing GitHub apps.
 
+## Release (owner-only)
+
+Publishing is an owner action; agents never publish or push tags.
+
+- **Dry run (safe, any time):** GitHub -> Actions -> `release` -> Run workflow. A manual
+  run executes every step (install, typecheck, test, build, `npm pack --dry-run`) and
+  ends with `npm publish --provenance --access public --dry-run`. It can never publish,
+  whatever the branch or inputs, and it does not use `NPM_TOKEN`. Use it to check
+  setup-node, `registry-url` and the provenance setup before a real release. If the
+  provenance dry run turns out to be rejected on the runner, drop `--provenance` from the
+  dry-run step only.
+- **Real release:** the owner sets the `NPM_TOKEN` repository secret, bumps the version in
+  `package.json` and `CHANGELOG.md`, merges, then pushes a `v*` tag. Only the tag push runs
+  the real `npm publish`.
+
 ## Map of docs/
 
 | File | Purpose |
