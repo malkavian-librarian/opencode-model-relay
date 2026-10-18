@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
-import { buildDefaultConfigText, initConfig } from "../src/init"
+import { buildDefaultConfigText, cleanModelIds, initConfig } from "../src/init"
 import { configDir, configFile, loadConfig } from "../src/config"
 
 function setup() {
@@ -21,23 +21,29 @@ describe("buildDefaultConfigText", () => {
       const { config, warnings } = loadConfig(s.file)
       expect(warnings).toEqual([])
       expect(config.privacy.consent).toBe(false)
-      expect(config.tiers.primary).toBe(list[0])
+      expect(config.tiers).toEqual({ secondary: [], tertiary: [] })
+      expect(config.tiers.primary).toBeUndefined()
     }
-  })
-  it("with no models, tiers are commented out examples", () => {
-    const s = setup()
-    fs.mkdirSync(configDir(s.env, s.home), { recursive: true })
-    fs.writeFileSync(s.file, buildDefaultConfigText([]))
-    const { config } = loadConfig(s.file)
-    expect(config.tiers).toEqual({ secondary: [], tertiary: [] })
     expect(buildDefaultConfigText([])).toMatch(/\/\/ "primary"/)
   })
-  it("uses real models, ignores malformed ids, and explains consent", () => {
-    const text = buildDefaultConfigText(["a/1", "bad id\n// x", "b/2"])
-    expect(text).toContain('"primary": "a/1"')
-    expect(text).toContain('"secondary": ["b/2"]')
+  it("lists discovered ids only inside comment lines, max 10, ignoring malformed ids", () => {
+    const many = Array.from({ length: 15 }, (_, i) => `prov/model${i}`)
+    const text = buildDefaultConfigText(["a/1", "bad id\n// x", "b/2", ...many])
     expect(text).not.toContain("bad id")
+    expect(text).toContain("Models configured in your OpenCode (pick your own chain)")
+    for (const id of ["a/1", "b/2", "prov/model0"]) {
+      const lines = text.split("\n").filter((l) => l.includes(id))
+      expect(lines.length).toBeGreaterThan(0)
+      for (const l of lines) expect(l.trimStart().startsWith("//")).toBe(true)
+    }
+    expect(text).not.toContain("prov/model9")
     expect(text).toMatch(/consent[\s\S]*OpenRouter/)
+  })
+  it("bounds work: drops ids over 128 chars and examines at most 200 entries", () => {
+    expect(cleanModelIds(["a/" + "x".repeat(5000), "a/ok"])).toEqual(["a/ok"])
+    const big = [...Array.from({ length: 200 }, () => "a/same"), "z/late"]
+    expect(cleanModelIds(big)).toEqual(["a/same"])
+    expect(buildDefaultConfigText(["a/" + "x".repeat(5000)])).not.toContain("xxxxxxxx")
   })
   it("contains no secrets", () => {
     expect(buildDefaultConfigText(["a/1"])).not.toMatch(/sk-[A-Za-z0-9]|Bearer/)

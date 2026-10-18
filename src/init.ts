@@ -8,40 +8,35 @@ const CONFIG_DIR_MODE = 0o700
 const CONFIG_FILE_MODE = 0o600
 // Provider data is untrusted: only plain "provider/model" ids may reach the file or the tool result.
 const SAFE_MODEL_ID = /^[A-Za-z0-9][\w.:@+-]*\/[\w.:@+/-]+$/
+const MAX_COMMENTED_MODELS = 10
+const MAX_MODEL_ID_LENGTH = 128
+const MAX_IDS_EXAMINED = 200
 const EXAMPLE_PRIMARY = "anthropic/claude-sonnet-4-5"
 const EXAMPLE_SECONDARY = "openrouter/z-ai/glm-5.2"
 const EXAMPLE_TERTIARY = "openrouter/deepseek/deepseek-chat"
 
-/** Keeps only well-formed, de-duplicated "provider/model" ids. */
+/** Keeps only well-formed, de-duplicated "provider/model" ids; bounded work and length per id. */
 export function cleanModelIds(raw: readonly unknown[]): string[] {
   const seen = new Set<string>()
-  for (const m of raw) if (typeof m === "string" && SAFE_MODEL_ID.test(m)) seen.add(m)
+  for (const m of raw.slice(0, MAX_IDS_EXAMINED)) {
+    if (typeof m === "string" && m.length <= MAX_MODEL_ID_LENGTH && SAFE_MODEL_ID.test(m)) seen.add(m)
+  }
   return [...seen]
 }
 
-interface TierLine { text: string; active: boolean }
-
-/** Renders tier lines; commas only between active entries, so commented examples keep the file valid JSONC. */
-function renderTierLines(lines: TierLine[]): string {
-  const lastActive = lines.map((l) => l.active).lastIndexOf(true)
-  return lines.map((l, i) => `    ${l.active ? "" : "// "}${l.text}${l.active && i < lastActive ? "," : ""}`).join("\n")
-}
-
 /**
- * Builds the commented default config. Tiers use the user's real models when known; otherwise
- * they are commented-out examples, so the file stays valid and has no effect until edited.
+ * Builds the commented default config. Tiers are ALWAYS commented-out examples (the file is valid
+ * and harmless until edited); discovered models only appear in a comment block to pick from.
  */
 export function buildDefaultConfigText(models: string[]): string {
-  const real = cleanModelIds(models)
-  const tier = (name: string, real1: string | undefined, example: string, array: boolean): TierLine => {
-    const value = real1 ?? example
-    return { text: `"${name}": ${array ? `[${JSON.stringify(value)}]` : JSON.stringify(value)}`, active: real1 !== undefined }
-  }
-  const tiers = renderTierLines([
-    tier("primary", real[0], EXAMPLE_PRIMARY, false),
-    tier("secondary", real[1], EXAMPLE_SECONDARY, true),
-    tier("tertiary", real[2], EXAMPLE_TERTIARY, true),
-  ])
+  const discovered = cleanModelIds(models).slice(0, MAX_COMMENTED_MODELS)
+  const discoveredBlock = discovered.length === 0 ? "" :
+    `    // Models configured in your OpenCode (pick your own chain):\n${discovered.map((m) => `    //   ${m}`).join("\n")}\n`
+  const tiers = [
+    `    // "primary": ${JSON.stringify(EXAMPLE_PRIMARY)}`,
+    `    // "secondary": [${JSON.stringify(EXAMPLE_SECONDARY)}]`,
+    `    // "tertiary": [${JSON.stringify(EXAMPLE_TERTIARY)}]`,
+  ].join("\n")
   return `{
   // opencode-model-relay config. Written by relay_init; edit freely.
   // Models are "provider/model". Only the first "/" splits them.
@@ -49,7 +44,7 @@ export function buildDefaultConfigText(models: string[]): string {
   "tiers": {
     // Failover order: primary first, then secondary, then tertiary.
     // Lines starting with // are examples; remove the // after replacing the model.
-${tiers}
+${discoveredBlock}${tiers}
   },
 
   "privacy": {
@@ -116,8 +111,6 @@ const NEXT_STEPS = [
 export async function initConfig(deps: InitDeps): Promise<string> {
   const dir = configDir(deps.env, deps.home)
   const file = configFile(deps.env, deps.home)
-  const confined = confineToDir(file, dir)
-  if (confined === null) return `Refusing to write ${file}: it resolves outside the config directory ${dir}.`
   const { models, failed } = await safeList(deps.listModels)
   try {
     fs.mkdirSync(dir, { recursive: true, mode: CONFIG_DIR_MODE })
@@ -125,6 +118,9 @@ export async function initConfig(deps: InitDeps): Promise<string> {
     const code = (e as NodeJS.ErrnoException)?.code
     return `Could not create the config directory ${dir} (${typeof code === "string" ? code : "error"}). Check that it is a writable directory.`
   }
+  // Checked after the directory exists, so the final (real) directory is what gets confined.
+  const confined = confineToDir(file, dir)
+  if (confined === null) return `Refusing to write ${file}: it resolves outside the config directory ${dir}.`
   try {
     // "wx" = exclusive create: fails if the path exists (even as a symlink), so a concurrent run cannot clobber it.
     fs.writeFileSync(confined, buildDefaultConfigText(models), { flag: "wx", mode: CONFIG_FILE_MODE })
