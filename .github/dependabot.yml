@@ -11,6 +11,13 @@ updates:
       npm-minor-patch:
         patterns: ["*"]
         update-types: ["minor", "patch"]
+    ignore:
+      # zod is bundled into dist; zod 4 changes nested .default({}) semantics (breaks src/config.ts, 45 tests fail). AGENTS.md pins zod ^3.
+      - dependency-name: "zod"
+        update-types: ["version-update:semver-major"]
+      # vitest 5 requires Node ^22.12 while the documented dev floor is Node >= 20.19.
+      - dependency-name: "vitest"
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: github-actions
     directory: /
     schedule:
