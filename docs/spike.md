@@ -19,7 +19,7 @@ TUI; hook behaviour there is assumed identical (confirmation tracked in #19). No
   build and fails at runtime ("Cannot find module './impl/format'"). Bundling must use
   `mainFields: ["module", "main"]`. The published npm package keeps `zod` and
   `jsonc-parser` as normal dependencies; the "copy `dist/index.js`" install path needs a
-  self-contained build (tracked in #3).
+  self-contained build (tracked in #3). Resolved in #3: the build now bundles both and ships no runtime dependencies.
 - Newest-message handling matters: the user message carries `info.model`, and a failed
   turn creates an assistant message with `providerID`/`modelID`.
 - `session.error` for a non-retryable error fires immediately (no `session.status` retry

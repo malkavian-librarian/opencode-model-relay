@@ -11,6 +11,7 @@ Targeting 1.0.0 (not yet released).
 - Optional LLM-written handover summary through OpenRouter, behind explicit consent, with `provider.data_collection: "deny"`, optional ZDR, redaction, and a per-session call cap.
 - Secret redaction and sensitive-path output dropping before any data is sent.
 - Local switch log (`switches.jsonl`, metadata only, HMAC'd session ids) and `state.json`.
-- Toast narration with verbosity levels, and a `/relay status` command.
+- Toast narration with verbosity levels, and a `relay_status` tool and a `/relay` command that asks the model to call it (it costs one small model turn; plugin commands cannot skip the model turn).
 - Config from the user config directory only, validated with a strict schema.
 - Subagent sessions are skipped; hooks never throw.
+- Self-contained `dist/index.js`: `zod` and `jsonc-parser` are bundled, so the package has no runtime dependencies and copying the file into the plugins directory works.

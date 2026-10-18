@@ -9,10 +9,14 @@ import { orChat } from "./openrouter"
 import { decidePin } from "./pin"
 import { modelKey, parseModel, type ClientLike } from "./types"
 
+// Spike (docs/spike.md): clearing command parts does not stop the model turn, so /relay asks the model to call the tool.
+const RELAY_COMMAND_TEMPLATE = "Call the relay_status tool and print its output verbatim in a code block. Do nothing else."
+const RELAY_TOOL_DESCRIPTION = "Show the opencode-model-relay failover status (model chain, current model, switch count, API key set or missing). Use it when the user asks for relay or failover status."
+
 /** Hooks that do nothing; returned when setup fails so OpenCode keeps working untouched. */
 function noopHooks(): Record<string, (...a: any[]) => Promise<void>> {
   const noop = async () => {}
-  return { config: noop, event: noop, "command.execute.before": noop, "chat.message": noop }
+  return { config: noop, event: noop, "chat.message": noop }
 }
 
 /** Internal factory: builds the plugin function for a given environment (tests inject env here). */
@@ -45,9 +49,16 @@ export function createServer(env: Record<string, string | undefined>): (input: a
     }
 
     return {
+      tool: {
+        relay_status: {
+          description: RELAY_TOOL_DESCRIPTION,
+          args: {},
+          execute: async (_args: unknown, ctx: { sessionID: string }) => controller.status(ctx.sessionID),
+        },
+      },
       config: async (c: any) => {
         try {
-          c.command = { ...(c.command ?? {}), relay: { template: "relay status", description: "opencode-model-relay: show status" } }
+          c.command = { ...(c.command ?? {}), relay: { template: RELAY_COMMAND_TEMPLATE, description: "Show model relay status" } }
         } catch { /* ignore */ }
       },
       event: async ({ event }: any) => {
@@ -66,14 +77,6 @@ export function createServer(env: Record<string, string | undefined>): (input: a
             }
           }
         } catch { /* hooks must never throw */ }
-      },
-      "command.execute.before": async (i: any, out: any) => {
-        try {
-          if (i?.command !== "relay") return
-          out.parts = []
-          const message = controller.status(i.sessionID)
-          await client.tui.showToast({ body: { message, variant: "info" } })
-        } catch { /* ignore */ }
       },
       "chat.message": async (i: any, out: any) => {
         try {
