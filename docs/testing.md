@@ -1,0 +1,42 @@
+# Testing and verification gates
+
+The stack is TypeScript with vitest, `tsc --noEmit` and a tsup build. There is no
+linter or formatter. CI (`.github/workflows/ci.yml`, job `test`) runs the same gates.
+
+## Gates
+
+| Gate | Command | When |
+|---|---|---|
+| Scoped tests | `npx vitest run tests/<name>.test.ts` | While developing |
+| Full tests | `npm test` | Before every commit and PR |
+| Types | `npm run typecheck` | Before every commit and PR |
+| Build | `npm run build` | Before every PR |
+| Package contents | `npm pack --dry-run` | When `package.json` `files`, build output or entry points change |
+
+All four of typecheck, tests, build and pack must pass in CI job `test` before merge.
+Chain locally in PowerShell: `npm run typecheck; if ($?) { npm test }; if ($?) { npm run build }`.
+
+## Unit test rules
+
+- Tests live in `tests/<module>.test.ts`, one file per `src/<module>.ts`.
+- Test behaviour through the module's public exports. No network, no real OpenCode
+  session, no real filesystem outside a temp directory; stub `fetch` and the SDK client.
+- Test error paths and the fail-safe rule: a hook given bad input must resolve, not throw.
+- Security-relevant code (redaction, key handling, consent gate, config confinement)
+  needs a test per rule, including a negative case that proves nothing is sent or leaked.
+- A bug fix starts with a failing test that reproduces it.
+
+## Fixtures
+
+Hand-written fixtures encode our assumptions about OpenCode and OpenRouter payloads,
+so they can pass while the real API differs. Prefer fixtures captured from a real
+session or response (a `fixtures` directory under `tests/` once the first one exists), with secrets
+removed. Mark hand-written fixtures as such in a comment and revisit them after the
+live spike (issue #2).
+
+## Flaky timing
+
+Wall-clock assertions flake across machines and CI runners. For performance-style
+tests, bound the input to the documented contract size (for example the 60000-char
+transcript cap) and use generous limits. Prefer fake timers for cooldown and timeout
+logic. Never assert tight millisecond bounds.

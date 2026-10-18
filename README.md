@@ -117,6 +117,10 @@ npm run build
 
 Design notes: [docs/superpowers/specs/2026-10-18-model-relay-design.md](docs/superpowers/specs/2026-10-18-model-relay-design.md)
 
+## Contributing / working with agents
+
+Work is tracked as GitHub issues and follows one documented process. Start with [AGENTS.md](AGENTS.md) (commands, rules, gotchas) and [docs/process.md](docs/process.md) (lifecycle, reviewer loop, merge authority). This applies to human contributors and AI agents alike.
+
 ## License
 
 MIT
