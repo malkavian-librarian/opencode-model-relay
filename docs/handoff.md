@@ -15,6 +15,20 @@ GitHub issue comments hold the detailed notes; this file indexes the latest stat
 
 ## Entries (newest first)
 
+### 2026-10-19 - #26 quality judge merged; housekeeping done (opencode) - closed
+
+- Status: PR #53 (#26) squash-merged as 65421a3: opt-in quality judge (`judge.enabled`) with
+  local heuristics (src/heuristics.ts), strict-JSON LLM verdicts (src/judge.ts), two-consecutive-
+  verdict switching logged as `quality`, no cooldown recorded; all caps persisted.
+- Security review found 1 HIGH (`judge.enabled` never read) + 1 MEDIUM (TTL-bounded dedup let one
+  turn be judged twice) + 4 LOW; all fixed in the same PR (commits 112ae20, 23187b0), CI green 393
+  tests, CodeRabbit review done (its Major: stale-verdict switch - also fixed).
+- Housekeeping: stale worktrees and branches removed; issues #39, #6 closed as shipped (#52, #53);
+  dependabot majors #42 ts 7, #43 @types/node 26, #44 tsup 9 closed with ignore-with-reason rules
+  added to .github/dependabot.yml.
+- Next step: none pending from the sprint; owner-gated remain #5 (release), #19 (TUI), #18
+  (real error payloads), #45 (workflow_dispatch scope); v1.2 stats #7 awaits grooming.
+
 ### 2026-10-18 - #36, #37, #25, #40 merged; recover hardening queued (opencode)
 
 - Status: four PRs squash-merged to `main` this session, each with QA/security PASS and CI green:

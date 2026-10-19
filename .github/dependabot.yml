@@ -18,6 +18,16 @@ updates:
       # vitest 5 requires Node ^22.12 while the documented dev floor is Node >= 20.19.
       - dependency-name: "vitest"
         update-types: ["version-update:semver-major"]
+      # typescript 7 is the Go rewrite (typescript-go): toolchain/config behaviour changes that need a
+      # dedicated validation pass (typecheck, tsup dts bundling) before adopting; not a drive-by bump.
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
+      # @types/node majors track Node.js majors beyond the supported runtime floor (dev 20.19, CI 22).
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
+      # tsup 9 is a major with build-behaviour changes (esbuild/dts bundling); adopt after validation.
+      - dependency-name: "tsup"
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: github-actions
     directory: /
     schedule:

@@ -120,5 +120,5 @@ over with a structured summary. Design: `docs/superpowers/specs/2026-10-18-model
 ## Improvement ideas (max 10, newest at bottom)
 
 - Open issues: https://github.com/malkavian-librarian/opencode-model-relay/issues
-  (live spike #2, plugin entry #3, e2e recording #4, release #5, v1.1 #6, v1.2 #7,
-  classifier wording fix #8)
+  (live spike #2, plugin entry #3, e2e recording #4, release #5, TUI checks #19,
+  workflow_dispatch scope #45, stale-open #39/#6 to close; v1.2 stats #7 pending)
