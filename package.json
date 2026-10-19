@@ -1,6 +1,6 @@
 {
   "name": "opencode-model-relay",
-  "version": "0.0.0",
+  "version": "1.0.0",
   "description": "OpenCode plugin: model failover with structured handover",
   "license": "MIT",
   "repository": { "type": "git", "url": "git+https://github.com/malkavian-librarian/opencode-model-relay.git" },

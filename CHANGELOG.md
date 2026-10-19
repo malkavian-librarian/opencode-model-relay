@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-Targeting 1.0.0 (not yet released).
+## 1.0.0 - 2026-10-19
 
 - Failure classification: rate limit, quota, auth, free-tier 403, model not found, 5xx and timeout trigger a switch; context overflow, user abort and unknown errors never do.
 - Chain failover across `tiers.primary`, `tiers.secondary` and `tiers.tertiary`, with permanent-failure marking, exponential cooldown (honouring `Retry-After`), and a per-session switch cap.

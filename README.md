@@ -1,6 +1,6 @@
 # opencode-model-relay
 
-> Status: v1.0 in development. Not yet published to npm.
+> Status: v1.0.0 published to npm as opencode-model-relay.
 
 An [OpenCode](https://opencode.ai) plugin that keeps a session going when the current model fails: it classifies the failure, moves to the next model in your chain, hands the work over with a structured summary, and resumes.
 
