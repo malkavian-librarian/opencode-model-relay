@@ -367,7 +367,7 @@ describe("Controller quality judge (#26)", () => {
     const a = judgeSetup({ cfg: { privacy: { consent: false } }, messages: judgedTurn("a1") })
     await a.c.onSessionIdle("s1")
     expect(a.calls.chat).toHaveLength(0)
-    const b = judgeSetup({ env: {} })
+    const b = judgeSetup({ env: {}, messages: judgedTurn("a1") })
     await b.c.onSessionIdle("s1")
     expect(b.calls.chat).toHaveLength(0)
   })
@@ -509,6 +509,24 @@ describe("Controller quality judge (#26)", () => {
     await second.onSessionIdle("s1")
     expect(first.calls.chat).toHaveLength(1)
     expect(first.d.state.get("s1")).toMatchObject({ judgeCalls: 1 })
+  })
+
+  it("a verdict on a turn superseded during the judge call is dropped", async () => {
+    const { c, calls, messages } = judgeSetup({
+      messages: judgedTurn("a1"),
+      chat: async () => {
+        // The new turn lands while the judge call is in flight: the verdict belongs to a stale turn.
+        messages.push(...judgedTurn("a2"))
+        return { text: verdict(true), costUsd: 0.01 }
+      },
+    })
+    messages.push(...judgedTurn("a0"))
+    await c.onSessionIdle("s1") // judges a0
+    messages.push(...judgedTurn("a1b"))
+    await c.onSessionIdle("s1") // judges a1b; verdict true, but a2 landed during the call
+    expect(calls.prompt).toHaveLength(0)
+    expect(calls.abort).toHaveLength(0)
+    expect(calls.logs).toHaveLength(0)
   })
 
   it("judge failure never throws: chat down -> no switch, the attempt still counts against the cap", async () => {

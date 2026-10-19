@@ -262,6 +262,11 @@ export class Controller {
       this.judgeStreak.set(sessionID, streak)
       if (streak < 2) return // two consecutive switch:true verdicts required
       this.judgeStreak.delete(sessionID)
+      // A verdict may outlive its turn: a newer message can arrive during the judge call. Only switch
+      // if the judged turn is still the newest one; the newer turn gets a fresh look at the next idle.
+      const nowMsgs = await this.fetchMessages(sessionID)
+      const newest = nowMsgs[nowMsgs.length - 1]
+      if (!newest || newest.info.id !== last.info.id) return
       // Same switch path as a hard failure (lock, dedup, strategy, handover), logged as kind "quality".
       await this.handle(sessionID, { kind: "quality", retryable: false, permanent: false, switchable: true })
     } catch (e) {

@@ -37,11 +37,16 @@ describe("buildJudgeInput", () => {
     expect(payload.match(/<\u200b\/?judge-data/g)).toHaveLength(3)
   })
 
-  it("carries the used redaction caps: bounded output", () => {
-    const huge = "secret=sk-LIVEabc123def456ghi789 " + "x".repeat(70_000)
+  it("carries the used redaction caps: bounded output that never leaks a token", () => {
+    const secret = "secret=sk-LIVEabc123def456ghi789"
+    const huge = secret + " " + "x".repeat(70_000)
+    // The secret sits at the far end of the transcript truncation window too, so a skipped redact()
+    // would show up either way and the not.toContain assertion catches it.
+    const transcript = "y".repeat(70_000) + " " + secret
     const { payload } = buildJudgeInput({
-      lastUserText: huge, filesTouched: [], toolCalls: [], todo: [], transcript: huge,
+      lastUserText: huge, filesTouched: [], toolCalls: [], todo: [], transcript,
     }, [])
     expect(payload.length).toBeLessThanOrEqual(65_000)
+    expect(payload).not.toContain("sk-LIVEabc123def456ghi789")
   })
 })
