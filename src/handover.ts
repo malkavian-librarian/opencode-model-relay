@@ -14,7 +14,7 @@ export interface Extracted {
 
 const EDIT_TOOLS = new Set(["edit", "write", "patch", "multiedit", "apply_patch"])
 const MAX_LAST_REQUEST = 4000
-const MAX_REDACT_INPUT = 60_000
+export const MAX_REDACT_INPUT = 60_000
 const neutralizeTags = (s: string): string => s.replace(/<\s*(\/?)\s*transcript/gi, "<\u200b$1transcript")
 const statusOf = (s: string): "DONE" | "FAILED" | "UNKNOWN" =>
   s === "completed" ? "DONE" : s === "error" ? "FAILED" : "UNKNOWN"
@@ -47,7 +47,9 @@ export function extractFromMessages(msgs: OcMessage[], o: { maxToolChars: number
       if (p.type === "text") {
         const raw = (p as any).text
         if (typeof raw !== "string") continue
-        if (raw.includes(RELAY_MARKER) || (p as any).synthetic || (p as any).ignored) continue
+        // Same rule as hasRelayMarker: only a text part that STARTS with the marker (ours) is dropped;
+        // a user message merely mentioning it stays visible (it may not impersonate the handover).
+        if (raw.startsWith(RELAY_MARKER) || (p as any).synthetic || (p as any).ignored) continue
         if (role === "user") lastUserText = raw
         lines.push(`${role === "user" ? "USER" : "ASSISTANT"}: ${redact(truncate(raw, o.maxToolChars * 4))}`)
       } else if (p.type === "tool") {

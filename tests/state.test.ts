@@ -37,6 +37,8 @@ describe("StateStore", () => {
       neg: { switchCount: 1, recoveries: -1, updated: now },
       str: { switchCount: 1, recoveries: "3", updated: now },
       pin: { switchCount: 1, lastPin: 5, updated: now },
+      judge: { switchCount: 1, judgeCalls: 2.9, lastJudgeAt: -1, updated: now },
+      judgeBad: { switchCount: 1, judgeCalls: "9", lastJudgeAt: "then", updated: now },
     } }))
     const s = new StateStore(f); s.load()
     expect(s.get("ok").recoveries).toBe(2)
@@ -44,6 +46,26 @@ describe("StateStore", () => {
     expect(s.get("str").recoveries).toBeUndefined()
     expect(s.get("ok").lastPin).toBeUndefined()
     expect(s.get("pin").lastPin).toBeUndefined()
+    expect(s.get("judge")).toMatchObject({ judgeCalls: 2 })
+    expect(s.get("judge").lastJudgeAt).toBeUndefined() // negative timestamps are not dateable
+    expect(s.get("judgeBad").judgeCalls).toBeUndefined()
+    expect(s.get("judgeBad").lastJudgeAt).toBeUndefined()
+  })
+
+  it("judgeDaily round trip and hostile validation", () => {
+    const f = file()
+    const a = new StateStore(f); a.load()
+    a.judgeDaily.calls = 2
+    a.judgeDaily.costUsd = 0.03
+    a.save()
+    const b = new StateStore(f); b.load()
+    expect(b.judgeDaily.calls).toBe(2)
+    expect(b.judgeDaily.costUsd).toBe(0.03)
+    fs.writeFileSync(f, JSON.stringify({ v: 1, sessions: {}, judgeDaily: { date: 7, calls: -2, costUsd: "x", extra: "y" } }))
+    const c = new StateStore(f); c.load()
+    expect(Object.keys(c.judgeDaily)).toEqual([]) // all fields invalid or bogus -> dropped
+    expect(() => c.save()).not.toThrow()
+    expect(JSON.parse(fs.readFileSync(f, "utf8")).judgeDaily).toEqual({})
   })
   it("survives a corrupt file", () => {
     const f = file(); fs.writeFileSync(f, "{not json")

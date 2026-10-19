@@ -3,7 +3,7 @@ import { parse, type ParseError } from "jsonc-parser"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
-import { DEFAULT_TEMPLATE, DEFAULT_WRITER_PROMPT } from "./defaults"
+import { DEFAULT_TEMPLATE, DEFAULT_WRITER_PROMPT, DEFAULT_JUDGE_PROMPT } from "./defaults"
 
 const modelStr = z.string().regex(/^[^/\s]+\/\S+$/, 'expected "provider/model"')
 
@@ -40,6 +40,19 @@ export const ConfigSchema = z
         maxToolChars: z.number().int().positive().max(15000).default(1500),
         maxTranscriptChars: z.number().int().positive().max(60000).default(60000),
         maxCallsPerSession: z.number().int().nonnegative().default(3),
+      })
+      .strict()
+      .default({}),
+    // Quality judge: an LLM decides after a finished turn whether a secondary/tertiary model is degraded
+    // (spec section 4). Off by default; runs only with privacy.consent and the OpenRouter key.
+    judge: z
+      .object({
+        enabled: z.boolean().default(false),
+        model: modelStr.default("google/gemini-2.5-flash-lite"),
+        prompt: z.string().min(1).default(DEFAULT_JUDGE_PROMPT),
+        maxCallsPerSession: z.number().int().nonnegative().default(3),
+        minIntervalMs: z.number().int().nonnegative().default(60000),
+        maxDailyUsd: z.number().max(100).nonnegative().default(0.5),
       })
       .strict()
       .default({}),

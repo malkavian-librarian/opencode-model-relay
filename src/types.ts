@@ -10,6 +10,8 @@ export function modelKey(m: ModelRef): string { return `${m.providerID}/${m.mode
 export type FailureKind =
   | "rate_limit" | "quota" | "auth" | "free_tier_403" | "server_5xx"
   | "timeout" | "model_not_found" | "overflow" | "user_abort" | "unknown"
+  // Not a real failure: the switch that a quality-judge verdict triggers is logged with this kind too.
+  | "quality"
 
 export interface Classified {
   kind: FailureKind
@@ -25,7 +27,7 @@ export type OcPart =
   | { type: string; [k: string]: unknown }
 
 export interface OcMessage {
-  info: { id: string; role: "user" | "assistant"; providerID?: string; modelID?: string; agent?: string; mode?: string; model?: { providerID: string; modelID: string } }
+  info: { id: string; role: "user" | "assistant"; providerID?: string; modelID?: string; agent?: string; mode?: string; model?: { providerID: string; modelID: string }; tokens?: { input?: number; output?: number; reasoning?: number } }
   parts: OcPart[]
 }
 
