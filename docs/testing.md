@@ -32,9 +32,9 @@ Chain locally in PowerShell: `npm run typecheck; if ($?) { npm test }; if ($?) {
 
 Hand-written fixtures encode our assumptions about OpenCode and OpenRouter payloads,
 so they can pass while the real API differs. Prefer fixtures captured from a real
-session or response (a `fixtures` directory under `tests/` once the first one exists), with secrets
-removed. Mark hand-written fixtures as such in a comment and revisit them after the
-live spike (issue #2).
+session or response (live in `tests/fixtures/`, exercised by `tests/real-fixtures.test.ts`),
+with secrets removed. Mark hand-written fixtures as such in a comment and revisit them
+after each real capture (new captures tracked in #18).
 
 ## Flaky timing
 

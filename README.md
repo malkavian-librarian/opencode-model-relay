@@ -6,7 +6,7 @@ An [OpenCode](https://opencode.ai) plugin that keeps a session going when the cu
 
 ## Quick start
 
-1. Add the plugin to `opencode.json` once it is published: `{ "plugin": ["opencode-model-relay"] }`. Until then, build it (`npm ci; npm run build`) and copy `dist/index.js` into `~/.config/opencode/plugins/`; the build is self-contained (zod and jsonc-parser are bundled, no `node_modules` needed).
+1. Add the plugin to `opencode.json` once it is published: `{ "plugin": ["opencode-model-relay"] }`. Until then, build it (`npm ci; npm run build`) and copy `dist/index.js` into `~/.config/opencode/plugins/` (or `<project>/.opencode/plugins/`); the build is self-contained (zod and jsonc-parser are bundled, no `node_modules` needed). Step-by-step: [docs/publish-and-install.md](docs/publish-and-install.md).
 2. Create `~/.config/opencode/opencode-model-relay.jsonc`:
 
 ```jsonc
@@ -19,7 +19,7 @@ An [OpenCode](https://opencode.ai) plugin that keeps a session going when the cu
 }
 ```
 
-Models are written `providerID/modelID`; only the first `/` splits them (`openrouter/z-ai/glm-5.2` is provider `openrouter`, model `z-ai/glm-5.2`). Type `/relay` inside OpenCode (or ask the model for the relay status) to see the chain and the current state. `/relay` is a command whose template asks the model to call the `relay_status` tool and print its output verbatim, so using it costs one small model turn. The `relay_status` tool reports the chain, current model, switch count and whether the API key is set or missing (never the key itself). If you opt in to OpenRouter summaries (see Privacy), the helper model defaults to `z-ai/glm-5.2` (slug unverified; check openrouter.ai/models); change it with `handover.model`.
+Models are written `providerID/modelID`; only the first `/` splits them (`openrouter/z-ai/glm-5.2` is provider `openrouter`, model `z-ai/glm-5.2`). Type `/relay` inside OpenCode (or ask the model for the relay status) to see the chain and the current state. `/relay` is a command whose template asks the model to call the `relay_status` tool and print its output verbatim, so using it costs one small model turn. The `relay_status` tool reports the chain, current model, switch count and whether the API key is set or missing (never the key itself). If you opt in to OpenRouter summaries (see Privacy), the helper model defaults to `z-ai/glm-5.2` (listed on the public OpenRouter models list as of 2026-10-18); change it with `handover.model`.
 
 ## How it works
 
@@ -67,7 +67,7 @@ File: `~/.config/opencode/opencode-model-relay.jsonc` (JSONC, max 64 KB). It is 
 | `openrouter.keyEnv` | string | `"OPENROUTER_API_KEY"` | Name of the environment variable that holds the key. The key is never read from config. |
 | `openrouter.baseUrl` | URL string | `"https://openrouter.ai/api/v1"` | Must be `https`, and host `openrouter.ai` unless `allowCustomBaseUrl` is true. |
 | `openrouter.allowCustomBaseUrl` | boolean | `false` | Allows another `https` host. |
-| `handover.model` | string | `"z-ai/glm-5.2"` (slug unverified; check openrouter.ai/models) | OpenRouter model that writes the summary. |
+| `handover.model` | string | `"z-ai/glm-5.2"` (on the OpenRouter models list, verified 2026-10-18) | OpenRouter model that writes the summary. |
 | `handover.writerPrompt` | string | built-in prompt | System prompt for the summary writer. |
 | `handover.messageTemplate` | string | built-in template | Placeholders: `{{from}} {{to}} {{reason}} {{summary}} {{toolCalls}} {{files}} {{todo}} {{lastRequest}}`. |
 | `handover.maxToolChars` | positive integer | `1500` | Per tool output cap before truncation. |
@@ -130,7 +130,7 @@ This table reflects the author's reading of both projects; check their READMEs f
 - `/relay` always costs one small model turn, because OpenCode plugin commands cannot run without the model.
 - `free_tier_403` detection is by error-message match and may miss other wordings.
 - Subagent sessions are not handled, and the plugin does not support per-agent chains.
-- The helper summary needs an OpenRouter key; no other provider is supported for it.
+- The helper summary and the judge need an OpenRouter key; no other provider is supported for either.
 
 ## Development
 

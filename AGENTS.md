@@ -83,8 +83,8 @@ over with a structured summary. Design: `docs/superpowers/specs/2026-10-18-model
    OWNER-ONLY, never done by an agent: npm publish / release tags, repository
    secrets, repository settings and branch protection, force-pushes, deleting any
    branch other than the merged PR branch, installing GitHub apps.
-6. CodeRabbit is optional and not installed yet (`docs/coderabbit.md`); until it
-   is, the QA/Reviewer subagent review is the gate.
+6. CodeRabbit is installed and reviews every PR (`docs/coderabbit.md`): its findings
+   feed the reviewer loop, but merge needs the QA/Reviewer PASS + CI green.
 
 ## Self-learning loop
 
@@ -120,5 +120,5 @@ over with a structured summary. Design: `docs/superpowers/specs/2026-10-18-model
 ## Improvement ideas (max 10, newest at bottom)
 
 - Open issues: https://github.com/malkavian-librarian/opencode-model-relay/issues
-  (live spike #2, plugin entry #3, e2e recording #4, release #5, TUI checks #19,
-  workflow_dispatch scope #45, stale-open #39/#6 to close; v1.2 stats #7 pending)
+  (owner-gated: release #5, TUI checks #19, real error payloads #18, workflow_dispatch
+  scope #45; v1.0 wrap-up #1, v1.2 stats #7)

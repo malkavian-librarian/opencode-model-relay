@@ -93,7 +93,9 @@ Publishing is an owner action; agents never publish or push tags.
   dry-run step only.
 - **Real release:** the owner sets the `NPM_TOKEN` repository secret, bumps the version in
   `package.json` and `CHANGELOG.md`, merges, then pushes a `v*` tag. Only the tag push runs
-  the real `npm publish`.
+  the real `npm publish`. The full step-by-step runbook, plus the do-it-yourself install
+  path for testing on the owner's machine without publishing, is
+  [docs/publish-and-install.md](publish-and-install.md).
 
 ## Map of docs/
 
@@ -107,7 +109,8 @@ Publishing is an owner action; agents never publish or push tags.
 | `docs/team/qa-engineer.md` | QA / Reviewer role prompt, security pass and verdict format. |
 | `docs/handoff.md` | Newest-first cross-agent handoff log. |
 | `docs/testing.md` | Gates, test rules, fixtures and flaky-timing rule. |
-| `docs/coderabbit.md` | Optional CodeRabbit setup (not installed yet). |
-| `docs/coderabbit-log.md` | Log of CodeRabbit exchanges (empty until installed). |
+| `docs/publish-and-install.md` | Owner runbook for npm publishing and local machine install for testing. |
+| `docs/coderabbit.md` | Installed CodeRabbit reviewer (first review PR #53); update loop. |
+| `docs/coderabbit-log.md` | Log of CodeRabbit exchanges. |
 | `docs/superpowers/specs/2026-10-18-model-relay-design.md` | Design spec and hard constraints. |
 | `docs/superpowers/plans/2026-10-18-v1.0-failover-handover.md` | v1.0 implementation plan. |

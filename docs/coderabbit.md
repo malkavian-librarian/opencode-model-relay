@@ -1,11 +1,14 @@
 # CodeRabbit (optional)
 
-**Status: not installed.** CodeRabbit is an optional AI PR reviewer, free for
-open-source repositories. Installing the GitHub app is an owner action (see
-`docs/process.md`); agents must not install it.
+**Status: installed and reviewing (first review: PR #53, 2026-10-19).** CodeRabbit
+is an optional AI PR reviewer, free for open-source repositories. Installing the
+GitHub app is an owner action (see `docs/process.md`).
 
-Until it is installed, the QA / Reviewer subagent review (`docs/team/qa-engineer.md`)
-is the review gate, together with CI job `test`.
+CodeRabbit's findings are treated as triggers for the standard reviewer loop, not as
+an extra merge gate; the security-caught review (`docs/team/qa-engineer.md`)
+plus CI job `test` remain the gates for merge decisions, together with CodeRabbit
+where it is responsive (it can be quota-limited late in the day; see the 2026-10-18
+handoff note).
 
 ## Configuration
 
