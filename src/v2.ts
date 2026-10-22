@@ -4,7 +4,7 @@ import { RELAY_MARKER } from "./defaults"
 import { INIT_TOOL_DESCRIPTION, RELAY_TOOL_DESCRIPTION, createRelay, listProviderModels } from "./server"
 import { initConfig } from "./init"
 import { configFile, dataDir } from "./config"
-import { modelKey, parseModel, type ClientLike, type OcMessage } from "./types"
+import { modelKey, parseModel, type ClientLike, type ModelRef, type OcMessage } from "./types"
 import type { Controller } from "./controller"
 import type { createNarrator } from "./narrator"
 import type { StateStore } from "./state"
@@ -227,7 +227,9 @@ function relayEvent(raw: unknown, core: Core): void {
     if (ev.type === "session.execution.succeeded") {
       void Promise.resolve(controller.onSessionIdle(sessionID)).catch(() => {})
     } else if (ev.type === "session.error" || ev.type === "session.execution.failed") {
-      void Promise.resolve(controller.onSessionError(sessionID, toV1Error(data.error))).catch(() => {})
+      const errObj = data.error && typeof data.error === "object" ? data.error : undefined
+      const from = modelRefOf(data.model) ?? modelRefOf((errObj as { model?: unknown } | undefined)?.model)
+      void Promise.resolve(controller.onSessionError(sessionID, toV1Error(data.error), from)).catch(() => {})
     }
   } catch { /* events never throw into the stream */ }
 }
@@ -269,7 +271,7 @@ function onPromptHook(ctx: V2Ctx, core: Core, ev: unknown): void {
         await Promise.resolve(ctx.session?.switchModel?.({ sessionID, model: { providerID: m.providerID, id: m.modelID } }))
       } catch { /* best effort: the next admission or context hook re-pins */ }
     })()
-  } catch (e) { console.error("V2DEBUG prompt hook failed:", e); throw e }
+  } catch { /* hooks never throw into the host */ }
 }
 
 function onContextHook(core: Core, ev: unknown): void {
@@ -285,24 +287,40 @@ function onContextHook(core: Core, ev: unknown): void {
   } catch { /* hooks never throw into the host */ }
 }
 
-function onRetryHook(controller: Controller, ev: unknown): void {
-  try {
-    const sessionID = sidOf(ev)
-    if (!sessionID) return
-    CORE.lastSession.sid = sessionID
-    const e = ev as { attempt?: unknown; error?: unknown; decision?: Record<string, unknown> }
-    const attempt = typeof e.attempt === "number" && Number.isFinite(e.attempt) && e.attempt >= 1 ? Math.floor(e.attempt) : 1
-    const raw = toV1Error(e.error)
-    const c = classify(raw)
-    if (!c.switchable || !(c.permanent || attempt >= SWITCH_MIN_ATTEMPT)) return
-    try { if (e.decision) e.decision.retry = false } catch { /* the veto is best effort */ }
-    void Promise.resolve(controller.onSessionError(sessionID, raw)).catch(() => {})
-  } catch { /* hooks never throw into the host */ }
+/** v2 model refs use `{providerID, id}`; the v1 controller model-key uses modelID. */
+function modelRefOf(raw: unknown): ModelRef | undefined {
+  const m = raw as { providerID?: unknown; id?: unknown; modelID?: unknown } | undefined
+  if (!m || typeof m !== "object") return undefined
+  const modelID = typeof m.modelID === "string" ? m.modelID : typeof m.id === "string" ? m.id : undefined
+  if (typeof m.providerID !== "string" || !modelID) return undefined
+  return { providerID: m.providerID, modelID }
+}
+
+function onRetryHook(controller: Controller, ev: unknown): Promise<void> {
+  // The hook may run async (the host applies the decision afterwards): await the switch outcome so
+  // OpenCode's retry is only vetoed when the relay really took the turn over (#56).
+  return (async () => {
+    try {
+      const sessionID = sidOf(ev)
+      if (!sessionID) return
+      CORE.lastSession.sid = sessionID
+      const e = ev as { attempt?: unknown; error?: unknown; decision?: Record<string, unknown>; model?: unknown }
+      const attempt = typeof e.attempt === "number" && Number.isFinite(e.attempt) && e.attempt >= 1 ? Math.floor(e.attempt) : 1
+      const raw = toV1Error(e.error)
+      const c = classify(raw)
+      if (!c.switchable || !(c.permanent || attempt >= SWITCH_MIN_ATTEMPT)) return
+      // A switch can take seconds (abort, handover, helper); veto only once it is actually enacted,
+      // otherwise the turn would fail with neither OpenCode's retry nor a handover.
+      const enacted = await controller.onSessionError(sessionID, raw, modelRefOf(e.model))
+      if (!enacted) return
+      try { if (e.decision) e.decision.retry = false } catch { /* the veto is best effort */ }
+    } catch { /* hooks never throw into the host */ }
+  })()
 }
 
 function registerSessionHooks(ctx: V2Ctx, core: Core): Promise<unknown> {
   // The registration calls themselves should not throw synchronously either (hooks never throw).
-  const reg = (name: string, cb: (ev: unknown) => void): Promise<unknown> => {
+  const reg = (name: string, cb: (ev: unknown) => unknown): Promise<unknown> => {
     try { return Promise.resolve(ctx.session?.hook?.(name, cb)) } catch { return Promise.resolve() }
   }
   const hooks = [

@@ -191,10 +191,10 @@ describe("v2 failure and retry paths", () => {
     const e = env()
     const { ctx, calls } = makeCtx()
     const teardown = await createV2Plugin(e.env).setup(ctx)
-    const ev = { sessionID: "s1", attempt: 1, error: { message: "402 payment required", status: 402 }, decision: {} as any }
-    calls.hooks.retry!(ev)
-    await until(() => calls.switchModel.length > 0)
+    const ev = { sessionID: "s1", attempt: 1, model: { providerID: "a", id: "1" }, error: { message: "402 payment required", status: 402 }, decision: {} as any }
+    await calls.hooks.retry!(ev)
     expect(ev.decision).toEqual({ retry: false })
+    expect(calls.switchModel[0]!.model).toEqual({ providerID: "b", id: "2" })
     expect(calls.prompt[0].text.startsWith(RELAY_MARKER)).toBe(true)
     teardown?.()
   })
@@ -203,14 +203,55 @@ describe("v2 failure and retry paths", () => {
     const { ctx, calls } = makeCtx()
     const teardown = await createV2Plugin(e.env).setup(ctx)
     const first = { sessionID: "s1", attempt: 1, error: { message: "429 Too Many Requests", status: 429 }, decision: {} as any }
-    calls.hooks.retry!(first)
-    await new Promise((r) => setTimeout(r, 50))
+    await calls.hooks.retry!(first)
     expect(first.decision).toEqual({})
     expect(calls.switchModel).toEqual([])
     const second = { sessionID: "s1", attempt: 2, error: { message: "429 Too Many Requests", status: 429 }, decision: {} as any }
-    calls.hooks.retry!(second)
-    await until(() => calls.switchModel.length > 0)
+    await calls.hooks.retry!(second)
     expect(second.decision).toEqual({ retry: false })
+    teardown?.()
+  })
+  it("the retry hook leaves OpenCode's retry alone when the relay cannot switch (child session)", async () => {
+    const e = env()
+    const { ctx, calls } = makeCtx({ parentID: "ses_parent" })
+    const teardown = await createV2Plugin(e.env).setup(ctx)
+    const ev = { sessionID: "s1", attempt: 1, model: { providerID: "a", id: "1" }, error: { message: "402 payment required", status: 402 }, decision: {} as any }
+    await calls.hooks.retry!(ev)
+    expect(ev.decision).toEqual({})
+    expect(calls.interrupt).toEqual([])
+    expect(calls.switchModel).toEqual([])
+    teardown?.()
+  })
+  it("a failure attributed to the handover target advances the chain: the handover turn itself failed (#56)", async () => {
+    const e = env(false)
+    fs.writeFileSync(path.join(e.root, "cfg", "opencode", "opencode-model-relay.jsonc"), `{"tiers":{"primary":"a/1","secondary":["b/2","c/3"]}}`)
+    const { ctx, calls } = makeCtx({
+      sessionModel: { id: "2", providerID: "b" },
+      messages: [user("u1", "fix the bug"), asst("a1", "a", "1", "x"), { id: "h1", time: { created: 3 }, text: `${RELAY_MARKER}\nhandover`, files: [], type: "user" }],
+    })
+    seed(e.stateFile, { sticky: "b/2", origin: "a/1", switchCount: 1 })
+    const teardown = await createV2Plugin(e.env).setup(ctx)
+    const ev = { sessionID: "s1", attempt: 2, model: { providerID: "b", id: "2" }, error: { message: "429 Too Many Requests", status: 429 }, decision: {} as any }
+    await calls.hooks.retry!(ev)
+    await until(() => calls.switchModel.length > 0)
+    expect(calls.switchModel.at(0)?.model).toEqual({ providerID: "c", id: "3" })
+    expect(ev.decision).toEqual({ retry: false })
+    expect(readState(e.stateFile).sessions.s1?.sticky).toBe("c/3")
+    teardown?.()
+  })
+  it("a re-fired error attributed to the model that already switched away does not switch again", async () => {
+    const e = env()
+    const { ctx, calls } = makeCtx({
+      sessionModel: { id: "2", providerID: "b" },
+      messages: [user("u1", "fix the bug"), asst("a1", "a", "1", "x"), { id: "h1", time: { created: 3 }, text: `${RELAY_MARKER}\nhandover`, files: [], type: "user" }],
+    })
+    seed(e.stateFile, { sticky: "b/2", origin: "a/1", switchCount: 1 })
+    const teardown = await createV2Plugin(e.env).setup(ctx)
+    const ev = { sessionID: "s1", attempt: 2, model: { providerID: "a", id: "1" }, error: { message: "429 Too Many Requests", status: 429 }, decision: {} as any }
+    await calls.hooks.retry!(ev)
+    expect(ev.decision).toEqual({})
+    expect(calls.interrupt).toEqual([])
+    expect(calls.switchModel).toEqual([])
     teardown?.()
   })
 })

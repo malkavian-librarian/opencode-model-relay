@@ -1,8 +1,11 @@
 # Spike: OpenCode 2 plugin API port (#56)
 
+> Path note: the probe used a sandboxed copy under the local user's profile
+> (`C:\Users\<user>\.opencode-v2-probe\oc2\`); examples below use that neutral placeholder.
+
 Probed against a **real OpenCode 2.1.3 Windows binary** (standalone zip from
 `https://opencode.ai/update/api/latest/cli/opencode/opencode-windows-x64.zip`, isolated at
-`C:\Users\FlyerOne\.opencode-v2-probe\oc2\` — the mainline 1.18.32 install was never touched).
+`C:\Users\<user>\.opencode-v2-probe\oc2\` — the mainline 1.18.32 install was never touched).
 Date: 2026-10-22. Everything below was verified empirically, not taken from docs.
 
 ## Runtime facts (probe-verified)

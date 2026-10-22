@@ -1,5 +1,5 @@
-import type { ClientLike, OcMessage } from "./types"
-import { parseModel } from "./types"
+import type { ClientLike, ModelRef, OcMessage } from "./types"
+import { modelKey, parseModel } from "./types"
 import type { RelayConfig } from "./config"
 import { classify, classifyRetryMessage } from "./classifier"
 import type { Classified } from "./types"
@@ -52,11 +52,12 @@ export class Controller {
     return r.data ?? []
   }
 
-  async onSessionError(sessionID: string, rawError: unknown): Promise<void> {
+  async onSessionError(sessionID: string, rawError: unknown, from?: ModelRef): Promise<boolean> {
     try {
-      await this.handle(sessionID, classify(rawError))
+      return await this.handle(sessionID, classify(rawError), from)
     } catch (e) {
       try { this.d.log(`onSessionError failed: ${e instanceof Error ? e.message : String(e)}`) } catch { /* ignore */ }
+      return false
     }
   }
 
@@ -76,15 +77,22 @@ export class Controller {
     }
   }
 
-  private async handle(sessionID: string, c: Classified): Promise<void> {
+  /**
+   * Runs the switch decision. Returns whether a handover was enacted (or attempted): the v2 retry
+   * hook may only veto OpenCode's own retry when the relay actually took the turn over (#56).
+   * `from` (optional) is the model the failure is attributed to (v2 retry events carry it); when
+   * known and equal to the handover target, the failure is the handover turn itself failing and the
+   * chain advances instead of being discarded.
+   */
+  private async handle(sessionID: string, c: Classified, from?: ModelRef): Promise<boolean> {
     const d = this.d
     // A plugin-caused abort is consumed here; an unmarked abort is the user pressing Esc. Neither switches.
-    if (c.kind === "user_abort") { d.lock.consumePluginAbort(sessionID); return }
-    if (!c.switchable) return
+    if (c.kind === "user_abort") { d.lock.consumePluginAbort(sessionID); return false }
+    if (!c.switchable) return false
 
     const session = await d.client.session.get({ path: { id: sessionID } })
-    if (session.data?.parentID) return
-    if (!d.lock.tryAcquire(sessionID)) return
+    if (session.data?.parentID) return false
+    if (!d.lock.tryAcquire(sessionID)) return false
     try {
       // The transcript is read under the lock (#40): a user message arriving while a switch runs must not
       // make this failure handler blame the freshly switched (recovered) model.
@@ -92,17 +100,21 @@ export class Controller {
       // The newest message identifies the failing turn: an assistant message carries the model that ran; if the
       // error came before any assistant reply (first turn, model resolution), the user message carries the model.
       const newest = msgs[msgs.length - 1]
-      if (!newest) return
+      if (!newest) return false
       // Our own handover prompt is the newest message from the switch until the next user turn: a late error
       // or a re-fired event for the same turn must not switch again on top of the running handover (#56).
-      if (hasRelayMarker(newest.parts)) return
+      // A failure attributed to the handover target itself is the handover turn failing: advance the chain.
+      if (hasRelayMarker(newest.parts)) {
+        const rec = d.state.get(sessionID)
+        if (!from || !rec.sticky || modelKey(from) !== rec.sticky) return false
+      }
       const ni = newest.info
       // The title/summary agent produces assistant messages without provider/model: ignore.
       const m = ni.role === "assistant" ? (ni.providerID && ni.modelID ? { providerID: ni.providerID, modelID: ni.modelID } : undefined) : ni.model
-      if (!m?.providerID || !m.modelID) return
+      if (!m?.providerID || !m.modelID) return false
       const current = `${m.providerID}/${m.modelID}`
 
-      if (d.lock.isDuplicate(`${sessionID}:${ni.id}`)) return
+      if (d.lock.isDuplicate(`${sessionID}:${ni.id}`)) return false
 
       if (c.kind === "quality") {
         // The judge says quality, not failure: the model is not cooled down or blacklisted, it can win the
@@ -117,7 +129,7 @@ export class Controller {
       })
       if (decision.action === "exhausted") {
         await this.toast(decision.reason === "switch_cap" ? "cap_reached" : "exhausted", {}, "warning")
-        return
+        return false
       }
 
       const ex = extractFromMessages(msgs, d.cfg.handover)
@@ -157,6 +169,7 @@ export class Controller {
         ...(helperCost !== undefined ? { helperCostUsd: helperCost } : {}),
       })
       await this.toast("switch_done", { from: current, to: decision.to, reason: c.kind })
+      return true
     } finally {
       d.lock.release(sessionID)
     }
