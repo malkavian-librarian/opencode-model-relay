@@ -104,14 +104,14 @@ over with a structured summary. Design: `docs/superpowers/specs/2026-10-18-model
 
 - PowerShell `Set-Content -Encoding utf8` writes a BOM -> write files with the editor Write tool or `[System.IO.File]::WriteAllText(path, text, (New-Object System.Text.UTF8Encoding($false)))` (2026-10-18)
 - `String.replace` with a string replacement interprets `$&` and `$1` in the replacement -> pass a replacer function `() => value` (2026-10-18)
-- `session.prompt` resolves only when the whole model turn ends -> fire it without `await` and attach `.catch` (2026-10-18)
+- `session.prompt` resolves only when the whole model turn ends in v1 -> fire it without `await` and attach `.catch` (2026-10-18)
 - `redact()` is roughly linear but must only see bounded input -> truncate first (`maxToolChars`, `maxTranscriptChars` 60000 cap), then redact (2026-10-18)
-- Wall-clock timing tests flake across machines -> bound inputs to the documented contract size and use generous limits (2026-10-18)
 - zod 3 nested `.default({})` applies inner defaults but zod 4 changes this -> keep zod `^3` (2026-10-18)
 - PowerShell 5.1 mangles multiline strings passed to `gh issue create --body $var` -> pipe `$body | gh issue create --body-file -` with `$OutputEncoding` set to UTF8 without BOM (2026-10-18)
 - Dependency majors that need code or Node-floor changes (zod 4, vitest 5) -> ignore the major in .github/dependabot.yml with a reason, do not merge them (2026-10-18)
 - Judge test failures that look like "the judge is blocked" are usually off-by-one idle expectations: messages are pushed BEFORE the idle, and a turn with assistant text is healthy (heuristics skip it) -> assert in push -> idle -> expect order, and diff against a passing replica test when tallying gates by hand (2026-10-19)
 - SessionLock dedup TTL (30 s) is only a cheap pre-filter, never an authorization boundary -> any once-only rule that guards a side effect (judge per-turn) must also be persisted on the state record (2026-10-19)
+- OpenCode v2 loads both `~/.config/opencode/plugins/*.js` and `opencode.jsonc` `"plugins"` separately, and `ctx.options`/`ctx.location` can come from an untrusted project tree -> never load from both sources at once, never read relay config/paths from `ctx.options` or `ctx.location`, and map v2 `{providerID, id}` <-> `{providerID, modelID}` (#56) (2026-10-22)
 
 ## Bugs - [open]/[fixed] + repro (max 10)
 
@@ -120,5 +120,4 @@ over with a structured summary. Design: `docs/superpowers/specs/2026-10-18-model
 ## Improvement ideas (max 10, newest at bottom)
 
 - Open issues: https://github.com/malkavian-librarian/opencode-model-relay/issues
-  (owner-gated: release #5, TUI checks #19, real error payloads #18, workflow_dispatch
-  scope #45; v1.0 wrap-up #1, v1.2 stats #7)
+  (v2 port #56; v1.2 stats #7; CI #45, deps #55; owner-gated: release #5, TUI #19, fixtures #18)

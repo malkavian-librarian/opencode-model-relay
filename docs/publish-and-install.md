@@ -375,3 +375,20 @@ are outside it. Use provider-side budgets too when testing paid helpers.
 The release workflow is tag-only and re-runnable: delete the bad tag locally and on
 the remote, fix, re-tag. Deprecating or unpublishing a broken version is manual:
 `npm deprecate opencode-model-relay@<version> "use <newer>"`.
+
+## 5. Release log
+
+### v1.0.0 — 2026-10-19
+
+- Bump `package.json` `version` `0.0.0` → `1.0.0`.
+- `CHANGELOG.md`: `## Unreleased` retitled `## 1.0.0 - 2026-10-19`; new empty `## Unreleased` above it.
+- `README.md`: status line → `v1.0.0 published to npm as opencode-model-relay.`
+- Commit `chore(release): v1.0.0` (`aaf5a10`), pushed to `main`.
+- Tag `v1.0.0` pushed to origin — triggers the real publish in `.github/workflows/release.yml`
+  (`npm publish --provenance --access public` via the `NPM_TOKEN` secret).
+- Pre-publish gates all green: `typecheck`, `test` (393/393), `build` (`dist/index.js` 213 KB +
+  `dist/index.d.ts`), `npm pack --dry-run` (`opencode-model-relay-0.0.0.tgz`, 53.9 kB, 6 files).
+- Verify after green CI: `npm view opencode-model-relay dist.tarball dist.integrity`
+
+After publishing, switch your machine to the real package (delete copied plugin files, add
+`"plugin": ["opencode-model-relay"]` on OpenCode v1 or `"plugins": ["opencode-model-relay"]` on OpenCode v2 to `opencode.json(c)`, restart OpenCode). Never load both a local file in `plugins/` and an `opencode.json(c)` package entry at the same time (#56).

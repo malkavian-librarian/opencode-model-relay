@@ -15,6 +15,12 @@ GitHub issue comments hold the detailed notes; this file indexes the latest stat
 
 ## Entries (newest first)
 
+### 2026-10-22 - #56 OpenCode v2 port groomed (3-critic panel) & backlog updated (opencode)
+
+- Status: Filed and groomed #56 (`feat: port relay to OpenCode v2 plugin API`) after a 3-subagent critique panel (V2 API/Runtime, Security/Invariants, TDD/Concurrency/Rollout). Closed obsolete #1 (shipped in `aaf5a10`); reworked #7, #18, #19 for OpenCode v2; groomed #45 and #55 into `docs/task-template.md`; updated #5 (tag `v1.0.0` pushed; release run `39312093779` passed gates and stopped at `ENEEDAUTH` pending owner `NPM_TOKEN` secret).
+- Next step: Implement #56 (`docs/spike-v2.md` + `tests/v2-port.test.ts` + v2 `ClientLike` adapter in `src/server.ts`), or pick up #45 / #55.
+- Blockers: #5 (`NPM_TOKEN` secret is owner-only); live v2 verification in #56 / #19 / #18 is `needs-owner`.
+
 ### 2026-10-19 - #26 quality judge merged; housekeeping done (opencode) - closed
 
 - Status: PR #53 (#26) squash-merged as 65421a3: opt-in quality judge (`judge.enabled`) with

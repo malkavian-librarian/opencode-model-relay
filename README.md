@@ -121,7 +121,8 @@ This table reflects the author's reading of both projects; check their READMEs f
 
 ## Roadmap
 
-- v1.2: per-model statistics.
+- OpenCode v2 plugin API port (`@opencode/plugin` `Plugin.define`, native zero-turn `/relay` via `ctx.session.synthetic`, `ctx.session.hook("retry")` + `switchModel`): tracked in #56.
+- v1.2: per-model 30-day performance ledger and `/relay stats` (#7, after #56).
 
 ## Known limits
 
