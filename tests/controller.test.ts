@@ -244,7 +244,7 @@ describe("Controller.onSessionError", () => {
   it("never throws even if the client misbehaves", async () => {
     const { c, d } = setup()
     ;(d.client.session as any).messages = async () => { throw new Error("down") }
-    await expect(c.onSessionError("s1", err429)).resolves.toBeUndefined()
+    await expect(c.onSessionError("s1", err429)).resolves.toBe(false)
   })
 
   describe("resilience: resolves and releases the lock after client failures", () => {
@@ -262,7 +262,7 @@ describe("Controller.onSessionError", () => {
         const { c, d, messages } = setup({ cfg: { tiers: { primary: "a/1", secondary: ["b/2", "c/3"] } } })
         const orig = { ...d.client.session, showToast: d.client.tui.showToast }
         brk(d)
-        await expect(c.onSessionError("s1", err429)).resolves.toBeUndefined()
+        await expect(c.onSessionError("s1", err429)).resolves.toBeTypeOf("boolean")
         // heal the client; a following valid failure must work (lock released)
         const calls: any[] = []
         ;(d.client.session as any).get = async () => ({ data: {} })

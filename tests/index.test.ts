@@ -48,7 +48,7 @@ describe("plugin entry", () => {
     expect(t[0]).toContain("ledger.dir")
   })
   it("the exported server uses process.env (default export unchanged)", async () => {
-    expect(Object.keys(plugin).sort()).toEqual(["id", "server"])
+    expect(Object.keys(plugin).sort()).toEqual(["id", "server", "setup"])
     const hooks: any = await (server as any)({ client: client([]), directory: "x" })
     await expect(hooks.config({})).resolves.toBeUndefined()
   })

@@ -15,6 +15,19 @@ GitHub issue comments hold the detailed notes; this file indexes the latest stat
 
 ## Entries (newest first)
 
+### 2026-10-22 - #56 v2 port implemented, live-verified on 2.1.3; PR open (opencode)
+
+- Status: Implemented the v2 layer (`src/v2.ts`, `src/v2-types.ts`) with dual export
+  `{id, server, setup}`, all-or-nothing activation, module-scope singleton core (`createRelay`
+  extracted in `src/server.ts`), v1 stand-down via `isV2Active`, `hasRelayMarker` relaxed to
+  synthetic marker parts, late-error no-double-switch guard in `controller.handle`. Smoke: v1
+  1.18.32 and v2.1.3 binaries both load the installed build and serve `relay_status` with the
+  live chain. Gates green: typecheck, 410 tests (20 files), build, `npm pack --dry-run`.
+- Next step: PR `feat/issue-56-v2-port` -> CI -> CodeRabbit review loop + QA security pass
+  (controller.ts, strategy.ts touched) -> squash-merge (authorized) -> comment on #56.
+- Blockers: live v2 failover E2E (real provider error) remains needs-owner (v2 silently
+  re-selects a fallback model on invalid models); documented in docs/spike-v2.md.
+
 ### 2026-10-22 - #56 OpenCode v2 port groomed (3-critic panel) & backlog updated (opencode)
 
 - Status: Filed and groomed #56 (`feat: port relay to OpenCode v2 plugin API`) after a 3-subagent critique panel (V2 API/Runtime, Security/Invariants, TDD/Concurrency/Rollout). Closed obsolete #1 (shipped in `aaf5a10`); reworked #7, #18, #19 for OpenCode v2; groomed #45 and #55 into `docs/task-template.md`; updated #5 (tag `v1.0.0` pushed; release run `39312093779` passed gates and stopped at `ENEEDAUTH` pending owner `NPM_TOKEN` secret).

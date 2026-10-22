@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- OpenCode 2 (v2 plugin API) support (#56): the plugin now exports both a v1 `server()` and a v2 `setup(ctx)`; OpenCode 2 binaries run the v2 layer (session hooks `prompt`/`context`/`retry`, cross-project event subscription, native `ctx.session.switchModel`-based pinning) and OpenCode 1.x binaries keep the proven v1 hooks — the v1 layer stands down automatically when the v2 layer is live, so no double switching.
+- On v2 binaries `relay_status` / `relay_init` are registered natively via `ctx.tool.transform`, and `/relay` / `/relay-init` are native zero-turn commands that surface status through a synthetic session message (no model turn needed on 2.x).
+- The retry hook vetoes OpenCode's own retry (`decision.retry = false`) when the relay decides to switch: permanent failures at attempt 1, transient ones from attempt 2, mirroring the v1 `session.status` policy.
+- `hasRelayMarker` now recognises a leading relay marker in a synthetic text part as the plugin's own handover prompt (v2 delivers prompts that way); mid-message pastes still never count.
+- Late errors for a turn that already got a handover can no longer cause a second switch: `controller.handle` exits when the newest transcript message is the relay handover itself.
+- Spec verified against a real OpenCode 2.1.3 binary (isolated probe); see [docs/spike-v2.md](docs/spike-v2.md). A live failover E2E (real provider error triggering a switch under v2) remains to be observed on a real failure; the portable parts (tool registration, status, config bootstrap, v1 path) ran green.
+
 ## 1.0.0 - 2026-10-19
 
 - Failure classification: rate limit, quota, auth, free-tier 403, model not found, 5xx and timeout trigger a switch; context overflow, user abort and unknown errors never do.
