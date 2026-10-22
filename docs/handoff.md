@@ -15,7 +15,18 @@ GitHub issue comments hold the detailed notes; this file indexes the latest stat
 
 ## Entries (newest first)
 
-### 2026-10-22 - #56 v2 port implemented, live-verified on 2.1.3; PR open (opencode)
+### 2026-10-22 - #56 OpenCode v2 port merged (opencode) - closed
+
+- Status: PR #57 squash-merged as `9706629` after the CodeRabbit loop (2 Majors + 1 Minor fixed in
+  `7edf2e0`: leftover debug in the prompt hook, veto-after-enactment retry semantics, handover-target
+  attribution, doc path placeholder) and a QA/security pass. Gates: 413 tests, typecheck/build/pack
+  green, CI green; live smokes passed on real OpenCode 1.18.32 and 2.1.3 binaries (`relay_status` on
+  both paths). Dual export `{id, server, setup}`; v1 hooks stand down when the v2 layer is live.
+- Next step: none from #56. Left needs-owner: live v2 failover E2E (real provider error; v2 silently
+  re-selects a fallback model on invalid models) and v2 TUI toast / native-command ergonomics,
+  tracked under #18/#19; the probed contract lives in `docs/spike-v2.md`.
+
+### 2026-10-22 - #56 v2 port implemented, live-verified on 2.1.3; PR open (opencode) - superseded
 
 - Status: Implemented the v2 layer (`src/v2.ts`, `src/v2-types.ts`) with dual export
   `{id, server, setup}`, all-or-nothing activation, module-scope singleton core (`createRelay`

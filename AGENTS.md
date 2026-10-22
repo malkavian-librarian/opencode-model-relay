@@ -122,4 +122,4 @@ over with a structured summary. Design: `docs/superpowers/specs/2026-10-18-model
 ## Improvement ideas (max 10, newest at bottom)
 
 - Open issues: https://github.com/malkavian-librarian/opencode-model-relay/issues
-  (v2 port #56; v1.2 stats #7; CI #45, deps #55; owner-gated: release #5, TUI #19, fixtures #18)
+  (v1.2 stats #7; CI #45, deps #55; owner-gated: release #5, TUI #19, fixtures #18; v2 port #56 shipped in `9706629`)
