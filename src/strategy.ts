@@ -102,14 +102,16 @@ export function recoverTarget(i: { chain: string[]; sticky: string; health: Reco
 }
 
 /**
- * True when parts hold a relay handover (our own prompt): a non-synthetic text part that STARTS with
- * RELAY_MARKER (buildHandover always puts it first). A marker pasted mid-message by the user does not count.
+ * True when parts hold a relay handover (our own prompt): any text part that STARTS with RELAY_MARKER
+ * (buildHandover always puts it first). A marker pasted mid-message by the user does not count. The
+ * synthetic flag is not required: on OpenCode 2 the handover prompt is delivered through a runtime that
+ * may hand it to hooks as a synthetic part (#56).
  */
 export function hasRelayMarker(parts: unknown): boolean {
   if (!Array.isArray(parts)) return false
   return parts.some((p) => {
-    const t = p && typeof p === "object" ? (p as { type?: unknown; text?: unknown; synthetic?: unknown }) : undefined
-    return t?.type === "text" && !t.synthetic && typeof t.text === "string" && t.text.startsWith(RELAY_MARKER)
+    const t = p && typeof p === "object" ? (p as { type?: unknown; text?: unknown }) : undefined
+    return t?.type === "text" && typeof t.text === "string" && t.text.startsWith(RELAY_MARKER)
   })
 }
 

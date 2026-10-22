@@ -170,13 +170,14 @@ describe("triedThisTurn", () => {
     ]
     expect(triedThisTurn(msgs).sort()).toEqual(["a/1", "b/2"])
   })
-  it("a marker pasted mid-message or in a synthetic part does not make a handover", () => {
+  it("a marker pasted mid-message is not a handover; a leading marker counts even when synthetic (#56)", () => {
     const pasted = user("u2", `look: ${RELAY_MARKER} odd`, { providerID: "b", modelID: "2" })
     const synthetic: OcMessage = { info: { id: "u3", role: "user", model: { providerID: "c", modelID: "3" } }, parts: [{ type: "text", text: `${RELAY_MARKER}\nx`, synthetic: true }] }
     expect(triedThisTurn([user("u1", "x", { providerID: "a", modelID: "1" }), pasted])).toEqual(["b/2"])
-    expect(triedThisTurn([user("u1", "x", { providerID: "a", modelID: "1" }), synthetic])).toEqual(["c/3"])
+    // The synthetic marker message is our own handover prompt: it continues the turn instead of starting one.
+    expect(triedThisTurn([user("u1", "x", { providerID: "a", modelID: "1" }), synthetic])).toEqual(["a/1", "c/3"])
     expect(hasRelayMarker(pasted.parts)).toBe(false)
-    expect(hasRelayMarker(synthetic.parts)).toBe(false)
+    expect(hasRelayMarker(synthetic.parts)).toBe(true)
     expect(hasRelayMarker([{ type: "text", text: `${RELAY_MARKER}\nhandover` }])).toBe(true)
     expect(hasRelayMarker(undefined)).toBe(false)
   })

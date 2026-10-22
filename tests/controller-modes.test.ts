@@ -127,13 +127,14 @@ describe("chain-recover", () => {
     await c.onSessionError("s1", err429("0"))
     expect(calls.prompt[0].body.model).toEqual({ providerID: "b", modelID: "2" })
   })
-  it("a marker pasted mid-message or in a synthetic part is a real user turn, so recovery still happens", async () => {
+  it("a marker pasted mid-message is a real user turn; a synthetic marker part is recognised as our handover (#56)", async () => {
     const { c, d, clock } = setup("chain-recover")
     d.state.set("s1", { sticky: "b/2", origin: "a/1", switchCount: 1, updated: T0 })
     clock.now = T0 + COOLDOWN
     expect(c.onChatMessage("s1", "a/1", [{ type: "text", text: "see <!-- opencode-model-relay --> here" }])).toBe("a/1")
     d.state.set("s1", { sticky: "b/2", origin: "a/1", switchCount: 1, updated: T0 })
-    expect(c.onChatMessage("s1", "a/1", [{ type: "text", synthetic: true, text: `${RELAY_MARKER}\nx` }, ...userParts])).toBe("a/1")
+    // v2 synthetic handover prompts carry the marker in a synthetic part: pin to the sticky model, no recovery.
+    expect(c.onChatMessage("s1", "a/1", [{ type: "text", synthetic: true, text: `${RELAY_MARKER}\nx` }, ...userParts])).toBe("b/2")
   })
   it("moves sticky up to a recovered secondary while the primary still cools; origin kept", async () => {
     const { c, d, calls, clock } = setup("chain-recover")

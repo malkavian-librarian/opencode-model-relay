@@ -32,6 +32,16 @@ Models are written `providerID/modelID`; only the first `/` splits them (`openro
 
 Subagent sessions (those with a `parentID`) are skipped. Any internal error leaves the session on its current model; hooks never throw. Main-model traffic always goes through OpenCode; the plugin does not proxy it.
 
+## OpenCode 2 (v2 plugin API)
+
+The plugin ships both plugin shapes in one file: the v1 `server()` hooks and the v2 `setup(ctx)` layer. Which one runs is decided by the host binary, per process:
+
+- **OpenCode 1.x** calls `server()` at boot: the hooks described above run unchanged. The v2 `setup()` call that 1.x also makes carries only a partial context, so the v2 layer stays dormant — no registers, no double handling.
+- **OpenCode 2.x** calls `setup(ctx)` with the full v2 surface. The relay then uses `ctx.session.hook("retry")` (igniting switch + vetoing OpenCode's own retry), a cross-project event stream routed by session id, pinning through `ctx.session.switchModel` before model resolution, and the `context` hook to detect an explicit user pick. The v1 hooks stand down in that process (the relay decides once per process, never twice).
+- On v2, `relay_status` / `relay_init` are registered as real tools and `/relay` / `/relay-init` are native commands that print status via a synthetic message — no model turn required.
+
+Details and the verified runtime shapes: [docs/spike-v2.md](docs/spike-v2.md).
+
 ## Modes
 
 `mode` decides where a failure moves the session and whether it ever comes back. In every mode, a model is skipped while it cools down (a cooldown that ends exactly now counts as over) or after a permanent failure (quota, auth, model not found: blacklisted for 24 hours, or until a turn on that model finishes without a plugin-seen failure), and `maxSwitchesPerSession` stops all switching.
@@ -121,14 +131,15 @@ This table reflects the author's reading of both projects; check their READMEs f
 
 ## Roadmap
 
-- OpenCode v2 plugin API port (`@opencode/plugin` `Plugin.define`, native zero-turn `/relay` via `ctx.session.synthetic`, `ctx.session.hook("retry")` + `switchModel`): tracked in #56.
-- v1.2: per-model 30-day performance ledger and `/relay stats` (#7, after #56).
+- ~~OpenCode v2 plugin API port~~ (`@opencode/plugin` avoided: the bundle self-defines the plugin object; native zero-turn `/relay` via `ctx.session.synthetic`, `ctx.session.hook("retry")` + `switchModel`): done, #56.
+- v1.2: per-model 30-day performance ledger and `/relay stats` (#7).
 
 ## Known limits
 
-- Verified headless against a real OpenCode server (see [docs/e2e-v1.0.md](docs/e2e-v1.0.md)); behaviour in the TUI (toast, the Esc keypress, `/relay`) is unconfirmed (#19). Model pinning is covered in [docs/spike.md](docs/spike.md).
+- Verified headless against a real OpenCode server (see [docs/e2e-v1.0.md](docs/e2e-v1.0.md)); behaviour in the TUI (toast, the Esc keypress, `/relay`) is unconfirmed (#19). Model pinning is covered in [docs/spike.md](docs/spike.md). On v2 the port ran live against OpenCode 2.1.3 ([docs/spike-v2.md](docs/spike-v2.md)); a forced failover under v2 could not be triggered without a real provider error yet.
+- On OpenCode 2 the event bus is user-wide: several relay processes (e.g. two projects at once) each see all events. Switches are deduplicated per process by the session lock and the handover marker; cross-process double events rely on that same state, not on a shared lock.
 - Real 403, 429 and quota error payloads have not been captured yet; those classifications rely on message and status matching tested with hand-written payloads (#18).
-- `/relay` always costs one small model turn, because OpenCode plugin commands cannot run without the model.
+- `/relay` costs one small model turn on OpenCode 1.x (plugin commands cannot skip the model turn there); on 2.x it is a native command.
 - `free_tier_403` detection is by error-message match and may miss other wordings.
 - Subagent sessions are not handled, and the plugin does not support per-agent chains.
 - The helper summary and the judge need an OpenRouter key; no other provider is supported for either.

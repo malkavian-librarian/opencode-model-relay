@@ -93,6 +93,9 @@ export class Controller {
       // error came before any assistant reply (first turn, model resolution), the user message carries the model.
       const newest = msgs[msgs.length - 1]
       if (!newest) return
+      // Our own handover prompt is the newest message from the switch until the next user turn: a late error
+      // or a re-fired event for the same turn must not switch again on top of the running handover (#56).
+      if (hasRelayMarker(newest.parts)) return
       const ni = newest.info
       // The title/summary agent produces assistant messages without provider/model: ignore.
       const m = ni.role === "assistant" ? (ni.providerID && ni.modelID ? { providerID: ni.providerID, modelID: ni.modelID } : undefined) : ni.model
