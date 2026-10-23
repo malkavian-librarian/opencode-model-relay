@@ -55,9 +55,8 @@ describe("config", () => {
     for (const mode of ["chain-sticky", "chain-recover", "escalate"]) {
       fs.writeFileSync(path.join(d, `${mode}.jsonc`), JSON.stringify({ mode, cooldownMs: 5 }))
       const r = loadConfig(path.join(d, `${mode}.jsonc`))
-      // accepted but ignored (AC-04): still parsed so the controller compiles until the rewiring child removes it
       expect(r.warnings).toHaveLength(1)
-      expect(r.warnings[0]).toMatch(/mode is deprecated/)
+      expect(r.warnings[0]).toContain("mode is deprecated: accepted but still honored")
       expect(r.config.mode).toBe(mode)
     }
     fs.writeFileSync(path.join(d, "bad.jsonc"), JSON.stringify({ mode: "round-robin", cooldownMs: 5 }))
@@ -204,6 +203,25 @@ describe("levels ladder (issue #63)", () => {
     expect(r.warnings).toHaveLength(1)
     expect(r.warnings[0]).toMatch(/tiers is deprecated/)
     expect(r.config.levels).toEqual(["z/9"])
+  })
+  it("caps migrated tiers after deduplication and falls back to safe defaults on overflow", () => {
+    const f = path.join(tmp(), "t.jsonc")
+    const secondary = Array.from({ length: 31 }, (_, i) => `p/m${i}`)
+    for (const overflow of [false, true]) {
+      fs.writeFileSync(f, JSON.stringify({
+        tiers: { primary: "p/primary", secondary, tertiary: overflow ? ["p/extra"] : secondary },
+        privacy: { consent: true },
+      }))
+      const r = loadConfig(f)
+      expect(r.warnings).toHaveLength(1)
+      if (overflow) {
+        expect(r.warnings[0]).toMatch(/invalid config.*more than 32 levels.*using defaults/)
+        expect(r.config).toEqual(defaultConfig())
+      } else {
+        expect(r.warnings[0]).toMatch(/auto-migrated/)
+        expect(r.config.levels).toEqual(["p/primary", ...secondary])
+      }
+    }
   })
   it("U-04 an invalid entry drops the config to defaults with a warning naming the level index", () => {
     const r = loadLevels("a/1", "b/2", "c/3", "d/4", 42)

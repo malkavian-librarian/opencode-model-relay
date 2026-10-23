@@ -137,8 +137,9 @@ messages.
   (e.g. `levels[4]: …`). No silent whole-config discard without being told exactly where.
 - **`tiers` auto-migrates** (`primary → L1`, `secondary[] → L2..`, `tertiary[] → …`) with a
   deprecation warning; `tiers` + `levels` both present → `levels` wins + warning (no silent
-  merge). `mode` is accepted-but-ignored with a deprecation warning in the config issue and
-  **removed** in the rewiring issue (keeps compile green between the two).
+  merge). `mode` is deprecated but still honored by the existing runtime in the config issue,
+  then **removed** in the rewiring issue. This preserves current strategy behavior between the two;
+  `levels` remains schema-only until the strategy/controller work lands.
 - `maxSwitchesPerSession` default auto-scales: **max(6, levels.length + 1)**; an explicit
   user value always wins. Manual switches (`/relay`) are **exempt** from the cap.
 

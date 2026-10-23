@@ -16,12 +16,13 @@ const MAX_IDS_EXAMINED = 200
 // commented "not in your configured models" entry — the template never invents a model id.
 const LADDER_GO_GLM = "opencode-go/glm-5.3"
 const LADDER_OC_GLM52 = "opencode/glm-5.2"
+const LADDER_SOL = "openai/gpt-6.1-sol"
+const LADDER_MUSE = "opencode/muse-spark-1.3"
+const LADDER_OR_GLM = "openrouter/z-ai/glm-5.3"
 const LADDER_FIND_MATCH = "glm-5\\.[23]"
 const LADDER_GEMINI_RE = /^openrouter\/google\/gemini/i
 
-// Resolves a ladder target from the live model list: exact id first, then the first id of the same
-// provider whose model starts with the same slug. Returns null when absent; the ladder line is
-// then left commented with a not-found note.
+/** Resolves an exact id or same-provider slug variant; returns null when unavailable. */
 function resolveLadderId(models: string[], target: string): string | null {
   if (models.includes(target)) return target
   const provider = target.slice(0, target.indexOf("/"))
@@ -29,24 +30,33 @@ function resolveLadderId(models: string[], target: string): string | null {
   return models.find((m) => m.startsWith(`${provider}/`) && m.slice(provider.length + 1).startsWith(model)) ?? null
 }
 
-// The commented levels ladder. Every line carries // so the file stays harmless until edited.
+/** Builds a fully commented ladder, marking explicit targets absent from the live model list. */
 function buildLadderText(models: string[]): string {
+  const sol = resolveLadderId(models, LADDER_SOL)
   const go = resolveLadderId(models, LADDER_GO_GLM)
   const oc52 = resolveLadderId(models, LADDER_OC_GLM52)
+  const muse = resolveLadderId(models, LADDER_MUSE)
+  const orGlm = resolveLadderId(models, LADDER_OR_GLM)
   const gemini = models.find((m) => LADDER_GEMINI_RE.test(m) && /pro/i.test(m)) ?? null
   const j = (v: unknown): string => JSON.stringify(v)
   return [
-    `    // ${j("openai/gpt-6.1-sol")}, // #1`,
+    sol === null
+      ? `    // ${j(LADDER_SOL)}, // #1 — not in your configured models; enable it or replace the id`
+      : `    // ${j(sol)}, // #1 — resolved from your configured models`,
     go === null
       ? `    // ${j(LADDER_GO_GLM)}, // #2 — not in your configured models; enable it or replace the id`
       : `    // ${j(go)}, // #2 — resolved from your configured models`,
     oc52 === null
       ? `    // ${j(LADDER_OC_GLM52)}, // #3 — not in your configured models; enable it or replace the id`
       : `    // ${j(oc52)}, // #3 — resolved from your configured models`,
-    `    // ${j("opencode/muse-spark-1.3")}, // #4`,
+    muse === null
+      ? `    // ${j(LADDER_MUSE)}, // #4 — not in your configured models; enable it or replace the id`
+      : `    // ${j(muse)}, // #4 — resolved from your configured models`,
     `    // ${j({ find: { match: LADDER_FIND_MATCH, free: true } })}, // #5 — first free GLM 5.2/5.3 in OpenCode`,
     `    // ${j({ find: { match: LADDER_FIND_MATCH, free: true, via: "openrouter" } })}, // #5.5 — the same via OpenRouter`,
-    `    // ${j("openrouter/z-ai/glm-5.3")}, // #6`,
+    orGlm === null
+      ? `    // ${j(LADDER_OR_GLM)}, // #6 — not in your configured models; enable it or replace the id`
+      : `    // ${j(orGlm)}, // #6 — resolved from your configured models`,
     gemini === null
       ? `    // ${j("openrouter/google/<gemini-pro-id>")}, // #7 — add your OpenRouter Gemini Pro id (see \`opencode models\`)`
       : `    // ${j(gemini)}, // #7 — resolved from your configured models`,
@@ -75,11 +85,14 @@ export function buildDefaultConfigText(models: string[]): string {
   // opencode-model-relay config. Written by relay_init; edit freely.
   // Models are "provider/model". Only the first "/" splits them.
 
-  // Ordered failover ladder ("levels"): tried top to bottom, first healthy model wins.
+  // The levels ladder is not active yet; current failover still uses tiers.
+  // Keep this future ladder commented. To enable failover now, add a tiers object with
+  // primary, secondary and tertiary model ids (see the README).
+  // Future ordered failover ladder ("levels"): top to bottom, first healthy model wins.
   // An entry is a "provider/model" id, or { "find": { "match": "<regex>", "free": true } } to resolve
   // the first matching free model at failover time ("via": "openrouter" searches the OpenRouter
-  // catalog instead of your OpenCode models). The ladder below is the maintainer's example; remove
-  // the // to enable it. Entries marked "not in your configured models" did not resolve from this
+  // catalog instead of your OpenCode models). The ladder below is the maintainer's example.
+  // Entries marked "not in your configured models" did not resolve from this
   // machine's model list — enable the model or replace the id with one from \`opencode models\`.
 ${discoveredBlock}  // "levels": [
 ${buildLadderText(models)}
@@ -130,6 +143,7 @@ async function safeList(listModels: InitDeps["listModels"]): Promise<{ models: s
   }
 }
 
+/** Formats the bounded model listing, including discovery failures without provider error text. */
 function modelSection(models: string[], failed: boolean): string {
   if (failed) return "Could not list your OpenCode models (the config file was still written). Use `opencode models` to find provider/model ids."
   if (models.length === 0) return "No configured providers were found, so the levels ladder is a commented-out example. Use `opencode models` to find provider/model ids."
@@ -140,7 +154,7 @@ function modelSection(models: string[], failed: boolean): string {
 
 const NEXT_STEPS = [
   "Next steps:",
-  "1. Edit the levels ladder (top is tried first): uncomment the entries you want and replace ids with your own models.",
+  "1. The levels ladder is not active yet. For failover now, configure tiers (primary, secondary, tertiary) with your own model ids; keep levels commented (see the README).",
   "2. Leave privacy.consent false unless you accept sending a redacted transcript to OpenRouter for handover summaries.",
   "3. For those summaries also set the OPENROUTER_API_KEY environment variable (the key is never written to this file).",
 ].join("\n")

@@ -11,6 +11,7 @@ const MAX_LEVELS = 32
 const FIND_MATCH_MAX = 64
 const LEVELS_CAP_MSG = `more than ${MAX_LEVELS} levels`
 
+/** Rejects malformed matcher sources before configuration reaches runtime consumers. */
 const isValidRegexSource = (m: string): boolean => { try { void new RegExp(m); return true } catch { return false } }
 
 // A find level resolves to the first matching model at failover time (strategy child); here it is
@@ -113,15 +114,14 @@ export function defaultConfig(): RelayConfig { return ConfigSchema.parse({}) }
 
 const MAX_CONFIG_BYTES = 64 * 1024
 
-// Formats a zod issue path with numeric segments bracketed: tiers.secondary[0], levels[4].find.match.
+/** Formats indexed validation paths so users can locate invalid configuration entries. */
 const fmtPath = (p: readonly (string | number)[]): string => {
   let out = ""
   for (const seg of p) out += typeof seg === "number" ? `[${seg}]` : (out === "" ? seg : `.${seg}`)
   return out
 }
 
-// Issue messages falling under an authored `levels` entry must name the level index (AC-02):
-// "levels[4]: invalid find.match" instead of an unactionable whole-config message.
+/** Names the authored level index and invalid field; returns null for unrelated issues. */
 function levelIssueMessage(issue: z.ZodIssue): string | null {
   if (issue.path[0] !== "levels") return null
   const index = issue.path[1]
@@ -141,12 +141,14 @@ function levelIssueMessage(issue: z.ZodIssue): string | null {
   return `levels[${index}]: invalid entry`
 }
 
+/** Identifies equivalent schema-normalized entries for ladder deduplication. */
 const levelKey = (l: LevelEntry): string => (typeof l === "string" ? l : JSON.stringify(l))
 
-// Dedupes the ladder, keeping the first occurrence of each distinct entry.
+/** Dedupes the ladder, keeping the first occurrence of each distinct entry. */
 const dedupeLevels = (ls: LevelEntry[]): LevelEntry[] =>
   [...new Map(ls.map((l) => [levelKey(l), l] as [string, LevelEntry])).values()]
 
+/** Loads bounded JSONC, validates and migrates it, or returns safe defaults on invalid input. */
 export function loadConfig(file: string): { config: RelayConfig; warnings: string[] } {
   let text: string
   try {
@@ -177,11 +179,14 @@ export function loadConfig(file: string): { config: RelayConfig; warnings: strin
     if (tiersPresent) warnings.push("tiers is deprecated: ignored because levels is set; levels wins")
   } else if (tiersPresent) {
     const walk = [c.tiers.primary, ...c.tiers.secondary, ...c.tiers.tertiary]
-    c.levels = dedupeLevels(walk.filter((m): m is string => m !== undefined))
+    const migratedLevels = dedupeLevels(walk.filter((m): m is string => m !== undefined))
+    if (migratedLevels.length > MAX_LEVELS)
+      return { config: defaultConfig(), warnings: [`invalid config (levels: ${LEVELS_CAP_MSG}); using defaults`] }
+    c.levels = migratedLevels
     warnings.push("tiers is deprecated: auto-migrated to levels (primary -> levels[0], then secondary and tertiary)")
   }
   if (hasKey("mode"))
-    warnings.push("mode is deprecated: accepted but ignored; remove it from the config")
+    warnings.push("mode is deprecated: accepted but still honored; remove it from the config")
   return { config: c, warnings }
 }
 
