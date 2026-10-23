@@ -51,14 +51,43 @@ describe("config", () => {
     expect(r.warnings[0]).toMatch(/tiers\.secondary/)
     expect(r.config.tiers.secondary).toEqual([])
   })
-  it("mode is removed (#66): a config that still sets it is rejected with one warning and falls to defaults", () => {
-    const d = tmp()
+  it("ignores removed mode with one warning while preserving valid settings", () => {
+    const f = path.join(tmp(), "c.jsonc")
     for (const mode of ["chain-sticky", "chain-recover", "escalate", "round-robin"]) {
-      fs.writeFileSync(path.join(d, `${mode}.jsonc`), JSON.stringify({ mode, cooldownMs: 5 }))
-      const r = loadConfig(path.join(d, `${mode}.jsonc`))
+      fs.writeFileSync(f, JSON.stringify({
+        mode, cooldownMs: 5, levels: ["a/1", "b/2"],
+        privacy: { consent: true }, judge: { enabled: true, model: "p/judge" },
+      }))
+      const r = loadConfig(f)
       expect(r.warnings).toHaveLength(1)
-      expect(r.warnings[0]).toMatch(/mode/)
-      expect(r.config.cooldownMs).toBe(60000)
+      expect(r.warnings[0]).toMatch(/mode is deprecated.*ignored/)
+      expect(r.config).toMatchObject({
+        cooldownMs: 5, levels: ["a/1", "b/2"],
+        privacy: { consent: true }, judge: { enabled: true, model: "p/judge" },
+      })
+      expect(r.config).not.toHaveProperty("mode")
+    }
+  })
+  it("still migrates tiers when a removed mode is present", () => {
+    const f = path.join(tmp(), "c.jsonc")
+    fs.writeFileSync(f, JSON.stringify({ mode: "chain-sticky", tiers: { primary: "a/1", secondary: ["b/2"] } }))
+    const r = loadConfig(f)
+    expect(r.config.levels).toEqual(["a/1", "b/2"])
+    expect(r.config.tiers).toMatchObject({ primary: "a/1", secondary: ["b/2"] })
+    expect(r.warnings.filter((w) => w.includes("mode is deprecated"))).toHaveLength(1)
+    expect(r.warnings.filter((w) => w.includes("tiers is deprecated"))).toHaveLength(1)
+  })
+  it("a removed mode does not bypass strict validation or safe defaults", () => {
+    const f = path.join(tmp(), "c.jsonc")
+    for (const invalid of [
+      { bogus: 1 }, { cooldownMs: -1 }, { privacy: { consent: "yes" } },
+      { judge: { enabled: "yes" } }, { openrouter: { baseUrl: "https://evil.example/v1" } },
+    ]) {
+      fs.writeFileSync(f, JSON.stringify({ mode: "chain-sticky", ...invalid }))
+      const r = loadConfig(f)
+      expect(r.config).toEqual(defaultConfig())
+      expect(r.warnings).toHaveLength(1)
+      expect(r.warnings[0]).toMatch(/invalid config/)
     }
   })
   it("a config without mode is clean", () => {

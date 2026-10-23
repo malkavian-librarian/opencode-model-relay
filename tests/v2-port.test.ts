@@ -390,6 +390,27 @@ describe("v2 idle and health", () => {
 })
 
 describe("v2 stay-put and adoption (#66)", () => {
+  it.each(["child session", "rejected lookup", "throwing lookup"])("context adoption leaves shared health and session state intact for %s", async (blocked) => {
+    const e = env()
+    fs.writeFileSync(e.stateFile, JSON.stringify({
+      v: 1,
+      sessions: { s1: { pluginPinned: "b/2", switchCount: 1, updated: NOW } },
+      health: { "z/9": { cooldownUntil: NOW + 3_600_000, failures: 4 } },
+      judgeDaily: {},
+    }))
+    const { ctx, calls } = makeCtx({ parentID: blocked === "child session" ? "ses_parent" : undefined })
+    const teardown = await createV2Plugin(e.env).setup(ctx)
+    if (blocked === "rejected lookup") ctx.session.get = async () => { throw new Error("unavailable") }
+    if (blocked === "throwing lookup") ctx.session.get = () => { throw new Error("unavailable") }
+    const before = readState(e.stateFile)
+    try {
+      expect(calls.hooks.context!({ sessionID: "s1", model: { providerID: "z", id: "9" } })).toBeUndefined()
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      expect(readState(e.stateFile)).toEqual(before)
+      expect(calls.switchModel).toEqual([])
+      expect(calls.prompt).toEqual([])
+    } finally { teardown?.() }
+  })
   it("the prompt hook never re-asserts a model (switchModel persists, probe Q1)", async () => {
     const e = env()
     seed(e.stateFile, { pluginPinned: "b/2", switchCount: 1 })

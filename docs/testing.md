@@ -30,6 +30,19 @@ Chain locally in PowerShell: `npm run typecheck; if ($?) { npm test }; if ($?) {
 - Ponytail rule: new non-trivial logic (a branch, loop, parser, money or security
   code, or a new script) needs one small test; trivial changes need none.
 
+### Harness gotchas
+
+- `ConfigSchema.parse({ tiers })` leaves `levels` empty: `loadConfig` performs the
+  tiers-to-levels migration. Harnesses that bypass the loader must derive levels
+  from their merged tiers so controller switch tests exercise the configured ladder.
+- Seed state timestamps and cooldowns relative to `Date.now()`. Values near 1970
+  (`updated: 1`, `cooldownUntil: 4_000_000`) expire during `StateStore.load()` and
+  its health sweep, so the intended fixture state disappears before assertions.
+- Context adoption must resolve session eligibility before clearing shared health;
+  test child sessions and failed lookups as well as successful top-level adoption.
+- Removing a runtime config key must preserve valid sibling settings on upgrade;
+  test legacy migration and invalid siblings to keep strict validation intact.
+
 ## Fixtures
 
 Hand-written fixtures encode our assumptions about OpenCode and OpenRouter payloads,

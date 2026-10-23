@@ -156,6 +156,11 @@ export function loadConfig(file: string): { config: RelayConfig; warnings: strin
   const errors: ParseError[] = []
   const raw = parse(text, errors, { allowTrailingComma: true })
   if (errors.length) return { config: defaultConfig(), warnings: ["config is not valid JSONC; using defaults"] }
+  // Presence checks use the raw object: schema defaults are not user-authored.
+  const hasKey = (k: string): boolean => { const o: unknown = raw; return typeof o === "object" && o !== null && !(o instanceof Array) && k in o }
+  const modePresent = hasKey("mode")
+  // Removing the runtime strategy must not discard otherwise valid settings on upgrade.
+  if (modePresent) delete raw.mode
   const r = ConfigSchema.safeParse(raw)
   if (!r.success) {
     const msg = r.error.issues
@@ -164,12 +169,10 @@ export function loadConfig(file: string): { config: RelayConfig; warnings: strin
     return { config: defaultConfig(), warnings: [`invalid config (${msg}); using defaults`] }
   }
   const c = r.data
-  // Presence checks use the raw object: schema defaults are not user-authored, so they must not
-  // trigger deprecation or migration paths.
-  const hasKey = (k: string): boolean => { const o: unknown = raw; return typeof o === "object" && o !== null && !(o instanceof Array) && k in o }
   const levelsPresent = hasKey("levels")
   const tiersPresent = hasKey("tiers")
   const warnings: string[] = []
+  if (modePresent) warnings.push("mode is deprecated and ignored; remove it from the config")
   if (levelsPresent) {
     c.levels = dedupeLevels(c.levels)
     // Explicit levels skip migration; the existing runtime still consumes tiers until rewiring.

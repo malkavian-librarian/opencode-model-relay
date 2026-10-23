@@ -293,13 +293,18 @@ function onContextHook(core: Core, ev: unknown): void {
     const { sessionID, model } = parsed.data
     CORE.lastSession.sid = sessionID
     const pick = `${model.providerID}/${model.id}`
-    const rec = core.state.get(sessionID)
-    if (rec.pluginPinned === pick) return // the plugin set this model itself: nothing to adopt
-    // Corroboration (probe Q4): a session.model.selected that disagrees with the context model means
-    // the context payload is stale; the hook alone cannot tell a pick from a runtime re-resolution.
-    const selected = CORE.modelSelected.get(sessionID)
-    if (selected !== undefined && selected !== pick) return
-    core.controller.adoptPick(sessionID, pick) // under the SessionLock; never enacts a switch
+    void (async () => {
+      try {
+        const session = await holderClient().session.get({ path: { id: sessionID } })
+        if (session.data?.parentID) return // child picks must not clear the parent's shared health
+        const rec = core.state.get(sessionID)
+        if (rec.pluginPinned === pick) return // the plugin set this model itself: nothing to adopt
+        // Check after the lookup: a newer selection may arrive while session.get is pending.
+        const selected = CORE.modelSelected.get(sessionID)
+        if (selected !== undefined && selected !== pick) return
+        core.controller.adoptPick(sessionID, pick) // under the SessionLock; never enacts a switch
+      } catch { /* lookup failures leave session state and shared health intact */ }
+    })()
   } catch { /* hooks never throw into the host */ }
 }
 
