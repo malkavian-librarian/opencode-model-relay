@@ -101,18 +101,17 @@ export class Controller {
       // error came before any assistant reply (first turn, model resolution), the user message carries the model.
       const newest = msgs[msgs.length - 1]
       if (!newest) return false
-      // Our own handover prompt is the newest message from the switch until the next user turn: a late error
-      // or a re-fired event for the same turn must not switch again on top of the running handover (#56).
-      // A failure attributed to the handover target itself is the handover turn failing: advance the chain.
-      if (hasRelayMarker(newest.parts)) {
-        const rec = d.state.get(sessionID)
-        if (!from || !rec.sticky || modelKey(from) !== rec.sticky) return false
-      }
       const ni = newest.info
       // The title/summary agent produces assistant messages without provider/model: ignore.
       const m = ni.role === "assistant" ? (ni.providerID && ni.modelID ? { providerID: ni.providerID, modelID: ni.modelID } : undefined) : ni.model
       if (!m?.providerID || !m.modelID) return false
       const current = `${m.providerID}/${m.modelID}`
+      // Explicit attribution must agree with the current turn, never poison a newer model.
+      if (from && modelKey(from) !== current) return false
+      // Marker text is untrusted: require both model context and persisted sticky state.
+      // Missing attribution alone is not evidence of a stale error; the target can fail
+      // before producing an assistant message. Lock/dedup and switch caps still apply.
+      if (hasRelayMarker(newest.parts) && d.state.get(sessionID).sticky !== current) return false
 
       if (d.lock.isDuplicate(`${sessionID}:${ni.id}`)) return false
 

@@ -160,6 +160,61 @@ describe("v2 activation rules", () => {
 })
 
 describe("v2 failure and retry paths", () => {
+  // Synthetic documented retry-hook shapes, not captures of the reported incident.
+  for (const [message, kind] of [
+    ["The usage limit has been reached", "quota"],
+    ["Free usage limit reached. Subscribe to OpenCode Go to keep going: https://opencode.ai/go", "free_tier_403"],
+  ]) for (const status of [undefined, 429]) {
+    it(`retry exhaustion switches on attempt 1 (${kind}, status ${status})`, async () => {
+      const e = env()
+      const { ctx, calls } = makeCtx()
+      const teardown = await createV2Plugin(e.env).setup(ctx)
+      const ev = { sessionID: "s1", agent: "build", model: { providerID: "a", id: "1" }, attempt: 1, error: { type: "api_error", message, status }, decision: { retry: true, delay: 1000 } }
+      await calls.hooks.retry!(ev)
+      expect(ev.decision).toEqual({ retry: false, delay: 1000 })
+      expect(calls.switchModel).toHaveLength(1)
+      expect(readState(e.stateFile).health["a/1"]?.permanent).toBe(true)
+      expect(readState(e.stateFile).sessions.s1?.switchCount).toBe(1)
+      await calls.hooks.retry!(ev)
+      expect(calls.switchModel).toHaveLength(1)
+      teardown?.()
+    })
+  }
+  for (const message of [
+    "The usage limit has been reached. Please try again at 5pm",
+    "Usage limit reached, resets at 5pm",
+    "You've hit your usage limit. Please try again at 5:00 PM",
+    "Rate limit reached for requests, usage limit resets at 5pm, see your billing page",
+  ]) for (const status of [undefined, 429]) {
+    it(`retry reset hint leaves first attempt native (${message}, ${status})`, async () => {
+      const e = env()
+      const { ctx, calls } = makeCtx()
+      const teardown = await createV2Plugin(e.env).setup(ctx)
+      const ev = { sessionID: "s1", agent: "build", model: { providerID: "a", id: "1" }, attempt: 1, error: { type: "api_error", message, status }, decision: { retry: true, delay: 1000 } }
+      await calls.hooks.retry!(ev)
+      expect(ev.decision).toEqual({ retry: true, delay: 1000 })
+      expect(calls.switchModel).toEqual([])
+      ev.attempt = 2
+      await calls.hooks.retry!(ev)
+      expect(ev.decision.retry).toBe(false)
+      expect(calls.switchModel).toHaveLength(1)
+      expect(readState(e.stateFile).health["a/1"]?.permanent).not.toBe(true)
+      teardown?.()
+    })
+  }
+  it("unattributed failure event advances a known handover target (compatibility only)", async () => {
+    const e = env(false)
+    fs.writeFileSync(path.join(e.root, "cfg", "opencode", "opencode-model-relay.jsonc"), `{"tiers":{"primary":"a/1","secondary":["b/2","c/3"]}}`)
+    seed(e.stateFile, { sticky: "b/2", origin: "a/1", switchCount: 1 })
+    const { ctx, calls } = makeCtx({ sessionModel: { providerID: "b", id: "2" }, messages: [asst("a1", "a", "1", "x"), user("h1", `${RELAY_MARKER}\ncontinue`)] })
+    const teardown = await createV2Plugin(e.env).setup(ctx)
+    ctx.__emit({ type: "session.execution.failed", data: { sessionID: "s1", error: { type: "api_error", message: "The usage limit has been reached" } } })
+    await until(() => readState(e.stateFile).sessions.s1?.switchCount === 2)
+    expect(calls.switchModel[0].model).toEqual({ providerID: "c", id: "3" })
+    expect(readState(e.stateFile).health["b/2"]?.permanent).toBe(true)
+    expect(readState(e.stateFile).health["a/1"]).toBeUndefined()
+    teardown?.()
+  })
   it("a failed execution switches to the next chain model with the full handover", async () => {
     const e = env()
     const { ctx, calls, signals } = makeCtx()
@@ -257,6 +312,34 @@ describe("v2 failure and retry paths", () => {
 })
 
 describe("v2 switch safety", () => {
+  for (const blocked of ["cap", "exhausted", "context failure", "malformed", "lock"]) {
+    it(`retry keeps the native decision when blocked by ${blocked}`, async () => {
+      const e = env()
+      if (blocked === "cap") seed(e.stateFile, { switchCount: 6 })
+      if (blocked === "exhausted") fs.writeFileSync(path.join(e.root, "cfg", "opencode", "opencode-model-relay.jsonc"), `{"tiers":{"primary":"a/1","secondary":[]}}`)
+      const { ctx, calls } = makeCtx()
+      let release!: () => void
+      let entered!: () => void
+      const started = new Promise<void>((r) => { entered = r })
+      if (blocked === "context failure") ctx.session.context = async () => { throw new Error("down") }
+      if (blocked === "lock") ctx.session.interrupt = async () => { entered(); await new Promise<void>((r) => { release = r }) }
+      const teardown = await createV2Plugin(e.env).setup(ctx)
+      const ev = { sessionID: "s1", agent: "build", model: { providerID: "a", id: "1" }, attempt: 1, error: { type: "api_error", message: "The usage limit has been reached" }, decision: { retry: true, delay: 1000 } }
+      const pendingEvent = { ...ev, decision: { retry: true, delay: 1000 } }
+      let finished = false
+      const pending = blocked === "lock" ? Promise.resolve(calls.hooks.retry!(pendingEvent)).then(() => { finished = true }) : undefined
+      if (pending) {
+        await started
+        expect(finished).toBe(false)
+        expect(pendingEvent.decision.retry).toBe(true)
+      }
+      await expect(Promise.resolve(calls.hooks.retry!(blocked === "malformed" ? { ...ev, error: null } : ev))).resolves.toBeUndefined()
+      expect(ev.decision).toEqual({ retry: true, delay: 1000 })
+      if (pending) { release(); await pending; expect(pendingEvent.decision.retry).toBe(false) }
+      else expect(calls.switchModel).toEqual([])
+      teardown?.()
+    })
+  }
   it("a late error for the handover turn does not switch again (#56)", async () => {
     const e = env()
     const { ctx, calls } = makeCtx({

@@ -98,6 +98,42 @@ Facts first, flavour second: every message carries from-model, to-model and reas
 
 Judge failure: hard failures still switch, quality check is a no-op. Handover failure: plain tail. No consent/key: local-only mode with one explanatory toast. Guards: single-flight lock, plugin-abort marks, per-model backoff, no re-choosing a tried model, switch cap, helper spend caps (per session and per day), judge never evaluates helper calls. Logs never contain transcripts, are size-capped and rotated, key redacted. Ledger failures never affect the session.
 
+Gotcha (2026-10-23, #59): usage-exhaustion wording fell through to `unknown`, and the
+handover guard swallowed unattributed target failures -> classify exhaustion in both error
+paths and require matching transcript/sticky context rather than model attribution alone.
+Recorded here because `AGENTS.md` is above its append guard.
+
+Usage exhaustion (#59): structured errors (message or response body) and retry text recognize
+`The usage limit has been reached` as permanent `quota`, and `Free usage limit reached` as
+permanent `free_tier_403`, with or without a 429. Usage-limit wording with an explicit
+reset/try-again/retry hint is transient `rate_limit`; bare billing/subscription/usage-limit
+mentions are not permanent evidence. Existing explicit auth, hard quota, abort and overflow
+precedence is retained. Ordinary 429s still honor Retry-After; reset times are not parsed.
+
+Failure attribution must match the newest message's model (assistant provider/model, or
+user model before any assistant reply). When a relay-marker prompt is newest, its model
+must also match persisted sticky state: an attributed target failure or an unattributed
+failure then advances the chain, while an explicitly attributed old-model failure is
+ignored without health/counter changes. Marker text alone supplies no model authority.
+Missing/conflicting model context fails safe. Unattributed late old-model errors cannot
+be distinguished from target failures by text alone; lock, message dedup, tried-model
+exclusion and persisted switch/helper caps remain in force, without resetting counters.
+
+The [V2 plugin API](https://opencode.ai/v2/docs/build/plugins) permits async retry hooks
+with `{sessionID, agent, model: {providerID, id}, error: {type, message, status?}, attempt,
+decision}`. Permanent exhaustion is eligible at attempt 1; transient failures only at
+attempt 2. The callback awaits the controller's takeover result and vetoes native retry
+only on takeover; child-session/lock/dedup/cap/exhaustion/invalid-input/internal-error
+gates leave the native decision unchanged. The switcher reports a handover attempt,
+not successful continuation: V2 `session.prompt()` returns an admitted inbox user item,
+not a completed model turn, and the shared v1 switcher dispatches prompts without awaiting
+them. Admission failures after dispatch do not retroactively change the retry decision.
+
+Validation for #59 uses synthetic v1/v2 fixtures, not captured incident status or
+attribution. Status/chain smoke only demonstrates loading/configuration, not failover,
+fallback continuation or successful turn completion. Owner-assisted live captures and
+isolated failover E2E remain tracked in [#18](https://github.com/malkavian-librarian/opencode-model-relay/issues/18).
+
 ## 11. Testing
 
 - Unit (pure): classifier (real captured payloads incl. 403 FreeTierError, 429 with retry-after, quota, overflow, user abort), strategy (all modes, exhaustion, tried-model rule), config + path confinement, redact (secret corpus), narrator pools, ledger rollups/survival/UTC buckets.
