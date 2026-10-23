@@ -68,10 +68,11 @@ File: `~/.config/opencode/opencode-model-relay.jsonc` (JSONC, max 64 KB). It is 
 
 | Field | Type | Default | Notes |
 | --- | --- | --- | --- |
-| `mode` | `"chain-sticky"` \| `"chain-recover"` \| `"escalate"` | `"chain-sticky"` | See [Modes](#modes). An unknown value falls back to the defaults with a warning toast. |
-| `tiers.primary` | `"provider/model"` | unset | If unset, the model currently in use heads the chain. |
-| `tiers.secondary` | `"provider/model"[]` | `[]` | Tried after primary, in order. |
-| `tiers.tertiary` | `"provider/model"[]` | `[]` | Tried after secondary, in order. |
+| `mode` | `"chain-sticky"` \| `"chain-recover"` \| `"escalate"` | `"chain-sticky"` | See [Modes](#modes). An unknown value falls back to the defaults with a warning toast. Deprecated: still honored in this release, but loading a config that sets it shows a deprecation warning, and a future release removes the field. |
+| `levels` | `"provider/model"` \| `{ "find": { "match": string, "free": boolean, "via": "openrouter" } }`[] | `[]` | Ordered failover ladder, tried top to bottom; the first healthy model wins. Max 32 entries; duplicates drop, first wins. A find entry resolves to the first matching model at failover time (free models only when `"free": true`; `"via": "openrouter"` searches the OpenRouter catalog). Any invalid entry falls back to the defaults with a warning naming the level index. Deprecates `tiers`: an existing tiers config auto-migrates on load. |
+| `tiers.primary` | `"provider/model"` | unset | If unset, the model currently in use heads the chain. Deprecated: auto-migrated to `levels` on load. |
+| `tiers.secondary` | `"provider/model"[]` | `[]` | Tried after primary, in order. Deprecated: auto-migrated to `levels` on load. |
+| `tiers.tertiary` | `"provider/model"[]` | `[]` | Tried after secondary, in order. Deprecated: auto-migrated to `levels` on load. |
 | `privacy.consent` | boolean | `false` | Must be `true` before anything is sent to OpenRouter. |
 | `privacy.zdr` | boolean | `false` | Adds `provider.zdr: true` to helper requests (zero data retention endpoints only). |
 | `openrouter.keyEnv` | string | `"OPENROUTER_API_KEY"` | Name of the environment variable that holds the key. The key is never read from config. |

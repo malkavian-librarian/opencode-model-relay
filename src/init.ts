@@ -11,9 +11,47 @@ const SAFE_MODEL_ID = /^[A-Za-z0-9][\w.:@+-]*\/[\w.:@+/-]+$/
 const MAX_COMMENTED_MODELS = 10
 const MAX_MODEL_ID_LENGTH = 128
 const MAX_IDS_EXAMINED = 200
-const EXAMPLE_PRIMARY = "anthropic/claude-sonnet-4-5"
-const EXAMPLE_SECONDARY = "openrouter/z-ai/glm-5.2"
-const EXAMPLE_TERTIARY = "openrouter/deepseek/deepseek-chat"
+// The owner's 7-level ladder (levels redesign plan, Appendix A). Ids marked "verified" there may
+// ship; runtime-resolvable targets resolve from the live model list, and anything absent stays a
+// commented "not in your configured models" entry — the template never invents a model id.
+const LADDER_GO_GLM = "opencode-go/glm-5.3"
+const LADDER_OC_GLM52 = "opencode/glm-5.2"
+const LADDER_FIND_MATCH = "glm-5\\.[23]"
+const LADDER_GEMINI_RE = /^openrouter\/google\/gemini/i
+
+// Resolves a ladder target from the live model list: exact id first, then the first id of the same
+// provider whose model starts with the same slug. Returns null when absent; the ladder line is
+// then left commented with a not-found note.
+function resolveLadderId(models: string[], target: string): string | null {
+  if (models.includes(target)) return target
+  const provider = target.slice(0, target.indexOf("/"))
+  const model = target.slice(provider.length + 1)
+  return models.find((m) => m.startsWith(`${provider}/`) && m.slice(provider.length + 1).startsWith(model)) ?? null
+}
+
+// The commented levels ladder. Every line carries // so the file stays harmless until edited.
+function buildLadderText(models: string[]): string {
+  const go = resolveLadderId(models, LADDER_GO_GLM)
+  const oc52 = resolveLadderId(models, LADDER_OC_GLM52)
+  const gemini = models.find((m) => LADDER_GEMINI_RE.test(m) && /pro/i.test(m)) ?? null
+  const j = (v: unknown): string => JSON.stringify(v)
+  return [
+    `    // ${j("openai/gpt-6.1-sol")}, // #1`,
+    go === null
+      ? `    // ${j(LADDER_GO_GLM)}, // #2 — not in your configured models; enable it or replace the id`
+      : `    // ${j(go)}, // #2 — resolved from your configured models`,
+    oc52 === null
+      ? `    // ${j(LADDER_OC_GLM52)}, // #3 — not in your configured models; enable it or replace the id`
+      : `    // ${j(oc52)}, // #3 — resolved from your configured models`,
+    `    // ${j("opencode/muse-spark-1.3")}, // #4`,
+    `    // ${j({ find: { match: LADDER_FIND_MATCH, free: true } })}, // #5 — first free GLM 5.2/5.3 in OpenCode`,
+    `    // ${j({ find: { match: LADDER_FIND_MATCH, free: true, via: "openrouter" } })}, // #5.5 — the same via OpenRouter`,
+    `    // ${j("openrouter/z-ai/glm-5.3")}, // #6`,
+    gemini === null
+      ? `    // ${j("openrouter/google/<gemini-pro-id>")}, // #7 — add your OpenRouter Gemini Pro id (see \`opencode models\`)`
+      : `    // ${j(gemini)}, // #7 — resolved from your configured models`,
+  ].join("\n")
+}
 
 /** Keeps only well-formed, de-duplicated "provider/model" ids; bounded work and length per id. */
 export function cleanModelIds(raw: readonly unknown[]): string[] {
@@ -25,27 +63,27 @@ export function cleanModelIds(raw: readonly unknown[]): string[] {
 }
 
 /**
- * Builds the commented default config. Tiers are ALWAYS commented-out examples (the file is valid
- * and harmless until edited); discovered models only appear in a comment block to pick from.
+ * Builds the commented default config. The failover ladder ("levels") wraps the maintainer's
+ * example (Appendix A) resolved against the live model list; everything is commented out, so the
+ * file is valid and harmless until edited; discovered models only appear in a comment block.
  */
 export function buildDefaultConfigText(models: string[]): string {
   const discovered = cleanModelIds(models).slice(0, MAX_COMMENTED_MODELS)
   const discoveredBlock = discovered.length === 0 ? "" :
     `    // Models configured in your OpenCode (pick your own chain):\n${discovered.map((m) => `    //   ${m}`).join("\n")}\n`
-  const tiers = [
-    `    // "primary": ${JSON.stringify(EXAMPLE_PRIMARY)}`,
-    `    // "secondary": [${JSON.stringify(EXAMPLE_SECONDARY)}]`,
-    `    // "tertiary": [${JSON.stringify(EXAMPLE_TERTIARY)}]`,
-  ].join("\n")
   return `{
   // opencode-model-relay config. Written by relay_init; edit freely.
   // Models are "provider/model". Only the first "/" splits them.
 
-  "tiers": {
-    // Failover order: primary first, then secondary, then tertiary.
-    // Lines starting with // are examples; remove the // after replacing the model.
-${discoveredBlock}${tiers}
-  },
+  // Ordered failover ladder ("levels"): tried top to bottom, first healthy model wins.
+  // An entry is a "provider/model" id, or { "find": { "match": "<regex>", "free": true } } to resolve
+  // the first matching free model at failover time ("via": "openrouter" searches the OpenRouter
+  // catalog instead of your OpenCode models). The ladder below is the maintainer's example; remove
+  // the // to enable it. Entries marked "not in your configured models" did not resolve from this
+  // machine's model list — enable the model or replace the id with one from \`opencode models\`.
+${discoveredBlock}  // "levels": [
+${buildLadderText(models)}
+  // ],
 
   "privacy": {
     // consent = false: nothing is ever sent off this machine by the plugin.
@@ -94,7 +132,7 @@ async function safeList(listModels: InitDeps["listModels"]): Promise<{ models: s
 
 function modelSection(models: string[], failed: boolean): string {
   if (failed) return "Could not list your OpenCode models (the config file was still written). Use `opencode models` to find provider/model ids."
-  if (models.length === 0) return "No configured providers were found, so the tiers are commented-out examples. Use `opencode models` to find provider/model ids."
+  if (models.length === 0) return "No configured providers were found, so the levels ladder is a commented-out example. Use `opencode models` to find provider/model ids."
   const shown = models.slice(0, MAX_LISTED_MODELS)
   const more = models.length - shown.length
   return `Models from your configured providers:\n${shown.map((m) => `- ${m}`).join("\n")}${more > 0 ? `\n...and ${more} more (run \`opencode models\`)` : ""}`
@@ -102,7 +140,7 @@ function modelSection(models: string[], failed: boolean): string {
 
 const NEXT_STEPS = [
   "Next steps:",
-  "1. Edit the tiers (primary, secondary, tertiary) to the models you want in your failover chain.",
+  "1. Edit the levels ladder (top is tried first): uncomment the entries you want and replace ids with your own models.",
   "2. Leave privacy.consent false unless you accept sending a redacted transcript to OpenRouter for handover summaries.",
   "3. For those summaries also set the OPENROUTER_API_KEY environment variable (the key is never written to this file).",
 ].join("\n")
