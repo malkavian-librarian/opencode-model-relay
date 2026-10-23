@@ -24,6 +24,7 @@ describe("config", () => {
     expect(c.openrouter.keyEnv).toBe("OPENROUTER_API_KEY")
     expect(c.narrator.tone).toBe("plain")
     expect(c.tiers.secondary).toEqual([])
+    expect(c.levels).toEqual([])
   })
   it("missing file -> defaults, no warning", () => {
     const r = loadConfig(path.join(tmp(), "nope.jsonc"))
@@ -34,8 +35,11 @@ describe("config", () => {
     const f = path.join(tmp(), "c.jsonc")
     fs.writeFileSync(f, `{ // hi\n "tiers": { "secondary": ["opencode/a", "openrouter/z-ai/b",], }, }`)
     const r = loadConfig(f)
-    expect(r.warnings).toEqual([])
+    // tiers present, levels absent -> auto-migration plus one deprecation warning (AC-03)
+    expect(r.warnings).toHaveLength(1)
+    expect(r.warnings[0]).toMatch(/tiers is deprecated/)
     expect(r.config.tiers.secondary).toEqual(["opencode/a", "openrouter/z-ai/b"])
+    expect(r.config.levels).toEqual(["opencode/a", "openrouter/z-ai/b"])
   })
   it("invalid JSONC or schema -> defaults + one warning", () => {
     const d = tmp()
@@ -46,12 +50,14 @@ describe("config", () => {
     expect(r.warnings[0]).toMatch(/tiers\.secondary/)
     expect(r.config.tiers.secondary).toEqual([])
   })
-  it("accepts every mode; an unknown mode falls back to defaults with one warning", () => {
+  it("accepts every mode with one deprecation warning; an unknown mode falls back to defaults with one warning", () => {
     const d = tmp()
     for (const mode of ["chain-sticky", "chain-recover", "escalate"]) {
       fs.writeFileSync(path.join(d, `${mode}.jsonc`), JSON.stringify({ mode, cooldownMs: 5 }))
       const r = loadConfig(path.join(d, `${mode}.jsonc`))
-      expect(r.warnings).toEqual([])
+      // accepted but ignored (AC-04): still parsed so the controller compiles until the rewiring child removes it
+      expect(r.warnings).toHaveLength(1)
+      expect(r.warnings[0]).toMatch(/mode is deprecated/)
       expect(r.config.mode).toBe(mode)
     }
     fs.writeFileSync(path.join(d, "bad.jsonc"), JSON.stringify({ mode: "round-robin", cooldownMs: 5 }))
@@ -60,6 +66,11 @@ describe("config", () => {
     expect(r.warnings[0]).toMatch(/^invalid config \(mode: /)
     expect(r.config.mode).toBe("chain-sticky")
     expect(r.config.cooldownMs).toBe(60000)
+  })
+  it("a config without mode gets no mode deprecation warning", () => {
+    const f = path.join(tmp(), "c.jsonc")
+    fs.writeFileSync(f, JSON.stringify({ cooldownMs: 5 }))
+    expect(loadConfig(f).warnings).toEqual([])
   })
   it("rejects unknown keys (strict)", () => {
     const f = path.join(tmp(), "c.jsonc")
@@ -147,5 +158,72 @@ describe("handover size limits", () => {
       const r = loadConfig(f)
       expect(r.warnings.length === 0).toBe(ok)
     }
+  })
+})
+
+describe("levels ladder (issue #63)", () => {
+  const loadLevels = (...levels: unknown[]) => {
+    const f = path.join(tmp(), "l.jsonc")
+    fs.writeFileSync(f, JSON.stringify({ levels }))
+    return loadConfig(f)
+  }
+  // The owner's ladder (plan Appendix A); strings plus find matchers.
+  const LADDER = [
+    "openai/gpt-6.1-sol",
+    "opencode-go/glm-5.3",
+    "opencode/glm-5.2",
+    "opencode/muse-spark-1.3",
+    { find: { match: "glm-5\\.[23]", free: true } },
+    { find: { match: "glm-5\\.[23]", free: true, via: "openrouter" } },
+    "openrouter/z-ai/glm-5.3",
+    "openrouter/google/gemini-3.1-pro",
+  ]
+  it("U-01 parses a mixed ladder (strings and find matchers) to the exact structure", () => {
+    const r = loadLevels(...LADDER)
+    expect(r.warnings).toEqual([])
+    expect(r.config.levels).toEqual(LADDER)
+  })
+  it("U-02 dedupes duplicate entries, first occurrence wins", () => {
+    const r = loadLevels("a/b", { find: { match: "x" } }, "a/b", { find: { match: "x" } }, { find: { match: "x", free: true } })
+    expect(r.config.levels).toEqual(["a/b", { find: { match: "x" } }, { find: { match: "x", free: true } }])
+  })
+  it("U-03 tiers present, levels absent -> migrates with one deprecation warning", () => {
+    const f = path.join(tmp(), "t.jsonc")
+    fs.writeFileSync(f, JSON.stringify({ tiers: { primary: "a/1", secondary: ["b/2", "c/3"], tertiary: ["d/4"] } }))
+    const r = loadConfig(f)
+    expect(r.warnings).toHaveLength(1)
+    expect(r.warnings[0]).toMatch(/tiers is deprecated/)
+    expect(r.config.levels).toEqual(["a/1", "b/2", "c/3", "d/4"])
+    // tiers keeps parsing this release (the rewiring child removes it)
+    expect(r.config.tiers.primary).toBe("a/1")
+  })
+  it("U-03 both present -> levels wins with a warning, no silent merge", () => {
+    const f = path.join(tmp(), "t.jsonc")
+    fs.writeFileSync(f, JSON.stringify({ tiers: { primary: "a/1" }, levels: ["z/9"] }))
+    const r = loadConfig(f)
+    expect(r.warnings).toHaveLength(1)
+    expect(r.warnings[0]).toMatch(/tiers is deprecated/)
+    expect(r.config.levels).toEqual(["z/9"])
+  })
+  it("U-04 an invalid entry drops the config to defaults with a warning naming the level index", () => {
+    const r = loadLevels("a/1", "b/2", "c/3", "d/4", 42)
+    expect(r.warnings).toHaveLength(1)
+    expect(r.warnings[0]).toMatch(/levels\[4\]/)
+    expect(r.config.levels).toEqual([])
+  })
+  it("U-05 an over-length or invalid find.match warns naming the index and the field", () => {
+    for (const bad of [{ find: { match: "x".repeat(65) } }, { find: { match: "a[b" } }]) {
+      const r = loadLevels("a/1", "b/2", "c/3", "d/4", bad)
+      expect(r.warnings).toHaveLength(1)
+      expect(r.warnings[0]).toMatch(/levels\[4\]/)
+      expect(r.warnings[0]).toMatch(/find\.match/)
+      expect(r.config.levels).toEqual([])
+    }
+  })
+  it("U-06 more than 32 levels falls back to defaults with a warning naming the cap", () => {
+    const r = loadLevels(...Array.from({ length: 33 }, (_, i) => `p/m${i}`))
+    expect(r.warnings).toHaveLength(1)
+    expect(r.warnings[0]).toMatch(/32/)
+    expect(r.config.levels).toEqual([])
   })
 })
