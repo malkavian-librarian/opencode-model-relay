@@ -196,13 +196,14 @@ describe("levels ladder (issue #63)", () => {
     // tiers keeps parsing this release (the rewiring child removes it)
     expect(r.config.tiers.primary).toBe("a/1")
   })
-  it("U-03 both present -> levels wins with a warning, no silent merge", () => {
+  it("U-03 both present -> levels skips migration and warns that failover still uses tiers", () => {
     const f = path.join(tmp(), "t.jsonc")
     fs.writeFileSync(f, JSON.stringify({ tiers: { primary: "a/1" }, levels: ["z/9"] }))
     const r = loadConfig(f)
     expect(r.warnings).toHaveLength(1)
-    expect(r.warnings[0]).toMatch(/tiers is deprecated/)
+    expect(r.warnings[0]).toBe("tiers is deprecated: levels is set, so migration is skipped; current failover still uses tiers")
     expect(r.config.levels).toEqual(["z/9"])
+    expect(r.config.tiers.primary).toBe("a/1")
   })
   it("caps migrated tiers after deduplication and falls back to safe defaults on overflow", () => {
     const f = path.join(tmp(), "t.jsonc")
@@ -215,7 +216,7 @@ describe("levels ladder (issue #63)", () => {
       const r = loadConfig(f)
       expect(r.warnings).toHaveLength(1)
       if (overflow) {
-        expect(r.warnings[0]).toMatch(/invalid config.*more than 32 levels.*using defaults/)
+        expect(r.warnings[0]).toBe("invalid config (levels[32]: more than 32 levels); using defaults")
         expect(r.config).toEqual(defaultConfig())
       } else {
         expect(r.warnings[0]).toMatch(/auto-migrated/)

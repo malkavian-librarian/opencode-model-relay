@@ -175,13 +175,13 @@ export function loadConfig(file: string): { config: RelayConfig; warnings: strin
   const warnings: string[] = []
   if (levelsPresent) {
     c.levels = dedupeLevels(c.levels)
-    // No silent merge: an explicit ladder wins wholesale, and tiers is only deprecated loudly.
-    if (tiersPresent) warnings.push("tiers is deprecated: ignored because levels is set; levels wins")
+    // Explicit levels skip migration; the existing runtime still consumes tiers until rewiring.
+    if (tiersPresent) warnings.push("tiers is deprecated: levels is set, so migration is skipped; current failover still uses tiers")
   } else if (tiersPresent) {
     const walk = [c.tiers.primary, ...c.tiers.secondary, ...c.tiers.tertiary]
     const migratedLevels = dedupeLevels(walk.filter((m): m is string => m !== undefined))
     if (migratedLevels.length > MAX_LEVELS)
-      return { config: defaultConfig(), warnings: [`invalid config (levels: ${LEVELS_CAP_MSG}); using defaults`] }
+      return { config: defaultConfig(), warnings: [`invalid config (levels[${MAX_LEVELS}]: ${LEVELS_CAP_MSG}); using defaults`] }
     c.levels = migratedLevels
     warnings.push("tiers is deprecated: auto-migrated to levels (primary -> levels[0], then secondary and tertiary)")
   }
