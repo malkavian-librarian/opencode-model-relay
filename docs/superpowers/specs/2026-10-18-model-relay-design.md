@@ -108,7 +108,14 @@ Usage exhaustion (#59): structured errors (message or response body) and retry t
 permanent `free_tier_403`, with or without a 429. Usage-limit wording with an explicit
 reset/try-again/retry hint is transient `rate_limit`; bare billing/subscription/usage-limit
 mentions are not permanent evidence. Existing explicit auth, hard quota, abort and overflow
-precedence is retained. Ordinary 429s still honor Retry-After; reset times are not parsed.
+precedence is retained. Ordinary 429s still honor Retry-After. Reset-aware cooldowns (#64)
+parse future ISO timestamps and local-time `resets at HH:mm` / `resets at 5pm` wording,
+capped at six hours. Clock hours must be 0–23 (1–12 with am/pm) and minutes 0–59;
+unsupported or invalid reset wording falls back to numeric Retry-After or exponential backoff.
+
+Gotcha (2026-10-23, #64): `Date.setHours` normalizes out-of-range provider clock values
+-> validate hours and minutes before setting a reset deadline. Recorded here because
+`AGENTS.md` is above its append guard.
 
 Failure attribution must match the newest message's model (assistant provider/model, or
 user model before any assistant reply). When a relay-marker prompt is newest, its model

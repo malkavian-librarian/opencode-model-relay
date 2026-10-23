@@ -8,7 +8,8 @@ import { SessionLock } from "../src/session-lock"
 import { StateStore } from "../src/state"
 import { createNarrator } from "../src/narrator"
 import { RELAY_MARKER } from "../src/defaults"
-import type { OcMessage } from "../src/types"
+import { recordFailure, walkFromTop, type ModelHealth } from "../src/strategy"
+import type { Classified, OcMessage } from "../src/types"
 
 const T0 = 1_000_000
 const COOLDOWN = 60_000
@@ -250,5 +251,29 @@ describe("escalate", () => {
     d.state.set("s1", { sticky: "c/3", origin: "a/1", switchCount: 1, updated: T0 })
     clock.now = T0 + 100 * COOLDOWN
     expect(c.onChatMessage("s1", "a/1", userParts)).toBe("c/3")
+  })
+})
+
+describe("E-01: October oscillation replica — walk from top with per-session quarantine (#64)", () => {
+  const L1 = "openai/gpt-6.1-sol"
+  const L2 = "opencode/glm-5.3-flash-free"
+  const L3 = "openrouter/meta/muse-wonder"
+  const rl: Classified = { kind: "rate_limit", retryable: true, permanent: false, switchable: true }
+  it("an expired cooldown must not re-enter the corpse: quarantine holds for 10 min", () => {
+    const health: Record<string, ModelHealth> = {}
+    const quarantine: Record<string, number> = {}
+    // T0: L1 rate-limits with the 60 s default cooldown; the walk moves to L2.
+    recordFailure(health, L1, rl, T0, COOLDOWN)
+    quarantine[L1] = T0
+    expect(walkFromTop({ ladder: [L1, L2, L3], current: L1, health, quarantine, now: T0, switchCount: 1, maxSwitches: 6 })).toEqual({ action: "switch", to: L2 })
+    // T0+90 s, a NEW turn (tried resets, so only the failing L2 is tried): L2 fails too. L1's
+    // 60 s cooldown has expired, so without quarantine the walk-from-top re-enters L1 — the
+    // exact gpt-6.1-sol <-> glm-5.3-flash-free loop from switches.jsonl.
+    const T1 = T0 + 90_000
+    recordFailure(health, L2, rl, T1, COOLDOWN)
+    quarantine[L2] = T1
+    expect(walkFromTop({ ladder: [L1, L2, L3], current: L2, health, now: T1, switchCount: 2, maxSwitches: 6, tried: [L2] })).toEqual({ action: "switch", to: L1 })
+    // With the per-session quarantine, the walk skips L1 and picks L3 or deeper instead.
+    expect(walkFromTop({ ladder: [L1, L2, L3], current: L2, health, quarantine, now: T1, switchCount: 2, maxSwitches: 6, tried: [L2] })).toEqual({ action: "switch", to: L3 })
   })
 })
