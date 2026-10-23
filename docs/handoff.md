@@ -15,7 +15,19 @@ GitHub issue comments hold the detailed notes; this file indexes the latest stat
 
 ## Entries (newest first)
 
-### 2026-10-23 - #59 usage-limit failover implemented locally (Engineer) - awaiting review
+### 2026-10-23 - #63 + #65 merged; ponytail docs #76; #64 next (opencode)
+
+- Status: #63 closed (PR #74, `9d41a79`); #65 closed (PR #75 after the CodeRabbit fix
+  round `61098bb` + `07bf7a9`, CI + CodeRabbit green); board current. #76 (this PR)
+  lands ponytail-plugin instructions across agent docs + the board rule + the Epic
+  #62 child status table in `docs/process.md`.
+- Next step: #64 in `.worktrees/levels-redesign`: `git fetch origin; git checkout -B
+  feat/issue-64-strategy origin/main`; TDD from issue #64 (U-01..U-08, E-01); the
+  stashed ~95-line `src/strategy.ts` sketch is reference (parts buggy), not a drop-in.
+- Blockers: none (owner-gated: #5, #18, #19, #45, #72). Leftover for #71/#73: the
+  `.md.local` plan copy differs from the committed one — reconcile.
+
+### 2026-10-23 - #59 usage-limit failover implemented locally (Engineer) - closed (PR #61 merged 2026-10-23)
 
 - Status: TDD classifier/marker-attribution fix on `fix/issue-59-usage-limit`; no commits/push/deployment.
   Typecheck, 453 tests, build and pack dry-run passed independently; synthetic coverage only, no live failover (#18).

@@ -25,6 +25,8 @@ over with a structured summary. Design: `docs/superpowers/specs/2026-10-18-model
 
 ## YAGNI - build only what is asked
 
+- Run OpenCode's `ponytail` plugin (lazy senior-dev mode) on every coding task
+  and review; it enforces these rules and keeps development cheap.
 - No new files, helpers, wrappers or abstractions without 2+ current call sites
   or an explicit request. First use: inline. Second identical use: duplicate.
   Third: extract.
@@ -66,7 +68,9 @@ over with a structured summary. Design: `docs/superpowers/specs/2026-10-18-model
 
 ## Quality gates and ticket workflow (details: `docs/process.md`)
 
-1. GitHub issues are the source of truth. One issue at a time:
+1. GitHub issues are the source of truth; keep the "Relay" project board (project 7)
+   card statuses current at every lifecycle step (owner directive - paramount;
+   details: `docs/process.md` Conventions). One issue at a time:
    **PM** grooms (`docs/team/pm.md`, `docs/task-template.md`) then **Engineer**
    implements on `feat|fix|docs/issue-<n>-<slug>` and opens a PR with
    `Closes #<n>` (`docs/team/software-engineer.md`) then **QA/Reviewer** audits

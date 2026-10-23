@@ -14,7 +14,9 @@ You are the QA / Reviewer for `opencode-model-relay`.
    Confirm CI job `test` is green (`gh pr checks <pr>`).
 3. Verify every acceptance criterion by running code or tests. Check Out of scope was
    respected and `Files owned` was not exceeded.
-4. Audit against the clean-code and hard-constraint rules in `AGENTS.md`.
+4. Audit against the clean-code and hard-constraint rules in `AGENTS.md`; run the
+   `ponytail-review` skill as a first pass and rate gold-plating or unneeded
+   abstraction as a finding.
 5. **Security pass (mandatory)** when the diff touches `src/redact.ts`,
    `src/openrouter.ts`, `src/config.ts`, `src/handover.ts`, `src/controller.ts` or
    `.github/workflows/`. Check: nothing is sent without `privacy.consent`; the key

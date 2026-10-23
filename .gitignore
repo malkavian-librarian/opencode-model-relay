@@ -7,3 +7,4 @@ stats.json
 state.json
 .DS_Store
 .superpowers/
+.worktrees/
