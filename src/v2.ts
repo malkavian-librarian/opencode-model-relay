@@ -1,10 +1,10 @@
 import os from "node:os"
+import { z } from "zod"
 import { classify } from "./classifier"
-import { RELAY_MARKER } from "./defaults"
 import { INIT_TOOL_DESCRIPTION, RELAY_TOOL_DESCRIPTION, createRelay, listProviderModels } from "./server"
 import { initConfig } from "./init"
 import { configFile, dataDir } from "./config"
-import { modelKey, parseModel, type ClientLike, type ModelRef, type OcMessage } from "./types"
+import { modelKey, type ClientLike, type ModelRef, type OcMessage } from "./types"
 import type { Controller } from "./controller"
 import type { createNarrator } from "./narrator"
 import type { StateStore } from "./state"
@@ -21,6 +21,16 @@ export const PLUGIN_ID = "opencode-model-relay"
 const SWITCH_MIN_ATTEMPT = 2
 const UNLOADED = "opencode-model-relay: this plugin instance was unloaded"
 
+// The context hook and session.model.selected payloads are untrusted host data: consume them only
+// as this validated shape (rule 2); extra fields are stripped, anything else fails safe to a no-op.
+const ResolvedModelEvent = z.object({
+  sessionID: z.string().min(1).max(256),
+  model: z.object({ providerID: z.string().min(1).max(128), id: z.string().min(1).max(128) }),
+})
+
+// Bound for the per-session model.selected corroboration map (in memory only).
+const MAX_TRACKED_SELECTIONS = 500
+
 interface Core {
   key: string
   controller: Controller
@@ -36,7 +46,9 @@ const CORE: {
   current?: Core
   client: { current?: ClientLike; epoch: number }
   lastSession: { sid?: string }
-} = { client: { current: undefined, epoch: 0 }, lastSession: {} }
+  /** Last session.model.selected model per session: probe Q4 corroboration for adoption (#66). */
+  modelSelected: Map<string, string>
+} = { client: { current: undefined, epoch: 0 }, lastSession: {}, modelSelected: new Map() }
 
 let moduleActive = false
 
@@ -74,6 +86,9 @@ function coreFor(env: Env): Core {
   const existing = CORE.current
   if (existing && existing.key === key) return existing
   const parts = createRelay(env, holderClient())
+  // AC-04: validate persisted pins against the loaded levels once per core creation; the ones that
+  // no longer resolve are dropped silently so the next context hook re-syncs to the runtime's model.
+  parts.controller.validatePersistedPins()
   const core: Core = {
     key, controller: parts.controller, state: parts.state,
     warnings: parts.warnings, narrate: parts.narrate, warned: false,
@@ -171,7 +186,7 @@ function adaptV2Client(ctx: V2Ctx): ClientLike {
         if (to && typeof to.providerID === "string" && typeof to.modelID === "string") {
           try {
             await Promise.resolve(session?.switchModel?.({ sessionID, model: { providerID: to.providerID, id: to.modelID } }))
-          } catch { /* prompt anyway; the next admission re-pins via the context hook */ }
+          } catch { /* prompt anyway: stay-put means the session keeps whatever model it holds */ }
         }
         const text = (Array.isArray(a.body?.parts) ? a.body.parts : [])
           .map((p) => (p && typeof p === "object" && typeof (p as { text?: unknown }).text === "string" ? (p as { text: string }).text : ""))
@@ -224,6 +239,16 @@ function relayEvent(raw: unknown, core: Core): void {
         } catch { /* toast is best effort */ }
       })()
     }
+    // Probe Q4 corroboration: track the last actual model change per session; the context hook
+    // refuses an adoption whose payload disagrees with it (stale context model).
+    if (ev.type === "session.model.selected") {
+      const parsed = ResolvedModelEvent.safeParse(data)
+      if (parsed.success) {
+        if (CORE.modelSelected.size >= MAX_TRACKED_SELECTIONS) CORE.modelSelected.clear() // bound the map
+        CORE.modelSelected.set(parsed.data.sessionID, `${parsed.data.model.providerID}/${parsed.data.model.id}`)
+      }
+      return
+    }
     if (ev.type === "session.execution.succeeded") {
       void Promise.resolve(controller.onSessionIdle(sessionID)).catch(() => {})
     } else if (ev.type === "session.error" || ev.type === "session.execution.failed") {
@@ -251,39 +276,30 @@ function sidOf(ev: unknown): string | undefined {
   return typeof sessionID === "string" ? sessionID : undefined
 }
 
-function onPromptHook(ctx: V2Ctx, core: Core, ev: unknown): void {
+function onPromptHook(ev: unknown): void {
   try {
     const sessionID = sidOf(ev)
     if (!sessionID) return
     CORE.lastSession.sid = sessionID
-    const e = ev as { prompt?: { text?: unknown }; text?: unknown }
-    // Our own handover prompt carries the marker: it continues the failing turn, so never re-pin.
-    const text = typeof e.prompt?.text === "string" ? e.prompt.text : typeof e.text === "string" ? e.text : ""
-    if (text.startsWith(RELAY_MARKER)) return
-    // Cheap fast path: admission only acts while a sticky model is set.
-    if (!core.state.get(sessionID).sticky) return
-    void (async () => {
-      const rec = core.state.get(sessionID)
-      const pinned = core.controller.onChatMessage(sessionID, rec.origin ?? rec.sticky ?? "", [])
-      if (!pinned) return
-      try {
-        const m = parseModel(pinned)
-        await Promise.resolve(ctx.session?.switchModel?.({ sessionID, model: { providerID: m.providerID, id: m.modelID } }))
-      } catch { /* best effort: the next admission or context hook re-pins */ }
-    })()
+    // Stay-put (#66, probe Q1): switchModel persists across admissions, so the fabricated-arrival
+    // workaround is deleted outright; the hook only keeps the notification target fresh.
   } catch { /* hooks never throw into the host */ }
 }
 
 function onContextHook(core: Core, ev: unknown): void {
   try {
-    const sessionID = sidOf(ev)
-    if (!sessionID) return
+    const parsed = ResolvedModelEvent.safeParse(ev)
+    if (!parsed.success) return
+    const { sessionID, model } = parsed.data
     CORE.lastSession.sid = sessionID
-    if (!core.state.get(sessionID).sticky) return
-    const m = (ev as { model?: { providerID?: unknown; id?: unknown } }).model
-    if (typeof m?.providerID !== "string" || typeof m?.id !== "string") return
-    // A resolution outside sticky/origin/lastPin is an explicit user pick; decidePin clears (no enact).
-    core.controller.onChatMessage(sessionID, modelKey({ providerID: m.providerID, modelID: m.id }), [])
+    const pick = `${model.providerID}/${model.id}`
+    const rec = core.state.get(sessionID)
+    if (rec.pluginPinned === pick) return // the plugin set this model itself: nothing to adopt
+    // Corroboration (probe Q4): a session.model.selected that disagrees with the context model means
+    // the context payload is stale; the hook alone cannot tell a pick from a runtime re-resolution.
+    const selected = CORE.modelSelected.get(sessionID)
+    if (selected !== undefined && selected !== pick) return
+    core.controller.adoptPick(sessionID, pick) // under the SessionLock; never enacts a switch
   } catch { /* hooks never throw into the host */ }
 }
 
@@ -305,13 +321,20 @@ function onRetryHook(controller: Controller, ev: unknown): Promise<void> {
       if (!sessionID) return
       CORE.lastSession.sid = sessionID
       const e = ev as { attempt?: unknown; error?: unknown; decision?: Record<string, unknown>; model?: unknown }
+      const from = modelRefOf(e.model)
+      // AC-05: retry events for the old, already-failed-over turn are consumed and vetoed; a retry of
+      // the plugin-set model is a live failure and flows on.
+      if (controller.stormActive(sessionID, from ? modelKey(from) : undefined)) {
+        try { if (e.decision) e.decision.retry = false } catch { /* the veto is best effort */ }
+        return
+      }
       const attempt = typeof e.attempt === "number" && Number.isFinite(e.attempt) && e.attempt >= 1 ? Math.floor(e.attempt) : 1
       const raw = toV1Error(e.error)
       const c = classify(raw)
       if (!c.switchable || !(c.permanent || attempt >= SWITCH_MIN_ATTEMPT)) return
       // A switch can take seconds (abort, handover, helper); veto only once it is actually enacted,
       // otherwise the turn would fail with neither OpenCode's retry nor a handover.
-      const enacted = await controller.onSessionError(sessionID, raw, modelRefOf(e.model))
+      const enacted = await controller.onSessionError(sessionID, raw, from)
       if (!enacted) return
       try { if (e.decision) e.decision.retry = false } catch { /* the veto is best effort */ }
     } catch { /* hooks never throw into the host */ }
@@ -324,7 +347,7 @@ function registerSessionHooks(ctx: V2Ctx, core: Core): Promise<unknown> {
     try { return Promise.resolve(ctx.session?.hook?.(name, cb)) } catch { return Promise.resolve() }
   }
   const hooks = [
-    reg("prompt", (ev) => onPromptHook(ctx, core, ev)),
+    reg("prompt", (ev) => onPromptHook(ev)),
     reg("context", (ev) => onContextHook(core, ev)),
     reg("retry", (ev) => onRetryHook(core.controller, ev)),
   ]
@@ -413,11 +436,13 @@ export function createV2Plugin(env: Env): { id: string; setup: (ctx: V2Ctx) => P
         const epoch = CORE.client.epoch + 1
         CORE.client.epoch = epoch
         CORE.client.current = adapter
-        moduleActive = true // from here the v1 server() hooks stand down; a partial v2 setup must not double-run v1
         const stopLoop = startEventLoop(ctx, core)
+        // AC-04: hooks/tools/commands are registered BEFORE the layer stands the v1 hooks down
+        // (moduleActive), so no activation window exists where neither layer handles events.
         await registerSessionHooks(ctx, core)
         await registerTools(env, ctx, core.controller, adapter)
         await registerCommands(env, ctx, core.controller, adapter)
+        moduleActive = true // from here the v1 server() hooks stand down; a partial v2 setup must not double-run v1
         return () => {
           try { stopLoop() } catch { /* ignore */ }
           if (CORE.client.epoch === epoch) CORE.client.current = undefined

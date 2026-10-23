@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest"
+import { describe, it, expect, vi } from "vitest"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
@@ -205,11 +205,13 @@ describe("v2 failure and retry paths", () => {
   it("unattributed failure event advances a known handover target (compatibility only)", async () => {
     const e = env(false)
     fs.writeFileSync(path.join(e.root, "cfg", "opencode", "opencode-model-relay.jsonc"), `{"tiers":{"primary":"a/1","secondary":["b/2","c/3"]}}`)
-    seed(e.stateFile, { sticky: "b/2", origin: "a/1", switchCount: 1 })
+    seed(e.stateFile, { pluginPinned: "b/2", switchCount: 1 })
     const { ctx, calls } = makeCtx({ sessionModel: { providerID: "b", id: "2" }, messages: [asst("a1", "a", "1", "x"), user("h1", `${RELAY_MARKER}\ncontinue`)] })
     const teardown = await createV2Plugin(e.env).setup(ctx)
     ctx.__emit({ type: "session.execution.failed", data: { sessionID: "s1", error: { type: "api_error", message: "The usage limit has been reached" } } })
-    await until(() => readState(e.stateFile).sessions.s1?.switchCount === 2)
+    // AC-04 moved the state persist ahead of switchModel, so switchCount is observable before the
+    // enactment completes: wait on switchModel itself.
+    await until(() => calls.switchModel.length > 0)
     expect(calls.switchModel[0].model).toEqual({ providerID: "c", id: "3" })
     expect(readState(e.stateFile).health["b/2"]?.permanent).toBe(true)
     expect(readState(e.stateFile).health["a/1"]).toBeUndefined()
@@ -227,7 +229,7 @@ describe("v2 failure and retry paths", () => {
     expect(calls.prompt[0].text.startsWith(RELAY_MARKER)).toBe(true)
     await until(() => calls.synthetic.length > 0) // narration surfaces as a synthetic message
     const rec = readState(e.stateFile).sessions.s1
-    expect(rec).toMatchObject({ sticky: "b/2", switchCount: 1 })
+    expect(rec).toMatchObject({ pluginPinned: "b/2", switchCount: 1 })
     expect(signals).toHaveLength(1)
     teardown()
     expect(signals.at(0)?.aborted).toBe(true)
@@ -284,14 +286,14 @@ describe("v2 failure and retry paths", () => {
       sessionModel: { id: "2", providerID: "b" },
       messages: [user("u1", "fix the bug"), asst("a1", "a", "1", "x"), { id: "h1", time: { created: 3 }, text: `${RELAY_MARKER}\nhandover`, files: [], type: "user" }],
     })
-    seed(e.stateFile, { sticky: "b/2", origin: "a/1", switchCount: 1 })
+    seed(e.stateFile, { pluginPinned: "b/2", switchCount: 1 })
     const teardown = await createV2Plugin(e.env).setup(ctx)
     const ev = { sessionID: "s1", attempt: 2, model: { providerID: "b", id: "2" }, error: { message: "429 Too Many Requests", status: 429 }, decision: {} as any }
     await calls.hooks.retry!(ev)
     await until(() => calls.switchModel.length > 0)
     expect(calls.switchModel.at(0)?.model).toEqual({ providerID: "c", id: "3" })
     expect(ev.decision).toEqual({ retry: false })
-    expect(readState(e.stateFile).sessions.s1?.sticky).toBe("c/3")
+    expect(readState(e.stateFile).sessions.s1?.pluginPinned).toBe("c/3")
     teardown?.()
   })
   it("a re-fired error attributed to the model that already switched away does not switch again", async () => {
@@ -300,7 +302,7 @@ describe("v2 failure and retry paths", () => {
       sessionModel: { id: "2", providerID: "b" },
       messages: [user("u1", "fix the bug"), asst("a1", "a", "1", "x"), { id: "h1", time: { created: 3 }, text: `${RELAY_MARKER}\nhandover`, files: [], type: "user" }],
     })
-    seed(e.stateFile, { sticky: "b/2", origin: "a/1", switchCount: 1 })
+    seed(e.stateFile, { pluginPinned: "b/2", switchCount: 1 })
     const teardown = await createV2Plugin(e.env).setup(ctx)
     const ev = { sessionID: "s1", attempt: 2, model: { providerID: "a", id: "1" }, error: { message: "429 Too Many Requests", status: 429 }, decision: {} as any }
     await calls.hooks.retry!(ev)
@@ -315,7 +317,7 @@ describe("v2 switch safety", () => {
   for (const blocked of ["cap", "exhausted", "context failure", "malformed", "lock"]) {
     it(`retry keeps the native decision when blocked by ${blocked}`, async () => {
       const e = env()
-      if (blocked === "cap") seed(e.stateFile, { switchCount: 6 })
+      if (blocked === "cap") fs.writeFileSync(e.stateFile, JSON.stringify({ v: 1, sessions: { s1: { switchCount: 6, updated: NOW } }, health: { "b/2": { cooldownUntil: NOW + 3_600_000 } }, judgeDaily: {} }))
       if (blocked === "exhausted") fs.writeFileSync(path.join(e.root, "cfg", "opencode", "opencode-model-relay.jsonc"), `{"tiers":{"primary":"a/1","secondary":[]}}`)
       const { ctx, calls } = makeCtx()
       let release!: () => void
@@ -387,39 +389,147 @@ describe("v2 idle and health", () => {
   })
 })
 
-describe("v2 pinning", () => {
-  it("admission pins the turn to the sticky model via switchModel", async () => {
+describe("v2 stay-put and adoption (#66)", () => {
+  it("the prompt hook never re-asserts a model (switchModel persists, probe Q1)", async () => {
     const e = env()
-    seed(e.stateFile, { sticky: "b/2", origin: "a/1", switchCount: 1, updated: NOW })
+    seed(e.stateFile, { pluginPinned: "b/2", switchCount: 1 })
     const { ctx, calls } = makeCtx()
     const teardown = await createV2Plugin(e.env).setup(ctx)
     calls.hooks.prompt!({ sessionID: "s1", prompt: { text: "next question" } })
-    await until(() => calls.switchModel.length > 0)
-    expect(calls.switchModel[0]).toEqual({ sessionID: "s1", model: { providerID: "b", id: "2" } })
-    teardown?.()
-  })
-  it("our own handover prompt is never re-pinned", async () => {
-    const e = env()
-    seed(e.stateFile, { sticky: "b/2", origin: "a/1", switchCount: 1, updated: NOW })
-    const { ctx, calls } = makeCtx()
-    const teardown = await createV2Plugin(e.env).setup(ctx)
     calls.hooks.prompt!({ sessionID: "s1", prompt: { text: `${RELAY_MARKER}\nhandover` } })
     await new Promise((r) => setTimeout(r, 50))
-    expect(calls.switchModel).toEqual([])
+    expect(calls.switchModel).toEqual([]) // stay-put: no fabricated-arrival re-pin
     teardown?.()
   })
-  it("an explicit user pick outside the relay family clears stickiness without enacting", async () => {
+  it("a context hook model outside pluginPinned is adopted: marks cleared once, counters kept, nothing enacted", async () => {
     const e = env()
-    seed(e.stateFile, { sticky: "b/2", origin: "a/1", switchCount: 1, helperCalls: 2, updated: 1 })
+    fs.writeFileSync(e.stateFile, JSON.stringify({
+      v: 1,
+      sessions: { s1: { pluginPinned: "b/2", switchCount: 1, helperCalls: 2, updated: NOW } },
+      health: { "z/9": { cooldownUntil: NOW + 3_600_000, failures: 4 } },
+      judgeDaily: {},
+    }))
     const { ctx, calls } = makeCtx()
     const teardown = await createV2Plugin(e.env).setup(ctx)
     calls.hooks.context!({ sessionID: "s1", model: { providerID: "z", id: "9" } })
-    await until(() => readState(e.stateFile).sessions.s1?.sticky === undefined)
-    expect(calls.switchModel).toEqual([])
-    const rec = readState(e.stateFile).sessions.s1
-    expect(rec.switchCount).toBe(1) // counters survive the clear
-    expect(rec.helperCalls).toBe(2)
+    await until(() => readState(e.stateFile).sessions.s1?.pluginPinned === "z/9")
+    expect(readState(e.stateFile).sessions.s1).toMatchObject({ switchCount: 1, helperCalls: 2, adoptedAt: expect.any(Number) })
+    expect(readState(e.stateFile).health["z/9"]).toBeUndefined() // the pick's marks cleared once
+    expect(calls.switchModel).toEqual([]) // adoption never enacts a switch
     teardown?.()
+  })
+  it("a context hook model equal to pluginPinned changes nothing", async () => {
+    const e = env()
+    seed(e.stateFile, { pluginPinned: "b/2", switchCount: 1 })
+    const { ctx, calls } = makeCtx()
+    const teardown = await createV2Plugin(e.env).setup(ctx)
+    calls.hooks.context!({ sessionID: "s1", model: { providerID: "b", id: "2" } })
+    await new Promise((r) => setTimeout(r, 50))
+    expect(readState(e.stateFile).sessions.s1?.adoptedAt).toBeUndefined()
+    expect(calls.switchModel).toEqual([])
+    teardown?.()
+  })
+  it("a session.model.selected event that contradicts the context model vetoes the adoption (probe Q4 corroboration)", async () => {
+    const e = env()
+    const { ctx, calls } = makeCtx()
+    const teardown = await createV2Plugin(e.env).setup(ctx)
+    ctx.__emit({ type: "session.model.selected", data: { sessionID: "s1", model: { providerID: "c", id: "3" }, previous: { providerID: "a", id: "1" } } })
+    await new Promise((r) => setTimeout(r, 30))
+    calls.hooks.context!({ sessionID: "s1", model: { providerID: "z", id: "9" } })
+    await new Promise((r) => setTimeout(r, 50))
+    expect(readState(e.stateFile).sessions.s1?.pluginPinned).toBeUndefined() // stale context payload: not adopted
+    teardown?.()
+  })
+})
+
+describe("v2 manual-pick race and retry storm (#66)", () => {
+  it("U-01: a pick landing mid-failover supersedes the pending switchModel: adopted, logged superseded, nothing enacted", async () => {
+    const e = env()
+    fs.writeFileSync(e.stateFile, JSON.stringify({
+      v: 1,
+      sessions: { s1: { switchCount: 0, updated: NOW } },
+      health: { "z/9": { cooldownUntil: NOW + 3_600_000 } },
+      judgeDaily: {},
+    }))
+    const sm = { id: "1", providerID: "a" } // the session's resolved model; mutated below to simulate the pick
+    const { ctx, calls } = makeCtx({ sessionModel: sm })
+    let release!: () => void
+    ctx.session.interrupt = async (a: { sessionID: string }) => { calls.interrupt.push(a); await new Promise<void>((r) => { release = r }) }
+    const teardown = await createV2Plugin(e.env).setup(ctx)
+    ctx.__emit(failedEvent())
+    await until(() => calls.interrupt.length > 0)
+    sm.id = "9"; sm.providerID = "z" // the owner picks z/9 during the abort window
+    release()
+    await until(() => readState(e.stateFile).sessions.s1?.pluginPinned === "z/9")
+    await new Promise((r) => setTimeout(r, 150)) // the delayed handover prompt must NOT fire
+    expect(calls.switchModel).toEqual([])
+    expect(calls.prompt).toEqual([])
+    expect(readState(e.stateFile).sessions.s1).toMatchObject({ pluginPinned: "z/9", switchCount: 0, adoptedAt: expect.any(Number) })
+    expect(readState(e.stateFile).health["z/9"]).toBeUndefined()
+    const rows = fs.readFileSync(path.join(e.root, "data", "opencode-model-relay", "switches.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l))
+    expect(rows).toEqual([expect.objectContaining({ kind: "switch_dropped", reason: "superseded", from: "a/1", to: "z/9" })])
+    teardown?.()
+  })
+  it("U-06: after an enacted switch, retry events for the old model are consumed and vetoed; the new model's are not", async () => {
+    const e = env()
+    fs.writeFileSync(path.join(e.root, "cfg", "opencode", "opencode-model-relay.jsonc"), `{"levels":["a/1","b/2","c/3"]}`)
+    const sm = { id: "1", providerID: "a" }
+    const messages = [user("u1", "fix the bug"), asst("a1", "a", "1", "working on it")]
+    const { ctx, calls } = makeCtx({ sessionModel: sm, messages })
+    const teardown = await createV2Plugin(e.env).setup(ctx)
+    ctx.__emit(failedEvent()) // a/1 fails -> switch to b/2 enacted
+    await until(() => calls.switchModel.length > 0)
+    expect(calls.switchModel[0]).toEqual({ sessionID: "s1", model: { providerID: "b", id: "2" } })
+    const stale = { sessionID: "s1", attempt: 2, model: { providerID: "a", id: "1" }, error: { message: "429 Too Many Requests", status: 429 }, decision: { retry: true, delay: 100 } as any }
+    await calls.hooks.retry!(stale)
+    expect(stale.decision.retry).toBe(false) // consumed + vetoed: the old turn is dead
+    expect(calls.switchModel).toHaveLength(1) // no re-entry into handle
+    // the handover turn runs on b/2: the transcript gains the marker row and the session model moves
+    messages.push({ id: "h1", time: { created: 3 }, text: `${RELAY_MARKER}\nhandover`, files: [], type: "user" })
+    sm.id = "2"; sm.providerID = "b"
+    const fresh = { sessionID: "s1", attempt: 2, model: { providerID: "b", id: "2" }, error: { message: "429 Too Many Requests", status: 429 }, decision: { retry: true, delay: 100 } as any }
+    await calls.hooks.retry!(fresh)
+    await until(() => calls.switchModel.length > 1)
+    expect(calls.switchModel[1]).toEqual({ sessionID: "s1", model: { providerID: "c", id: "3" } }) // b/2 == pluginPinned: not storm, a real failover
+    teardown?.()
+  })
+})
+
+describe("v2 crash-restart and setup ordering (#66)", () => {
+  it("on load, pluginPinned is validated against levels and a pending handover is discarded (AC-04)", async () => {
+    const e = env()
+    fs.writeFileSync(e.stateFile, JSON.stringify({
+      v: 1,
+      sessions: {
+        s1: { switchCount: 1, pluginPinned: "a/1", pendingHandover: { to: "a/1", at: NOW }, updated: NOW },
+        s2: { switchCount: 1, pluginPinned: "z/9", updated: NOW },
+      },
+      health: {}, judgeDaily: {},
+    }))
+    const { ctx } = makeCtx()
+    const teardown = await createV2Plugin(e.env).setup(ctx)
+    const state = readState(e.stateFile)
+    expect(state.sessions.s1?.pluginPinned).toBe("a/1") // a configured level: kept
+    expect(state.sessions.s1?.pendingHandover).toBeUndefined() // crash-window intent discarded on load
+    expect(state.sessions.s2?.pluginPinned).toBeUndefined() // not in levels: dropped silently
+    teardown?.()
+  })
+  it("the layer activates only after its hooks are registered (no dormant window, AC-04)", async () => {
+    vi.resetModules()
+    const { createV2Plugin: freshPlugin, isV2Active: freshActive } = await import("../src/v2")
+    const e = env()
+    const { ctx, calls } = makeCtx()
+    let release!: () => void
+    const gate = new Promise<void>((r) => { release = r })
+    const origHook = ctx.session.hook
+    ctx.session.hook = async (name: string, cb: (ev: any) => unknown) => { if (name === "retry") await gate; return origHook(name, cb) }
+    const pending = freshPlugin(e.env).setup(ctx)
+    await new Promise((r) => setTimeout(r, 30))
+    expect(freshActive()).toBe(false) // registrations still in flight: the v1 layer must keep working
+    release()
+    await pending
+    expect(freshActive()).toBe(true)
+    expect(calls.hookOrder).toEqual(["prompt", "context", "retry"])
   })
 })
 
