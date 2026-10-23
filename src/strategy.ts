@@ -138,6 +138,8 @@ export function triedThisTurn(msgs: OcMessage[]): string[] {
 export const MAX_COOLDOWN_MS = 3_600_000
 export const RESET_COOLDOWN_MAX_MS = 6 * 3_600_000 // 6 h: multi-hour usage windows were truncated to 1 h (an October thrash driver)
 const MAX_BACKOFF_EXPONENT = 30
+
+/** Records a permanent blacklist or transient cooldown, preferring reset hints over exponential backoff. */
 export function recordFailure(
   health: Record<string, ModelHealth>, model: string, c: Classified, now: number, cooldownMs: number,
   resetText?: string,
@@ -153,6 +155,7 @@ export function recordFailure(
   h.cooldownUntil = now + Math.min(cooldownMs * 2 ** exp, MAX_COOLDOWN_MS)
 }
 
+/** Converts a finite, nonnegative retry delay to a deadline capped at the reset cooldown maximum. */
 function retryAfterUntil(ra: number | undefined, now: number): number | undefined {
   if (typeof ra !== "number" || !Number.isFinite(ra) || ra < 0) return undefined
   return now + Math.min(ra, RESET_COOLDOWN_MAX_MS)
@@ -208,6 +211,9 @@ export function walkFromTop(i: {
 const RETRY_AFTER_TEXT = /retry-after[:\s]+(\d+(?:\.\d+)?)/i
 const ISO_TIMESTAMP = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?/
 const RESETS_AT = /resets?\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i
+const HOURS_PER_DAY = 24
+const HOURS_PER_HALF_DAY = HOURS_PER_DAY / 2
+const MINUTES_PER_HOUR = 60
 
 /**
  * Parses reset wording into a cooldown-until timestamp capped by RESET_COOLDOWN_MAX_MS:
@@ -227,10 +233,13 @@ export function parseResetCooldown(text: string | undefined, now: number): numbe
   }
   const at = RESETS_AT.exec(text)
   if (at) {
+    const rawHour = Number(at[1])
+    const minute = Number(at[2] ?? 0)
+    if (minute >= MINUTES_PER_HOUR || (at[3] ? rawHour < 1 || rawHour > HOURS_PER_HALF_DAY : rawHour >= HOURS_PER_DAY)) return undefined
     // With am/pm the hour is 12-based ("5pm" -> 17); without it, plain 24-hour ("17:00").
-    const hour = at[3] ? Number(at[1]) % 12 + (at[3].toLowerCase() === "pm" ? 12 : 0) : Number(at[1])
+    const hour = at[3] ? rawHour % HOURS_PER_HALF_DAY + (at[3].toLowerCase() === "pm" ? HOURS_PER_HALF_DAY : 0) : rawHour
     const target = new Date(now)
-    target.setHours(hour, Number(at[2] ?? 0), 0, 0)
+    target.setHours(hour, minute, 0, 0)
     if (target.getTime() <= now) target.setDate(target.getDate() + 1)
     return Math.min(target.getTime(), cap)
   }

@@ -292,6 +292,16 @@ describe("reset cooldowns (#64)", () => {
     expect(parseResetCooldown(`quota until ${iso}`, now)).toBe(new Date(2026, 9, 23, 12, 30, 0).getTime())
     expect(parseResetCooldown("retry-after: 30", now)).toBe(now + 30_000)
   })
+  it.each(["25:00", "24:00", "17:75", "12:60pm", "0am", "00pm", "13pm"])("rejects invalid reset time %s and keeps exponential backoff", (time) => {
+    const text = `usage limit resets at ${time}`
+    expect(parseResetCooldown(text, now)).toBeUndefined()
+    const h: Record<string, ModelHealth> = { "a/1": { failures: 1 } }
+    recordFailure(h, "a/1", { kind: "rate_limit", retryable: true, permanent: false, switchable: true }, now, 60000, text)
+    expect(h["a/1"]?.cooldownUntil).toBe(now + 120_000)
+  })
+  it.each(["00:00", "23:59", "12am", "12pm"])("accepts clock boundary %s", (time) => {
+    expect(parseResetCooldown(`resets at ${time}`, now)).toBe(now + RESET_COOLDOWN_MAX_MS)
+  })
   it("caps any reset cooldown at 6 h", () => {
     expect(parseResetCooldown("retry-after: 86400", now)).toBe(now + RESET_COOLDOWN_MAX_MS)
     expect(parseResetCooldown("resets at 23:00", now)).toBe(now + RESET_COOLDOWN_MAX_MS)
