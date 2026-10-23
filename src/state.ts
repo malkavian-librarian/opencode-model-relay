@@ -2,10 +2,23 @@ import fs from "node:fs"
 import path from "node:path"
 import { MAX_COOLDOWN_MS, type ModelHealth } from "./strategy"
 
-// recoveries: chain-recover returns so far; capped separately because a recovery is not a failure switch.
-// lastPin: the model the TUI kept sending after a re-pin (see decidePin); not the chain anchor.
+// pluginPinned: the model the plugin itself last set (failover target or adopted pick); the marker guard and
+// adoption anchor on it (#66). adoptedAt opens the grace window in which a failing pick is not re-marked.
+// quarantine: per-session recent-failure map (model -> last failure at) riding the record (#64/#66).
+// pendingHandover: crash-window intent persisted before switchModel; deliberately discarded on load.
 // judgeCalls/lastJudgeAt: quality-judge usage counters; both persist so the caps survive a restart (#26).
-export interface SessionRecord { sticky?: string; origin?: string; switchCount: number; helperCalls?: number; recoveries?: number; lastPin?: string; judgeCalls?: number; lastJudgeAt?: number; lastJudgeMessageId?: string; updated: number }
+export interface SessionRecord {
+  pluginPinned?: string
+  adoptedAt?: number
+  quarantine?: Record<string, number>
+  pendingHandover?: { to: string; at: number }
+  switchCount: number
+  helperCalls?: number
+  judgeCalls?: number
+  lastJudgeAt?: number
+  lastJudgeMessageId?: string
+  updated: number
+}
 
 /** Global per-day judge budget, keyed by UTC date so it resets itself at midnight. */
 export interface JudgeDaily { date?: string; calls?: number; costUsd?: number }
@@ -24,16 +37,34 @@ function isModelKey(v: unknown): v is string {
   return typeof v === "string" && v.length > 0 && v.length <= 256 && !/[\u0000-\u001f\u007f\u0080-\u009f]/.test(v)
 }
 
+// A hostile quarantine map is bounded: entries beyond MAX_QUARANTINE_MODELS are dropped at load.
+const MAX_QUARANTINE_MODELS = 64
+
+function sanitizeQuarantine(raw: unknown): Record<string, number> | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined
+  const out: Record<string, number> = Object.create(null)
+  let kept = 0
+  for (const [model, at] of Object.entries(raw)) {
+    if (kept >= MAX_QUARANTINE_MODELS) break
+    if (!isModelKey(model) || !isNum(at) || at < 0) continue
+    out[model] = at
+    kept++
+  }
+  return kept > 0 ? out : undefined
+}
+
 function sanitize(v: unknown): SessionRecord | undefined {
   if (!v || typeof v !== "object" || Array.isArray(v)) return undefined
   const r = v as Record<string, unknown>
   if (!isNum(r.switchCount) || !isNum(r.updated)) return undefined
   const out: SessionRecord = { switchCount: r.switchCount, updated: r.updated }
-  if (typeof r.sticky === "string") out.sticky = r.sticky
-  if (typeof r.origin === "string") out.origin = r.origin
-  if (typeof r.lastPin === "string") out.lastPin = r.lastPin
+  if (isModelKey(r.pluginPinned)) out.pluginPinned = r.pluginPinned
+  if (isNum(r.adoptedAt) && r.adoptedAt >= 0) out.adoptedAt = Math.floor(r.adoptedAt)
+  const quarantine = sanitizeQuarantine(r.quarantine)
+  if (quarantine) out.quarantine = quarantine
+  // pendingHandover is never copied: a reload discards the crash-window intent (AC-04) and the
+  // next context hook re-syncs to whatever the session actually runs.
   if (isNum(r.helperCalls) && r.helperCalls >= 0) out.helperCalls = Math.floor(r.helperCalls)
-  if (isNum(r.recoveries) && r.recoveries >= 0) out.recoveries = Math.floor(r.recoveries)
   if (isNum(r.judgeCalls) && r.judgeCalls >= 0) out.judgeCalls = Math.floor(r.judgeCalls)
   if (isNum(r.lastJudgeAt) && r.lastJudgeAt >= 0) out.lastJudgeAt = Math.floor(r.lastJudgeAt)
   if (typeof r.lastJudgeMessageId === "string" && r.lastJudgeMessageId.length <= 200) {
@@ -125,6 +156,13 @@ export class StateStore {
     return this.sessions[id] ?? { switchCount: 0, updated: 0 }
   }
   set(id: string, r: SessionRecord): void { this.sessions[id] = r }
+
+  /** Drops persisted pluginPinned values that no longer resolve to a configured level (config change or hostile file). */
+  validatePinned(known: ReadonlySet<string>): void {
+    for (const r of Object.values(this.sessions)) {
+      if (r.pluginPinned !== undefined && !known.has(r.pluginPinned)) delete r.pluginPinned
+    }
+  }
 
   private prune(): void {
     const t = this.now()
