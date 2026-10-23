@@ -15,6 +15,15 @@ GitHub issue comments hold the detailed notes; this file indexes the latest stat
 
 ## Entries (newest first)
 
+### 2026-10-23 - #59 usage-limit failover implemented locally (Engineer) - awaiting review
+
+- Status: TDD classifier/marker-attribution fix on `fix/issue-59-usage-limit`; no commits/push/deployment.
+  Typecheck, 453 tests, build and pack dry-run passed independently; synthetic coverage only, no live failover (#18).
+- Next: push for CI/CodeRabbit; independent QA found no blocking code/security defect; final verdict awaits CI.
+  Gotcha recorded in the existing design spec under AGENTS append guard. Dependency findings: #55/#60.
+- Limits: switcher reports dispatch, not prompt admission/completed continuation; no active sessions disturbed.
+  Existing oversized controller test file remains unsplit to avoid unauthorized new files/cleanup.
+
 ### 2026-10-22 - #56 OpenCode v2 port merged (opencode) - closed
 
 - Status: PR #57 squash-merged as `9706629` after the CodeRabbit loop (2 Majors + 1 Minor fixed in

@@ -6,6 +6,9 @@ const RE = {
   overflow: /context (length|window)|maximum context|too many tokens in (the )?(prompt|request|context)|prompt is too long|exceeds the (model'?s )?(context|limit)/i,
   notFound: /model\b[^.\n]{0,60}(not found|does not exist)|unknown model/i,
   timeout: /timed? ?out|ETIMEDOUT|ECONNRESET|ECONNREFUSED|socket hang up/i,
+  usageLimit: /\busage limit (?:(?:has been |is )?(?:reached|exceeded|hit)|resets?\b)|\b(reached|exceeded|hit) (your |the )?usage limit\b/i,
+  freeUsageLimit: /\bfree usage limit\b/i,
+  resetHint: /resets?\b|try again|retry/i,
 }
 
 const unknown: Classified = { kind: "unknown", retryable: false, permanent: false, switchable: false }
@@ -27,15 +30,19 @@ export function classify(err: unknown): Classified {
     if (status !== 429 && RE.overflow.test(text)) return { kind: "overflow", retryable: false, permanent: false, switchable: false }
     if (RE.freeTier.test(text)) return mk("free_tier_403", true)
     if (status === 402 || (status !== 429 && RE.quota.test(text))) return mk("quota", true)
-    if (status === 429) {
-      if (RE.quota.test(text)) return mk("quota", true)
+    if (status === 429 && RE.quota.test(text)) return mk("quota", true)
+    if (status === 401 || status === 403) return mk("auth", true)
+    // Usage exhaustion is weaker evidence than explicit auth/quota. Reset hints must be
+    // checked here, before classifyRetryMessage delegates, to avoid permanent blacklisting.
+    const usageLimit = RE.usageLimit.test(text)
+    if (usageLimit && !RE.resetHint.test(text)) return mk(RE.freeUsageLimit.test(text) ? "free_tier_403" : "quota", true)
+    if (status === 429 || usageLimit) {
       const h = data.responseHeaders as Record<string, string> | undefined
       const key = h && typeof h === "object" ? Object.keys(h).find((k) => k.toLowerCase() === "retry-after") : undefined
       const raw = key !== undefined ? String(h![key]).trim() : ""
       const secs = /^-?\d+(\.\d+)?$/.test(raw) ? Number(raw) : NaN
       return mk("rate_limit", false, Number.isFinite(secs) ? { retryAfterMs: Math.max(0, secs * 1000) } : {})
     }
-    if (status === 401 || status === 403) return mk("auth", true)
     if (status === 404 || RE.notFound.test(text)) return mk("model_not_found", true)
     if (status !== undefined && status >= 500) return mk("server_5xx", false)
     if (RE.timeout.test(text)) return mk("timeout", false)
@@ -51,8 +58,6 @@ export function classify(err: unknown): Classified {
 // "usage limit resets at 5pm"), so only specific exhaustion phrases are permanent.
 const RETRY_TEXT = {
   permanent: /quota exceeded|credit balance|check your plan and billing|billing hard limit|update your billing/i,
-  usageLimit: /usage limit (reached|exceeded|hit)|(reached|exceeded|hit) (your |the )?usage limit/i,
-  resetHint: /resets?\b|try again|retry/i,
   transient: /rate.?limit|too many requests|overloaded|capacity exceeded/i,
 }
 
@@ -64,12 +69,6 @@ export function classifyRetryMessage(message: string): Classified {
   const c = classify({ name: "UnknownError", data: { message } })
   if (c.kind !== "unknown") return c
   if (RETRY_TEXT.permanent.test(message)) return mk("quota", true)
-  // A usage limit is permanent only when exhausted with no reset/retry wording. With a reset hint the
-  // user is still blocked (possibly for hours), so it is transient but switchable. Parsing the reset
-  // time to set a long cooldown is a possible follow-up (not implemented).
-  if (RETRY_TEXT.usageLimit.test(message)) {
-    return RETRY_TEXT.resetHint.test(message) ? mk("rate_limit", false) : mk("quota", true)
-  }
   if (RETRY_TEXT.transient.test(message)) return mk("rate_limit", false)
   return unknown
 }

@@ -5,6 +5,48 @@ const api = (statusCode: number, responseBody = "", message = "", responseHeader
   ({ name: "APIError", data: { statusCode, isRetryable: false, message, responseBody, responseHeaders } })
 
 describe("classify", () => {
+  // Hand-written v1 payload/status combinations, not captured incident evidence.
+  for (const [message, kind] of [
+    ["The usage limit has been reached", "quota"],
+    ["Free usage limit reached. Subscribe to OpenCode Go to keep going: https://opencode.ai/go", "free_tier_403"],
+  ] as const) {
+    for (const statusCode of [undefined, 429]) for (const field of ["message", "responseBody"]) {
+      it(`recognizes exhaustion in ${field} with status ${statusCode}: ${kind}`, () => {
+        expect(classify({ name: "APIError", data: { [field]: message, statusCode } }))
+          .toMatchObject({ kind, permanent: true, switchable: true })
+        expect(classifyRetryMessage(message)).toMatchObject({ kind, permanent: true, switchable: true })
+      })
+    }
+  }
+  for (const message of [
+    "The usage limit has been reached. Please try again at 5pm",
+    "Usage limit reached, resets at 5pm",
+    "You've hit your usage limit. Please try again at 5:00 PM",
+    "Rate limit reached for requests, usage limit resets at 5pm, see your billing page",
+    "Free usage limit reached, retry later",
+  ]) {
+    it(`keeps explicit usage reset/retry hints transient: ${message}`, () => {
+      for (const statusCode of [undefined, 429]) for (const field of ["message", "responseBody"]) {
+        expect(classify({ name: "APIError", data: { [field]: message, statusCode } }))
+          .toMatchObject({ kind: "rate_limit", permanent: false, switchable: true })
+      }
+      expect(classifyRetryMessage(message)).toMatchObject({ kind: "rate_limit", permanent: false, switchable: true })
+    })
+  }
+  it("does not blacklist bare usage/billing mentions or change hard-failure precedence", () => {
+    for (const message of ["see your billing page", "usage limit", "Subscribe to OpenCode Go"]) {
+      expect(classify({ data: { message } }).switchable).toBe(false)
+      expect(classifyRetryMessage(message).switchable).toBe(false)
+    }
+    const message = "The usage limit has been reached, retry later"
+    expect(classify({ name: "MessageAbortedError", data: { message } }).kind).toBe("user_abort")
+    expect(classify({ name: "ProviderAuthError", data: { message } }).kind).toBe("auth")
+    expect(classify(api(400, `context length exceeded; ${message}`)).kind).toBe("overflow")
+    expect(classify(api(402, message)).kind).toBe("quota")
+    expect(classify(api(401, "The usage limit has been reached")).kind).toBe("auth")
+    expect(classify(api(403, message)).kind).toBe("auth")
+    expect(classify(api(429, `insufficient_quota; ${message}`)).kind).toBe("quota")
+  })
   it("never throws on odd input and returns unknown/not switchable", () => {
     for (const bad of [null, undefined, "boom", 42, [], {}, { name: 5 }, { data: null }]) {
       const c = classify(bad)

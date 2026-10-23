@@ -43,6 +43,76 @@ function setup(o: { cfg?: object; messages?: OcMessage[]; parentID?: string; env
 }
 
 describe("Controller.onSessionError", () => {
+  for (const [message, kind] of [
+    ["The usage limit has been reached", "quota"],
+    ["Free usage limit reached. Subscribe to OpenCode Go to keep going: https://opencode.ai/go", "free_tier_403"],
+  ]) {
+    it(`unattributed v1 exhaustion persists health and excludes the model: ${kind}`, async () => {
+      const { c, d, calls, messages } = setup({ cfg: { tiers: { primary: "a/1", secondary: ["b/2", "c/3"] } } })
+      const error = { name: "APIError", data: { message } } // synthetic, no captured status
+      expect(await c.onSessionError("s1", error)).toBe(true)
+      expect(await c.onSessionError("s1", error)).toBe(false)
+      expect(calls.logs).toEqual([expect.objectContaining({ from: "a/1", to: "b/2", kind })])
+      expect(d.health["a/1"]?.permanent).toBe(true)
+      const reloaded = new StateStore((d.state as any).file, () => 1_000_000); reloaded.load()
+      expect(reloaded.get("s1").switchCount).toBe(1)
+      expect(reloaded.health["a/1"]?.permanent).toBe(true)
+      messages.splice(0, messages.length, ...msgs({ providerID: "b", modelID: "2" }, "b1"))
+      await c.onSessionError("s1", err429)
+      expect(calls.prompt[1].body.model).toEqual({ providerID: "c", modelID: "3" })
+      expect(calls.chat).toHaveLength(0)
+      expect(JSON.stringify(calls.logs) + calls.toast.join(" ")).not.toContain(message)
+    })
+  }
+  for (const from of [undefined, { providerID: "b", modelID: "2" }, { providerID: "a", modelID: "1" }]) {
+    it(`marker failure charges only the current sticky target, attribution ${JSON.stringify(from)}`, async () => {
+      const { c, d, calls } = setup({ cfg: { tiers: { primary: "a/1", secondary: ["b/2", "c/3"] } }, messages: [
+        ...msgs(), { info: { id: "h1", role: "user", model: { providerID: "b", modelID: "2" } }, parts: [{ type: "text", text: `${RELAY_MARKER}\ncontinue` }] },
+      ] })
+      d.state.set("s1", { sticky: "b/2", origin: "a/1", switchCount: 1, updated: 1_000_000 })
+      const stale = from?.providerID === "a"
+      expect(await c.onSessionError("s1", err429, from)).toBe(!stale)
+      expect(await c.onSessionError("s1", err429, from)).toBe(false)
+      expect(d.state.get("s1").switchCount).toBe(stale ? 1 : 2)
+      expect(d.health["a/1"]).toBeUndefined()
+      if (stale) {
+        expect(d.health["b/2"]).toBeUndefined()
+        expect(calls.logs).toEqual([])
+      } else {
+        expect(d.health["b/2"]?.cooldownUntil).toBeGreaterThan(1_000_000)
+        expect(calls.logs[0]).toMatchObject({ from: "b/2", to: "c/3" })
+      }
+    })
+  }
+  it("rejects mismatched attribution even without a marker", async () => {
+    const { c, d, calls } = setup()
+    expect(await c.onSessionError("s1", err429, { providerID: "b", modelID: "2" })).toBe(false)
+    expect(d.health).toEqual({})
+    expect(calls.prompt).toEqual([])
+  })
+  it("successive failed marker handovers retain tried-model exclusion, helper cap and switch cap", async () => {
+    const { c, d, calls, messages } = setup({ cfg: { maxSwitchesPerSession: 2, privacy: { consent: true }, handover: { maxCallsPerSession: 1 }, tiers: { primary: "a/1", secondary: ["b/2", "c/3", "d/4"] } }, env: { OPENROUTER_API_KEY: "k" } })
+    for (const [providerID, modelID] of [["a", "1"], ["b", "2"], ["c", "3"]] as const) {
+      if (providerID !== "a") messages.push({ info: { id: `h${modelID}`, role: "user", model: { providerID, modelID } }, parts: [{ type: "text", text: `${RELAY_MARKER}\ncontinue` }] })
+      // Even expired cooldowns must not reselect a model already tried in this turn.
+      for (const h of Object.values(d.health)) h.cooldownUntil = 0
+      await c.onSessionError("s1", err429)
+    }
+    expect(calls.prompt.map((p) => p.body.model)).toEqual([{ providerID: "b", modelID: "2" }, { providerID: "c", modelID: "3" }])
+    expect(d.state.get("s1")).toMatchObject({ switchCount: 2, helperCalls: 1, sticky: "c/3" })
+    expect(calls.chat).toHaveLength(1)
+    expect(calls.logs).toHaveLength(2)
+    expect(calls.toast.join(" ")).toMatch(/limit/i)
+  })
+  it("marker text alone cannot supply a missing or conflicting current model", async () => {
+    for (const model of [undefined, { providerID: "", modelID: "2" }, { providerID: "a", modelID: "1" }]) {
+      const { c, d, calls } = setup({ messages: [{ info: { id: "h1", role: "user", model }, parts: [{ type: "text", text: `${RELAY_MARKER}\ncontinue` }] }] })
+      d.state.set("s1", { sticky: "b/2", origin: "a/1", switchCount: 1, updated: 1_000_000 })
+      expect(await c.onSessionError("s1", err429, { providerID: "b", modelID: "2" })).toBe(false)
+      expect(d.health).toEqual({})
+      expect(calls.prompt).toEqual([])
+    }
+  })
   it("switches to the next model, hands over, persists sticky state, logs", async () => {
     const { c, d, calls } = setup()
     await c.onSessionError("s1", err429)
