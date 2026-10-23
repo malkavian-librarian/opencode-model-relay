@@ -13,7 +13,7 @@ function setup() {
 const models = (...m: string[]) => async () => m
 
 describe("buildDefaultConfigText", () => {
-  it("round-trips through loadConfig with no warnings (with and without models)", () => {
+  it("U-08: round-trips through loadConfig with no warnings and mentions levels (with and without models)", () => {
     for (const list of [[], ["a/1"], ["a/1", "b/2"], ["a/1", "b/2", "c/3", "d/4"]]) {
       const s = setup()
       fs.mkdirSync(configDir(s.env, s.home), { recursive: true })
@@ -21,10 +21,38 @@ describe("buildDefaultConfigText", () => {
       const { config, warnings } = loadConfig(s.file)
       expect(warnings).toEqual([])
       expect(config.privacy.consent).toBe(false)
+      // The ladder ships fully commented out: parses to defaults until the user edits it.
+      expect(config.levels).toEqual([])
       expect(config.tiers).toEqual({ secondary: [], tertiary: [] })
       expect(config.tiers.primary).toBeUndefined()
     }
-    expect(buildDefaultConfigText([])).toMatch(/\/\/ "primary"/)
+    expect(buildDefaultConfigText([])).toMatch(/"levels"/)
+  })
+  it("resolves the owner's ladder ids from the listed models and keeps every ladder line commented", () => {
+    const text = buildDefaultConfigText(["openai/gpt-6.1-sol", "opencode-go/glm-5.3", "opencode/glm-5.2", "opencode/muse-spark-1.3", "openrouter/google/gemini-3.1-pro"])
+    expect(text).toContain('"openai/gpt-6.1-sol"')
+    expect(text).toContain('"opencode-go/glm-5.3"')
+    expect(text).toContain('"opencode/glm-5.2"')
+    expect(text).toContain('"openrouter/google/gemini-3.1-pro"')
+    expect(text).toContain('{"find":{"match":"glm-5\\\\.[23]","free":true}}')
+    expect(text).toContain('{"find":{"match":"glm-5\\\\.[23]","free":true,"via":"openrouter"}}')
+    for (const marker of ['"openai/gpt-6.1-sol"', '"opencode-go/glm-5.3"', '"openrouter/google/gemini-3.1-pro"', '{"find":{"match":"glm-5\\\\.[23]"'])
+      for (const line of text.split("\n").filter((l) => l.includes(marker)))
+        expect(line.trimStart().startsWith("//")).toBe(true)
+  })
+  it("unresolvable ladder ids stay commented with a not-found note; ids are never invented", () => {
+    const text = buildDefaultConfigText(["zzz/only"])
+    for (const target of ["openai/gpt-6.1-sol", "opencode/muse-spark-1.3", "openrouter/z-ai/glm-5.3"])
+      expect(text).toMatch(new RegExp(`// "${target}".*not in your configured models`))
+    expect(text).toContain("openrouter/google/<gemini-pro-id>")
+    expect(text).not.toContain("flash") // no id variant is ever fabricated
+  })
+  it("resolves all explicit targets, preferring exact ids to same-provider slug variants", () => {
+    for (const target of ["openai/gpt-6.1-sol", "opencode/muse-spark-1.3", "openrouter/z-ai/glm-5.3"]) {
+      const variant = `${target}-variant`
+      expect(buildDefaultConfigText([variant])).toContain(`// "${variant}", //`)
+      expect(buildDefaultConfigText([variant, target])).toContain(`// "${target}", //`)
+    }
   })
   it("lists discovered ids only inside comment lines, max 10, ignoring malformed ids", () => {
     const many = Array.from({ length: 15 }, (_, i) => `prov/model${i}`)
@@ -58,6 +86,9 @@ describe("initConfig", () => {
     expect(msg).toContain(s.file)
     expect(msg).toContain("- anthropic/claude-x")
     expect(msg).toContain("OPENROUTER_API_KEY")
+    expect(msg).toContain("levels ladder is not active yet")
+    expect(msg).toContain("tiers")
+    expect(fs.readFileSync(s.file, "utf8")).toContain("levels ladder is not active yet")
     expect(loadConfig(s.file).warnings).toEqual([])
     if (process.platform !== "win32") expect(fs.statSync(s.file).mode & 0o777).toBe(0o600)
   })

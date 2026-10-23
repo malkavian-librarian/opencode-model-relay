@@ -36,6 +36,17 @@ describe("plugin entry", () => {
     await hooks.event({ event: { type: "session.idle", properties: { sessionID: "s" } } })
     expect(toasts.filter((t) => /config problem/i.test(t))).toHaveLength(1)
   })
+  it("a tiers-only config migrates to levels and toasts the deprecation exactly once", async () => {
+    const e = env()
+    fs.writeFileSync(path.join(e.root, "cfg", "opencode", "opencode-model-relay.jsonc"), JSON.stringify({ tiers: { primary: "a/1", secondary: ["b/2"] } }))
+    const toasts: string[] = []
+    const hooks: any = await createServer(e.env)({ client: client(toasts), directory: e.root })
+    await hooks.event({ event: { type: "session.idle", properties: { sessionID: "s" } } })
+    await hooks.event({ event: { type: "session.idle", properties: { sessionID: "s" } } })
+    const t = toasts.filter((x) => /config problem/i.test(x))
+    expect(t).toHaveLength(1)
+    expect(t[0]).toMatch(/tiers is deprecated/)
+  })
   it("an escaping ledger.dir loads, falls back, and is reported by the one-time config toast", async () => {
     const e = env()
     fs.writeFileSync(path.join(e.root, "cfg", "opencode", "opencode-model-relay.jsonc"), JSON.stringify({ ledger: { dir: path.join(e.root, "elsewhere") } }))

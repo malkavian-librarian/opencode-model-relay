@@ -7,10 +7,33 @@ import { DEFAULT_TEMPLATE, DEFAULT_WRITER_PROMPT, DEFAULT_JUDGE_PROMPT } from ".
 
 const modelStr = z.string().regex(/^[^/\s]+\/\S+$/, 'expected "provider/model"')
 
+const MAX_LEVELS = 32
+const FIND_MATCH_MAX = 64
+const LEVELS_CAP_MSG = `more than ${MAX_LEVELS} levels`
+
+/** Rejects malformed matcher sources before configuration reaches runtime consumers. */
+const isValidRegexSource = (m: string): boolean => { try { void new RegExp(m); return true } catch { return false } }
+
+// A find level resolves to the first matching model at failover time (strategy child); here it is
+// only validated: the matcher is a regex source of bounded length.
+const findEntry = z
+  .object({
+    find: z
+      .object({
+        match: z.string().min(1).max(FIND_MATCH_MAX).refine(isValidRegexSource, "invalid regex"),
+        free: z.boolean().optional(),
+        via: z.literal("openrouter").optional(),
+      })
+      .strict(),
+  })
+  .strict()
+const LEVEL_ENTRY = z.union([modelStr, findEntry])
+type LevelEntry = z.infer<typeof LEVEL_ENTRY>
+
 export const ConfigSchema = z
   .object({
-    // Failover strategy (spec section 4; semantics in src/strategy.ts and src/pin.ts). An unknown value fails
-    // validation, so the whole config falls back to defaults with the usual warning.
+    // Deprecated failover strategy: still parsed so the controller compiles; loadConfig warns when
+    // it is present and the rewiring child (#66) removes the field.
     mode: z.enum(["chain-sticky", "chain-recover", "escalate"]).default("chain-sticky"),
     tiers: z
       .object({
@@ -20,6 +43,11 @@ export const ConfigSchema = z
       })
       .strict()
       .default({}),
+    // Ordered failover ladder (levels redesign plan section 4.1): tried top to bottom. Entries are
+    // "provider/model" strings or find matchers resolved at failover time (strategy child, #64).
+    // Capped and deduped in loadConfig; any invalid entry drops the whole config to defaults with a
+    // warning naming the level index, so the failure is actionable instead of silently discarded.
+    levels: z.array(LEVEL_ENTRY).max(MAX_LEVELS, LEVELS_CAP_MSG).default([]),
     privacy: z
       .object({ consent: z.boolean().default(false), zdr: z.boolean().default(false) })
       .strict()
@@ -86,6 +114,41 @@ export function defaultConfig(): RelayConfig { return ConfigSchema.parse({}) }
 
 const MAX_CONFIG_BYTES = 64 * 1024
 
+/** Formats indexed validation paths so users can locate invalid configuration entries. */
+const fmtPath = (p: readonly (string | number)[]): string => {
+  let out = ""
+  for (const seg of p) out += typeof seg === "number" ? `[${seg}]` : (out === "" ? seg : `.${seg}`)
+  return out
+}
+
+/** Names the authored level index and invalid field; returns null for unrelated issues. */
+function levelIssueMessage(issue: z.ZodIssue): string | null {
+  if (issue.path[0] !== "levels") return null
+  const index = issue.path[1]
+  if (typeof index !== "number") return null
+  const restOf = (p: readonly (string | number)[]): string => fmtPath(p.slice(2))
+  if (issue.path.length > 2) return `levels[${index}]: invalid ${restOf(issue.path)}`
+  if (issue.code === "invalid_union") {
+    // A total entry mismatch collapses member errors into one union issue; dig out the deepest member field.
+    let rest = ""
+    for (const member of issue.unionErrors)
+      for (const memberIssue of member.issues) {
+        const r = restOf(memberIssue.path)
+        if (r.length > rest.length) rest = r
+      }
+    return rest !== "" ? `levels[${index}]: invalid ${rest}` : `levels[${index}]: invalid entry`
+  }
+  return `levels[${index}]: invalid entry`
+}
+
+/** Identifies equivalent schema-normalized entries for ladder deduplication. */
+const levelKey = (l: LevelEntry): string => (typeof l === "string" ? l : JSON.stringify(l))
+
+/** Dedupes the ladder, keeping the first occurrence of each distinct entry. */
+const dedupeLevels = (ls: LevelEntry[]): LevelEntry[] =>
+  [...new Map(ls.map((l) => [levelKey(l), l] as [string, LevelEntry])).values()]
+
+/** Loads bounded JSONC, validates and migrates it, or returns safe defaults on invalid input. */
 export function loadConfig(file: string): { config: RelayConfig; warnings: string[] } {
   let text: string
   try {
@@ -98,10 +161,33 @@ export function loadConfig(file: string): { config: RelayConfig; warnings: strin
   if (errors.length) return { config: defaultConfig(), warnings: ["config is not valid JSONC; using defaults"] }
   const r = ConfigSchema.safeParse(raw)
   if (!r.success) {
-    const msg = r.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")
+    const msg = r.error.issues
+      .map((i) => levelIssueMessage(i) ?? `${fmtPath(i.path)}: ${i.message}`)
+      .join("; ")
     return { config: defaultConfig(), warnings: [`invalid config (${msg}); using defaults`] }
   }
-  return { config: r.data, warnings: [] }
+  const c = r.data
+  // Presence checks use the raw object: schema defaults are not user-authored, so they must not
+  // trigger deprecation or migration paths.
+  const hasKey = (k: string): boolean => { const o: unknown = raw; return typeof o === "object" && o !== null && !(o instanceof Array) && k in o }
+  const levelsPresent = hasKey("levels")
+  const tiersPresent = hasKey("tiers")
+  const warnings: string[] = []
+  if (levelsPresent) {
+    c.levels = dedupeLevels(c.levels)
+    // Explicit levels skip migration; the existing runtime still consumes tiers until rewiring.
+    if (tiersPresent) warnings.push("tiers is deprecated: levels is set, so migration is skipped; current failover still uses tiers")
+  } else if (tiersPresent) {
+    const walk = [c.tiers.primary, ...c.tiers.secondary, ...c.tiers.tertiary]
+    const migratedLevels = dedupeLevels(walk.filter((m): m is string => m !== undefined))
+    if (migratedLevels.length > MAX_LEVELS)
+      return { config: defaultConfig(), warnings: [`invalid config (levels[${MAX_LEVELS}]: ${LEVELS_CAP_MSG}); using defaults`] }
+    c.levels = migratedLevels
+    warnings.push("tiers is deprecated: auto-migrated to levels (primary -> levels[0], then secondary and tertiary)")
+  }
+  if (hasKey("mode"))
+    warnings.push("mode is deprecated: accepted but still honored; remove it from the config")
+  return { config: c, warnings }
 }
 
 type Env = Record<string, string | undefined>
