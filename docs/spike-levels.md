@@ -27,11 +27,13 @@ Note: on plain admissions that change nothing, **no** `session.model.selected` i
 
 Forcing a retryable failure: the probe's `model.request` hook rewrote `baseURL` to a dead endpoint (`http://127.0.0.1:9/v1`) for the first primary attempt only.
 
+Evidence:
+
 - Baseline (no veto, session `ses_e96244f6affewo…`): retry hook fired with `{"attempt":2,"error":{"type":"provider.transport","message":"ECONNREFUSED: …"},"decisionBefore":{"retry":true,"delay":2212},"decisionAfter":true}`; host emitted `{"type":"session.retry.scheduled","data":{"attempt":2,"at":…,"error":{…}}}`, then a second `session.step.started` on the same assistantMessageID → `session.execution.succeeded`. (Host honored its own `{retry:true, delay}`.)
 - Veto run (session `ses_e96233832ffe9…`): retry hook fired with `{"attempt":2,…,"decisionBefore":{"retry":true,"delay":2279},"decisionAfter":false,"vetoFile":true}` — the hook flipped `decision.retry = false` — and the host complied: events went `session.step.started → session.step.failed → session.execution.failed` with **no `session.retry.scheduled` and no second attempt**; the CLI turn produced no output (failed fast).
 - Bonus real-world replication: genuine 429 `provider.free-limit` errors (`status:429`, `retryAfterMs` ~23M ms) also invoke the retry hook (`attempt:2`, `decisionBefore` already `{"retry":false}` — the host itself declines multi-hour-delay windows), followed by `session.step.failed`/`session.execution.failed` carrying the full error.
 
-**Consequence (child #66):** the retry veto is a real control surface — `e.decision.retry = false` is binding. The retry hook should be **awaited-and-decided** (the hook may run async; the host applies the decision afterwards, matching the #56 adapter's "veto only when the relay actually took the turn over" rule). The storm-token guard remains needed for repeated failures across rows/turns, but is no longer the *only* protection against OpenCode's own within-turn retry loop.
+**Consequence (child #66):** the retry veto is a real control surface — the observed `e.decision.retry = false` mutation is binding. The transcript does not establish whether the host honors a decision set after an `await`; that needs a separate async-hook probe. The #56 adapter currently awaits the handover outcome to preserve its "veto only when the relay actually took the turn over" rule. Preserve that rule, but treat the host's awaiting of the hook as an unverified assumption until probed. The storm-token guard remains needed for repeated failures across rows/turns, but is no longer the *only* protection against OpenCode's own within-turn retry loop.
 
 ## Q3 — Does `ctx.session.synthetic` reliably land in the INTENDED session?
 
@@ -43,11 +45,11 @@ Evidence (runner process active on `ses_e962bf8b7ffeBrnd6hpJ7Ysq2X` executing an
 - Event stream showed it landing on the TARGET only:
   `{"type":"session.inbox.enqueued","data":{"sessionID":"ses_e96233832ffe9XsxGesjNBlwOP","inboxID":"msg_169dd9476001RJDeSkzbeHtFDe","item":{"type":"synthetic","payload":{"text":"probe65-cross-target-should-land-HERE-in-q2b-session"},"delivery":"steer"}}}` then `session.inbox.delivered` for the same target inboxID. The runner session's stream contained only its own user (`type:"user"`) enqueued item; no synthetic was misrouted to the caller's session.
 
-**Consequence (#70):** notifications do not need to be re-targeted. Calls always go through the explicit `sessionID` of the event being handled (the port's `lastSession.sid` fallback stays only as a last-resort for context-free toasts); no routing bug exists to work around.
+**Consequence (#70):** explicit `sessionID` targeting works for `ctx.session.synthetic`. The v2 notification adapter reads the shared `CORE.lastSession.sid`, which event and hook handlers update, before sending a synthetic message. This probe does not establish event-bound notification routing; notification routing remains a separate concern for #70.
 
 ## Q4 — Can the context hook's model report distinguish a genuine user pick from runtime-internal resolution?
 
-**Answer: NO — the hook payload alone carries no origin information.** (`TUI /model` itself is not drivable headless; the proxies tested are `-m` CLI pick, config-default resolution, plugin `switchModel`, and an invalid pick.)
+**Answer: NO for the tested paths — the hook payload carried no origin information.** (The tested paths are `-m` CLI pick, config-default resolution, plugin `switchModel`, and an invalid pick. The actual TUI `/model` path was not exercised by the headless probe and remains unverified; see Unresolved.)
 
 Evidence — the rhyme-community payload is identical in structure in every scenario:
 
@@ -67,5 +69,6 @@ Evidence — the rhyme-community payload is identical in structure in every scen
 
 ## Unresolved
 
-- **TUI `/model` picker literally unexercised** (headless sandbox cannot drive the TUI). Proxied by `-m` and the `switchModel` route; the TUI presumably resolves through the same session API, but a TUI-specific event/metadata channel cannot be ruled out on live evidence alone. Low risk; verify opportunistically post-rewire in a real TUI session.
+- **TUI `/model` picker unexercised.** The headless probe used `-m` and `switchModel` as proxies, so a TUI-specific event/metadata channel cannot be ruled out. Q4 remains incomplete until an actual TUI `/model` pick and a runtime-resolution case have captured context-hook payloads and relevant events for comparison. Section 5 of the redesign plan requires resolving the probe questions before rewiring; the proxy evidence does not complete this question.
+- **Async retry-hook timing unverified.** Capture a retry decision changed after an `await` and the resulting host events before treating the #56 adapter's host-awaiting assumption as established.
 - `metadata` fields on `session.model.selected` were never populated in observed payloads — cannot confirm they never carry origin info; treat their absence as "no origin info today".
