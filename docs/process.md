@@ -48,6 +48,13 @@ Out of scope, Constraints (including `Files owned`).
 - **Gotchas:** every fixed non-trivial problem is recorded in `AGENTS.md` under
   `## Gotchas` straight away.
 - **Docs:** a behaviour or contract change updates the one relevant doc in the same PR.
+- **Project board:** every lifecycle step moves the issue's card on the "Relay" GitHub
+  project (project 7, `gh project item-edit`): Ready -> In progress -> In review -> Done.
+  The board must always reflect live state (owner directive 2026-10-23 - paramount).
+- **Ponytail:** keep OpenCode's `ponytail` plugin (lazy senior-dev mode) active for all
+  PM grooming, implementation and review work: smallest complete diff, nothing
+  built that no criterion or failing test demands, one small test for new non-trivial logic.
+  Reviewers run its `ponytail-review` skill as a first pass.
 
 ## Handoff rule
 
@@ -114,3 +121,19 @@ Publishing is an owner action; agents never publish or push tags.
 | `docs/coderabbit-log.md` | Log of CodeRabbit exchanges. |
 | `docs/superpowers/specs/2026-10-18-model-relay-design.md` | Design spec and hard constraints. |
 | `docs/superpowers/plans/2026-10-18-v1.0-failover-handover.md` | v1.0 implementation plan. |
+
+## Epic #62 child status (2026-10-23 live)
+
+| Child | Scope | Status | Next |
+|-------|-------|--------|------|
+| #63 | config schema + tiers migration + relay-init template | ✅ Merged (PR #74) | — |
+| #64 | strategy: walkFromTop, quarantine, reset-aware cooldowns | ⏳ Next (stashed sketch, TDD) | #66 |
+| #65 | v2 probe: switchModel persistence, retry-veto, synthetic targeting, pick-vs-resolution | ✅ Merged (PR #75) | — |
+| #66 | rewiring: adoption under lock, pin-machinery deletion, crash windows, `switch_dropped` | ⏳ Pending | #67 |
+| #67 | /relay model + /relay next fast-path commands | ⏳ Pending | #68 |
+| #68 | fast failover: plain-tail default, async narrative, latency budget | ⏳ Pending | #69 |
+| #69 | find levels: free-model discovery, health-aware resolution, consent gate | ⏳ Pending | #70 |
+| #70 | observability: verbose switch-log + /relay status ladder view | ⏳ Pending | #71 |
+| #71 | docs sweep: README/spec/SECURITY/CHANGELOG/AGENTS | ⏳ Pending | #72 |
+| #72 | deploy & enable plugin on owner machine (re-enable `.disabled`) | ⏳ Pending (`needs-owner`) | #73 |
+| #73 | wrap-up: commit all, delete merged branches, worktree audit, push | ⏳ Pending | — |

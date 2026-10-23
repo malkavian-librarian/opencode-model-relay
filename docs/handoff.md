@@ -15,14 +15,23 @@ GitHub issue comments hold the detailed notes; this file indexes the latest stat
 
 ## Entries (newest first)
 
-### 2026-10-23 - #59 usage-limit failover implemented locally (Engineer) - awaiting review
+### 2026-10-23 - #63 + #65 merged; ponytail docs #76; #64 next (opencode)
 
-- Status: TDD classifier/marker-attribution fix on `fix/issue-59-usage-limit`; no commits/push/deployment.
-  Typecheck, 453 tests, build and pack dry-run passed independently; synthetic coverage only, no live failover (#18).
-- Next: push for CI/CodeRabbit; independent QA found no blocking code/security defect; final verdict awaits CI.
-  Gotcha recorded in the existing design spec under AGENTS append guard. Dependency findings: #55/#60.
-- Limits: switcher reports dispatch, not prompt admission/completed continuation; no active sessions disturbed.
-  Existing oversized controller test file remains unsplit to avoid unauthorized new files/cleanup.
+- Status: #63 closed ([PR #74](https://github.com/malkavian-librarian/opencode-model-relay/pull/74)); #65 closed ([PR #75](https://github.com/malkavian-librarian/opencode-model-relay/pull/75)); board current.
+  #76 (this PR) adds Ponytail guidance, the board rule and Epic #62 status in `docs/process.md`.
+- Next: #64 in `.worktrees/levels-redesign`, starting from `origin/main`; follow
+  [issue #64](https://github.com/malkavian-librarian/opencode-model-relay/issues/64) TDD (U-01..U-08, E-01). The stashed strategy sketch is reference only.
+- Blockers: none; #5, #18, #19, #45, #72 are owner-gated.
+  #71/#73: reconcile the differing `.md.local` plan copy with the committed plan.
+
+### 2026-10-23 - #59 usage-limit failover merged - closed (PR #61 merged 2026-10-23)
+
+- Status: [PR #61](https://github.com/malkavian-librarian/opencode-model-relay/pull/61) merged as `1e89786`; #59 closed. Classifier/marker-attribution fix shipped.
+  Independent QA found no blocking code/security defect; the gotcha is recorded in the design spec.
+- Verification at handoff: typecheck, 453 tests, build and pack dry-run passed;
+  synthetic coverage only, live failover remains tracked in #18.
+- Next: none for #59. Dependency findings remain tracked in #55/#60.
+- Limits: switcher reports dispatch, not prompt admission/completed continuation.
 
 ### 2026-10-22 - #56 OpenCode v2 port merged (opencode) - closed
 

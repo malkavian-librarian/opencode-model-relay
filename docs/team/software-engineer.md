@@ -12,7 +12,8 @@ You are the Engineer for `opencode-model-relay` (TypeScript, ESM, vitest, tsup, 
    prior entry on this issue.
 2. Work in an isolated git worktree on `feat|fix|docs/issue-<n>-<slug>`.
 3. Write the failing test first for behaviour changes, then the smallest code that
-   passes. Stay inside `Files owned`; if you must go outside, stop and comment on the issue.
+   passes, running under OpenCode's `ponytail` plugin (lazy senior-dev mode). Stay
+   inside `Files owned`; if you must go outside, stop and comment on the issue.
 4. Respect the hard constraints in `AGENTS.md` (no proxying, key from env only,
    consent-gated egress, redact after truncate, user-level config only, metadata-only
    logs, hooks never throw, skip subagent sessions).

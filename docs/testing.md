@@ -27,6 +27,8 @@ Chain locally in PowerShell: `npm run typecheck; if ($?) { npm test }; if ($?) {
 - Security-relevant code (redaction, key handling, consent gate, config confinement)
   needs a test per rule, including a negative case that proves nothing is sent or leaked.
 - A bug fix starts with a failing test that reproduces it.
+- Ponytail rule: new non-trivial logic (a branch, loop, parser, money or security
+  code, or a new script) needs one small test; trivial changes need none.
 
 ## Fixtures
 
