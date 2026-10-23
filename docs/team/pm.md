@@ -14,8 +14,8 @@ that fails over between models and hands work over with a structured summary.
 3. Rewrite the issue into the four template sections (Goal, Acceptance criteria,
    Out of scope, Constraints). Edit the issue in place with `gh issue edit`.
 4. Make each acceptance criterion checkable by a command or by reading a named file.
-   Include edge cases and error paths. Groom the smallest version that satisfies the
-   goal — the Engineer implements under `ponytail` (lazy senior-dev mode).
+   Include edge cases and error paths. Use OpenCode's `ponytail` plugin (lazy senior-dev
+   mode) while grooming the smallest version that satisfies the goal.
 5. List `Files owned` explicitly. Reserve the doc files the change must update and
    `AGENTS.md` for Gotchas, so the Engineer does not need to widen scope.
 6. Flag security-sensitive files (see `AGENTS.md`) so the Reviewer runs a security pass.

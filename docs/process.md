@@ -52,8 +52,8 @@ Out of scope, Constraints (including `Files owned`).
   project (project 7, `gh project item-edit`): Ready -> In progress -> In review -> Done.
   The board must always reflect live state (owner directive 2026-10-23 - paramount).
 - **Ponytail:** keep OpenCode's `ponytail` plugin (lazy senior-dev mode) active for all
-  implementation and review work: smallest complete diff, nothing built that no
-  criterion or failing test demands, one small test for new non-trivial logic.
+  PM grooming, implementation and review work: smallest complete diff, nothing
+  built that no criterion or failing test demands, one small test for new non-trivial logic.
   Reviewers run its `ponytail-review` skill as a first pass.
 
 ## Handoff rule
