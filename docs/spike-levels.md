@@ -69,6 +69,6 @@ Evidence — the rhyme-community payload is identical in structure in every scen
 
 ## Unresolved
 
-- **TUI `/model` picker unexercised.** The headless probe used `-m` and `switchModel` as proxies, so a TUI-specific event/metadata channel cannot be ruled out. Q4 remains incomplete until an actual TUI `/model` pick and a runtime-resolution case have captured context-hook payloads and relevant events for comparison. Section 5 of the redesign plan requires resolving the probe questions before rewiring; the proxy evidence does not complete this question.
+- **TUI `/model` picker unexercised.** The headless probe used `-m` and `switchModel` as proxies, so a TUI-specific event/metadata channel cannot be ruled out. Q4 remains incomplete until an actual TUI `/model` pick and a post-pick provider/gateway fallback re-resolution case have captured context-hook payloads and relevant events for comparison. Section 5 of the redesign plan requires resolving the probe questions before rewiring; the proxy evidence does not complete this question.
 - **Async retry-hook timing unverified.** Capture a retry decision changed after an `await` and the resulting host events before treating the #56 adapter's host-awaiting assumption as established.
 - `metadata` fields on `session.model.selected` were never populated in observed payloads — cannot confirm they never carry origin info; treat their absence as "no origin info today".
