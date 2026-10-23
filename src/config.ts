@@ -32,9 +32,6 @@ type LevelEntry = z.infer<typeof LEVEL_ENTRY>
 
 export const ConfigSchema = z
   .object({
-    // Deprecated failover strategy: still parsed so the controller compiles; loadConfig warns when
-    // it is present and the rewiring child (#66) removes the field.
-    mode: z.enum(["chain-sticky", "chain-recover", "escalate"]).default("chain-sticky"),
     tiers: z
       .object({
         primary: modelStr.optional(),
@@ -185,8 +182,6 @@ export function loadConfig(file: string): { config: RelayConfig; warnings: strin
     c.levels = migratedLevels
     warnings.push("tiers is deprecated: auto-migrated to levels (primary -> levels[0], then secondary and tertiary)")
   }
-  if (hasKey("mode"))
-    warnings.push("mode is deprecated: accepted but still honored; remove it from the config")
   return { config: c, warnings }
 }
 

@@ -29,7 +29,8 @@ describe("config", () => {
   it("missing file -> defaults, no warning", () => {
     const r = loadConfig(path.join(tmp(), "nope.jsonc"))
     expect(r.warnings).toEqual([])
-    expect(r.config.mode).toBe("chain-sticky")
+    expect(r.config.cooldownMs).toBe(60000)
+    expect(r.config.levels).toEqual([])
   })
   it("parses JSONC with comments and trailing commas", () => {
     const f = path.join(tmp(), "c.jsonc")
@@ -50,26 +51,21 @@ describe("config", () => {
     expect(r.warnings[0]).toMatch(/tiers\.secondary/)
     expect(r.config.tiers.secondary).toEqual([])
   })
-  it("accepts every mode with one deprecation warning; an unknown mode falls back to defaults with one warning", () => {
+  it("mode is removed (#66): a config that still sets it is rejected with one warning and falls to defaults", () => {
     const d = tmp()
-    for (const mode of ["chain-sticky", "chain-recover", "escalate"]) {
+    for (const mode of ["chain-sticky", "chain-recover", "escalate", "round-robin"]) {
       fs.writeFileSync(path.join(d, `${mode}.jsonc`), JSON.stringify({ mode, cooldownMs: 5 }))
       const r = loadConfig(path.join(d, `${mode}.jsonc`))
       expect(r.warnings).toHaveLength(1)
-      expect(r.warnings[0]).toContain("mode is deprecated: accepted but still honored")
-      expect(r.config.mode).toBe(mode)
+      expect(r.warnings[0]).toMatch(/mode/)
+      expect(r.config.cooldownMs).toBe(60000)
     }
-    fs.writeFileSync(path.join(d, "bad.jsonc"), JSON.stringify({ mode: "round-robin", cooldownMs: 5 }))
-    const r = loadConfig(path.join(d, "bad.jsonc"))
-    expect(r.warnings).toHaveLength(1)
-    expect(r.warnings[0]).toMatch(/^invalid config \(mode: /)
-    expect(r.config.mode).toBe("chain-sticky")
-    expect(r.config.cooldownMs).toBe(60000)
   })
-  it("a config without mode gets no mode deprecation warning", () => {
+  it("a config without mode is clean", () => {
     const f = path.join(tmp(), "c.jsonc")
     fs.writeFileSync(f, JSON.stringify({ cooldownMs: 5 }))
     expect(loadConfig(f).warnings).toEqual([])
+    expect(loadConfig(f).config.cooldownMs).toBe(5)
   })
   it("rejects unknown keys (strict)", () => {
     const f = path.join(tmp(), "c.jsonc")
