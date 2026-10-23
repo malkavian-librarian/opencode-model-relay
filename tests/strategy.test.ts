@@ -1,7 +1,9 @@
 import { describe, it, expect } from "vitest"
 import { defaultConfig } from "../src/config"
 import {
-  buildChain, buildTiers, decideSwitch, hasRelayMarker, nextModel, recordFailure, recoverTarget, tierOf, triedThisTurn,
+  buildChain, buildLadder, buildTiers, clearSuccess, decideSwitch, effectiveMaxSwitches, hasRelayMarker, nextModel,
+  parseResetCooldown, recordFailure, recoverTarget, tierOf, triedThisTurn, walkFromTop,
+  QUARANTINE_MS, RESET_COOLDOWN_MAX_MS,
   type Decision, type ModelHealth,
 } from "../src/strategy"
 import { RELAY_MARKER } from "../src/defaults"
@@ -210,10 +212,10 @@ describe("recordFailure", () => {
     for (let i = 0; i < 20; i++) recordFailure(h, "a/1", c({}), 0, 60000)
     expect(h["a/1"]?.cooldownUntil).toBe(3_600_000)
   })
-  it("clamps an absurd retry-after to 1h", () => {
+  it("clamps an absurd retry-after to the 6 h reset cap (#64)", () => {
     const h: Record<string, ModelHealth> = {}
     recordFailure(h, "a/1", c({ retryAfterMs: 10 * 365 * 24 * 3_600_000 }), 1000, 60000)
-    expect(h["a/1"]?.cooldownUntil).toBe(1000 + 3_600_000)
+    expect(h["a/1"]?.cooldownUntil).toBe(1000 + RESET_COOLDOWN_MAX_MS)
   })
   it("ignores Infinity, NaN and negative retry-after, using backoff", () => {
     for (const bad of [Infinity, NaN, -5]) {
@@ -239,5 +241,96 @@ describe("recordFailure", () => {
     const h: Record<string, ModelHealth> = { "a/1": { failures: 5000 } }
     recordFailure(h, "a/1", c({}), 10, 60000)
     expect(h["a/1"]?.cooldownUntil).toBe(10 + 3_600_000)
+  })
+})
+
+describe("buildLadder (#64)", () => {
+  it("returns the ordered, deduped level list; find entries carried unresolved", () => {
+    const c = { ...defaultConfig(), levels: ["a/1", "b/2", "a/1", { find: { match: "glm-5" } }, "b/2", "c/3"] as any }
+    expect(buildLadder(c)).toEqual(["a/1", "b/2", { find: { match: "glm-5" } }, "c/3"])
+  })
+})
+
+describe("walkFromTop (#64)", () => {
+  const ladder = ["a/1", "b/2", "c/3"] as any
+  const w = (o: Record<string, unknown>) =>
+    walkFromTop({ ladder, current: "a/1", health: {}, now: 1000, switchCount: 0, maxSwitches: 6, ...o } as any)
+  it("picks the first healthy level from the top that is not the current model", () => {
+    expect(w({})).toEqual(sw("b/2"))
+    expect(w({ current: "c/3" })).toEqual(sw("a/1"))
+  })
+  it("skips cooling, blacklisted and tried models, and unresolved find entries", () => {
+    expect(w({ health: { "b/2": { cooldownUntil: 1001 }, "c/3": { permanent: true } } })).toEqual(NONE)
+    expect(w({ tried: ["b/2"] })).toEqual(sw("c/3"))
+    expect(
+      walkFromTop({ ladder: ["x/9", { find: { match: "glm" } }, "y/1"], current: "x/9", health: {}, now: 1000, switchCount: 0, maxSwitches: 6 } as any),
+    ).toEqual(sw("y/1"))
+  })
+  it("a quarantined model is skipped while a healthy alternative exists, chosen when it is the only candidate", () => {
+    expect(w({ current: "b/2", quarantine: { "a/1": 950 } })).toEqual(sw("c/3"))
+    expect(w({ current: "b/2", health: { "c/3": { permanent: true } }, quarantine: { "a/1": 950 } })).toEqual(sw("a/1"))
+  })
+  it("a quarantine older than QUARANTINE_MS no longer skips", () => {
+    expect(w({ current: "b/2", quarantine: { "a/1": 1000 - QUARANTINE_MS } })).toEqual(sw("a/1"))
+  })
+  it("exhaustion reasons match nextModel outcomes", () => {
+    expect(w({ switchCount: 6 })).toEqual(CAP)
+    expect(w({ current: "c/3", health: { "a/1": { permanent: true }, "b/2": { permanent: true } } })).toEqual(NONE)
+  })
+})
+
+describe("reset cooldowns (#64)", () => {
+  const now = new Date(2026, 9, 23, 12, 0, 0).getTime()
+  it("parses 'usage limit resets at HH:mm' local time; +24 h when already past, capped at 6 h", () => {
+    expect(parseResetCooldown("usage limit resets at 17:00", now)).toBe(new Date(2026, 9, 23, 17, 0, 0).getTime())
+    expect(parseResetCooldown("resets at 5pm", now)).toBe(new Date(2026, 9, 23, 17, 0, 0).getTime())
+    // 05:00 already passed today: the target rolls to tomorrow, then the 6 h cap applies.
+    expect(parseResetCooldown("usage limit resets at 05:00", now)).toBe(now + RESET_COOLDOWN_MAX_MS)
+  })
+  it("parses ISO timestamps and retry-after seconds", () => {
+    const iso = new Date(2026, 9, 23, 12, 30, 0).toISOString()
+    expect(parseResetCooldown(`quota until ${iso}`, now)).toBe(new Date(2026, 9, 23, 12, 30, 0).getTime())
+    expect(parseResetCooldown("retry-after: 30", now)).toBe(now + 30_000)
+  })
+  it("caps any reset cooldown at 6 h", () => {
+    expect(parseResetCooldown("retry-after: 86400", now)).toBe(now + RESET_COOLDOWN_MAX_MS)
+    expect(parseResetCooldown("resets at 23:00", now)).toBe(now + RESET_COOLDOWN_MAX_MS)
+  })
+  it("unsupported wording keeps the exponential backoff", () => {
+    expect(parseResetCooldown("slow down", now)).toBeUndefined()
+    expect(parseResetCooldown(undefined, now)).toBeUndefined()
+    const h: Record<string, ModelHealth> = {}
+    recordFailure(h, "a/1", { kind: "rate_limit", retryable: true, permanent: false, switchable: true }, 1000, 60000)
+    expect(h["a/1"]?.cooldownUntil).toBe(61000)
+  })
+  it("recordFailure applies parsed reset wording", () => {
+    const h: Record<string, ModelHealth> = {}
+    recordFailure(h, "a/1", { kind: "rate_limit", retryable: true, permanent: false, switchable: true }, now, 60000, "usage limit resets at 17:00")
+    expect(h["a/1"]?.cooldownUntil).toBe(new Date(2026, 9, 23, 17, 0, 0).getTime())
+  })
+})
+
+describe("clearSuccess (#64)", () => {
+  it("clears cooldown and permanent marks but keeps the failures count", () => {
+    const h: Record<string, ModelHealth> = { "a/1": { cooldownUntil: 2000, permanent: true, permanentAt: 1000, failures: 3 } }
+    clearSuccess(h, "a/1")
+    expect(h["a/1"]).toEqual({ failures: 3 })
+  })
+  it("is a no-op for an unknown model", () => {
+    const h: Record<string, ModelHealth> = {}
+    clearSuccess(h, "a/1")
+    expect(h).toEqual({})
+  })
+})
+
+describe("effectiveMaxSwitches (#64)", () => {
+  const many = (n: number) => Array.from({ length: n }, (_, k) => `m/${k}`) as any
+  it("the default cap scales with the ladder: max(6, levels.length + 1)", () => {
+    expect(effectiveMaxSwitches({ ...defaultConfig(), levels: many(3) })).toBe(6)
+    expect(effectiveMaxSwitches({ ...defaultConfig(), levels: many(10) })).toBe(11)
+  })
+  it("an explicit maxSwitchesPerSession always wins", () => {
+    expect(effectiveMaxSwitches({ ...defaultConfig(), maxSwitchesPerSession: 3, levels: many(10) })).toBe(3)
+    expect(effectiveMaxSwitches({ ...defaultConfig(), maxSwitchesPerSession: 9, levels: [] })).toBe(9)
   })
 })
