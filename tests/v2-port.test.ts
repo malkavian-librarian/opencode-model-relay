@@ -618,9 +618,17 @@ describe("v2 tools, commands and model list", () => {
     const out = await statusTool!.execute(undefined, { sessionID: "s1" })
     expect(out).toEqual({ content: expect.stringContaining("chain: a/1 ->") })
     const relayCmd = calls.commands.find((c) => c.name === "relay")
-    await relayCmd!.execute({ sessionID: "s1" })
-    await until(() => calls.synthetic.length > 0)
-    expect(calls.synthetic[0]).toMatchObject({ sessionID: "s1", text: expect.stringContaining("chain:") })
+    for (const input of [
+      { sessionID: "s1" },
+      { sessionID: "s1", prompt: { text: "  " }, delivery: "steer" },
+      { sessionID: "s1", prompt: { text: "status" }, delivery: "steer" },
+      { sessionID: "s1", prompt: { text: null }, delivery: "steer" },
+    ]) await expect(relayCmd!.execute(input)).resolves.toBeTruthy()
+    await until(() => calls.synthetic.length === 4)
+    expect(calls.synthetic).toHaveLength(4)
+    expect(calls.synthetic.every((x) => x.sessionID === "s1" && x.text.includes("chain:"))).toBe(true)
+    expect(calls.switchModel).toEqual([])
+    expect(calls.prompt).toEqual([])
     teardown?.()
   })
   it("relay_init creates a config and lists models from v2 model.list", async () => {
@@ -640,7 +648,7 @@ describe("v2 tools, commands and model list", () => {
     const { ctx, calls } = makeCtx()
     const teardown = await createV2Plugin(e.env).setup(ctx)
     const relayCmd = calls.commands.find((c) => c.name === "relay")
-    await relayCmd!.execute({ sessionID: "s1", arguments: "model b/2" })
+    await relayCmd!.execute({ sessionID: "s1", prompt: { text: "model b/2" }, delivery: "steer" })
     expect(calls.switchModel).toEqual([{ sessionID: "s1", model: { providerID: "b", id: "2" } }])
     expect(calls.prompt[0].text).toMatch(/summary unavailable/i)
     expect(calls.synthetic.map((x) => x.text).join(" ")).toMatch(/switching.*b\/2/i)
@@ -653,11 +661,26 @@ describe("v2 tools, commands and model list", () => {
     const { ctx, calls } = makeCtx()
     const teardown = await createV2Plugin(e.env).setup(ctx)
     const relayCmd = calls.commands.find((c) => c.name === "relay")
-    await expect(relayCmd!.execute({ sessionID: "s1", arguments: "model nope" })).resolves.toBeTruthy()
+    for (const text of ["model", "model nope", "model nope now", "model b/\u0000"]) {
+      await expect(relayCmd!.execute({ sessionID: "s1", prompt: { text }, delivery: "steer" })).resolves.toBeTruthy()
+    }
     expect(calls.switchModel).toEqual([])
     expect(calls.prompt).toEqual([])
-    expect(calls.synthetic.map((x) => x.text).join(" ")).toMatch(/invalid.*provider\/model/i)
+    expect(calls.synthetic).toHaveLength(4)
+    expect(calls.synthetic.every((x) => /invalid.*provider\/model/i.test(x.text))).toBe(true)
     expect(fs.existsSync(path.join(e.root, "data", "opencode-model-relay", "switches.jsonl"))).toBe(false)
+    teardown?.()
+  })
+
+  it("/relay next uses the current command shape", async () => {
+    const e = env()
+    const { ctx, calls } = makeCtx()
+    const teardown = await createV2Plugin(e.env).setup(ctx)
+    const relayCmd = calls.commands.find((c) => c.name === "relay")
+    await relayCmd!.execute({ sessionID: "s1", prompt: { text: "next" }, delivery: "steer" })
+    expect(calls.switchModel).toEqual([{ sessionID: "s1", model: { providerID: "b", id: "2" } }])
+    expect(calls.prompt[0].text).toMatch(/summary unavailable/i)
+    expect(calls.synthetic.map((x) => x.text).join(" ")).toMatch(/switching.*next|switched.*b\/2/i)
     teardown?.()
   })
 
@@ -667,7 +690,7 @@ describe("v2 tools, commands and model list", () => {
     const { ctx, calls } = makeCtx()
     const teardown = await createV2Plugin(e.env).setup(ctx)
     const relayCmd = calls.commands.find((c) => c.name === "relay")
-    await relayCmd!.execute({ sessionID: "s1", arguments: "next" })
+    await relayCmd!.execute({ sessionID: "s1", prompt: { text: "next" }, delivery: "steer" })
     expect(calls.switchModel).toEqual([])
     expect(calls.synthetic.map((x) => x.text).join(" ")).toMatch(/no healthy model|bottom|relay status/i)
     teardown?.()
@@ -680,9 +703,21 @@ describe("v2 tools, commands and model list", () => {
     const { ctx, calls } = makeCtx()
     const teardown = await createV2Plugin(e.env).setup(ctx)
     const relayCmd = calls.commands.find((c) => c.name === "relay")
-    await relayCmd!.execute({ sessionID: "s1", arguments: "next" })
+    await relayCmd!.execute({ sessionID: "s1", prompt: { text: "next" }, delivery: "steer" })
     expect(calls.switchModel).toEqual([])
     expect(calls.synthetic.map((x) => x.text).join(" ")).toMatch(/bottom|relay status/i)
+    teardown?.()
+  })
+
+  it("uses legacy arguments only when prompt.text is absent", async () => {
+    const e = env()
+    const { ctx, calls } = makeCtx()
+    const teardown = await createV2Plugin(e.env).setup(ctx)
+    const relayCmd = calls.commands.find((c) => c.name === "relay")
+    await relayCmd!.execute({ sessionID: "s1", arguments: "next" })
+    await relayCmd!.execute({ sessionID: "s1", prompt: { text: "status" }, arguments: "next", delivery: "steer" })
+    expect(calls.switchModel).toEqual([{ sessionID: "s1", model: { providerID: "b", id: "2" } }])
+    expect(calls.synthetic.at(-1)?.text).toContain("chain:")
     teardown?.()
   })
 })

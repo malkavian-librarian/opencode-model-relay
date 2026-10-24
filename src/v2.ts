@@ -374,6 +374,11 @@ function sidInput(input: unknown): string | undefined {
 }
 
 function commandArgs(input: unknown): string {
+  const prompt = (input as { prompt?: unknown } | undefined)?.prompt
+  if (prompt && typeof prompt === "object" && "text" in prompt) {
+    const text = (prompt as { text?: unknown }).text
+    return typeof text === "string" ? text.trim() : ""
+  }
   const args = (input as { arguments?: unknown } | undefined)?.arguments
   return typeof args === "string" ? args.trim() : ""
 }
