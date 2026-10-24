@@ -11,24 +11,24 @@ An [OpenCode](https://opencode.ai) plugin that keeps a session going when the cu
 
 ```jsonc
 {
-  "tiers": {
-    "primary": "anthropic/claude-sonnet-4-5",
-    "secondary": ["openrouter/z-ai/glm-5.2"],
-    "tertiary": ["openrouter/deepseek/deepseek-chat"]
-  }
+  "levels": [
+    "anthropic/claude-sonnet-4-5",
+    "openrouter/z-ai/glm-5.2",
+    "openrouter/deepseek/deepseek-chat"
+  ]
 }
 ```
 
-Models are written `providerID/modelID`; only the first `/` splits them (`openrouter/z-ai/glm-5.2` is provider `openrouter`, model `z-ai/glm-5.2`). Type `/relay` inside OpenCode (or ask the model for the relay status) to see the chain and the current state. `/relay` is a command whose template asks the model to call the `relay_status` tool and print its output verbatim, so using it costs one small model turn. The `relay_status` tool reports the chain, current model, switch count and whether the API key is set or missing (never the key itself). If you opt in to OpenRouter summaries (see Privacy), the helper model defaults to `z-ai/glm-5.2` (listed on the public OpenRouter models list as of 2026-10-18); change it with `handover.model`.
+Models are written `providerID/modelID`; only the first `/` splits them (`openrouter/z-ai/glm-5.2` is provider `openrouter`, model `z-ai/glm-5.2`). Levels are tried from the top, and the first healthy candidate wins. Type `/relay` inside OpenCode to see the ladder and current state. On OpenCode 2, `/relay` is a native zero-turn command; on OpenCode 1.x it costs one small model turn. `/relay model <provider/model>` forces a specific switch and `/relay next` takes the next healthy ladder hop. If you opt in to OpenRouter summaries (see Privacy), the helper model defaults to `z-ai/glm-5.2`; change it with `handover.model`.
 
 ## How it works
 
 1. A `session.error` event arrives. The failure is classified: `rate_limit`, `quota`, `auth`, `free_tier_403`, `model_not_found`, `server_5xx` or `timeout` can trigger a switch. `overflow`, `user_abort` (pressing Esc) and `unknown` never do.
-2. The plugin picks the next model according to `mode` (see [Modes](#modes)) among models that are not permanently failed or cooling down. If none is left, or the per-session switch cap is reached, it tells you and stays on the current model.
+2. The plugin walks `levels` from the top, skipping the failed, unhealthy, already-tried and recently quarantined models. A find level resolves lazily at failover time. If the walk is exhausted, it tries the deepest healthy level; if none exists, it explains the failure and suggests `/relay next`.
 3. It builds a structured handover: a summary, the tool calls so far (with DONE / FAILED / UNKNOWN status), files touched, open todos, and your last request verbatim. The summary is written by a helper model through OpenRouter only if you opted in (see Privacy); otherwise the handover carries the plain tail of the redacted transcript.
 4. The plugin aborts the failed turn, sends the handover to the next model, and the work resumes there.
-5. The choice is sticky for the session: later messages are pinned to the model that took over (`chain-recover` can move them back once a higher-ranked model recovers). If you pick a different model yourself, the pin is cleared.
-6. Optional (off by default): a quality judge watches finished turns on secondary/tertiary models. Local heuristics flag a silent turn, repeated identical tool calls or repeated tool errors; only then does a cheap judge model see the redacted transcript tail and decide. Two consecutive `switch: true` verdicts switch to the next healthy, untried chain model — logged as `quality`, never counting as a failure for cooldowns. See the `judge.*` config rows.
+5. The choice stays put for the session. A manual model pick is adopted under the same lock, clears that model's health marks once and opens a short grace window; the plugin never auto-recovers to a higher level.
+6. Optional (off by default): a quality judge watches finished turns below level 1. Local heuristics flag a silent turn, repeated identical tool calls or repeated tool errors; only then does a cheap judge model see the redacted transcript tail and decide. Two consecutive `switch: true` verdicts trigger a `quality` switch.
 
 Subagent sessions (those with a `parentID`) are skipped. Any internal error leaves the session on its current model; hooks never throw. Main-model traffic always goes through OpenCode; the plugin does not proxy it.
 
@@ -42,37 +42,26 @@ The plugin ships both plugin shapes in one file: the v1 `server()` hooks and the
 
 Details and the verified runtime shapes: [docs/spike-v2.md](docs/spike-v2.md).
 
-## Modes
+## Levels and manual commands
 
-`mode` decides where a failure moves the session and whether it ever comes back. In every mode, a model is skipped while it cools down (a cooldown that ends exactly now counts as over) or after a permanent failure (quota, auth, model not found: blacklisted for 24 hours, or until a turn on that model finishes without a plugin-seen failure), and `maxSwitchesPerSession` stops all switching.
+`levels` is an ordered ladder of exact `provider/model` strings or `{ "find": { "match", "free", "via" } }` matchers. It is capped at 32 entries, deduplicated with the first occurrence winning, and invalid entries produce a warning naming their index. Failover walks from level 1. A model that failed in this session is quarantined for 10 minutes where possible, but quarantine is a preference rather than a veto when it is the only healthy candidate. Reset-aware cooldowns are capped at six hours; the configured default switch cap grows to `max(6, levels.length + 1)`, while other explicit values win.
 
-| Mode | On a failure | Later turns |
-| --- | --- | --- |
-| `chain-sticky` (default) | First healthy model of the flat list `primary`, `secondary...`, `tertiary...` other than the failing one; a model already tried for the same failing turn is never chosen again. | Stay on the model that took over. No automatic return. |
-| `chain-recover` | Same flat list, but a model already tried for the same failing turn is never chosen again, even if its cooldown has run out meanwhile. | On your next message, if a model ranked above the current one is healthy again, the session returns to the highest-ranked one (primary first). Back on the original model, the pin is cleared; if the turn instead arrives on the old fallback, it re-pins to the recovered model (the TUI may keep sending the old one). |
-| `escalate` | Tiers read cheap to strong. A failure in tier T moves to the first healthy model of tier T+1; a tier with no healthy model (or no model at all) is skipped. Siblings in the same tier and lower tiers are never tried, so the session never moves down or sideways. Exhausted once the top tier fails. | Stay on the model that took over. No automatic return. |
+The deprecated `tiers` shape is accepted and auto-migrated (`primary` to level 1, then `secondary` and `tertiary` in order), with a warning. If both are present, explicit `levels` wins and `tiers` is not merged. The old `mode` key is ignored with a deprecation warning.
 
-Worked example with `primary: A`, `secondary: [B1, B2]`, `tertiary: [C]`, and A hitting a rate limit (60 s cooldown):
-
-- `chain-sticky`: A fails -> B1. If B1 fails too -> B2, then C. Later messages stay on whichever model took over.
-- `chain-recover`: A fails -> B1. Your next message 30 s later still goes to B1 (A is cooling). Your message 60 s or more after the failure goes to A again and the pin is cleared. Had A failed permanently, the session would stay on B1.
-- `escalate`: A fails -> B1. If B1 fails -> C (B2 is not tried). If C fails -> exhausted.
-
-A return in `chain-recover` is not a failure: it does not count towards `maxSwitchesPerSession` and is written to the switch log with kind `recover`. It happens only on a message you send, never on the plugin's own handover message and never while a switch is in progress. There is a budget: recovery stops one switch before the cap (never strand the session on a failing model at the limit) and is itself capped, with both counts visible in `relay_status` as `switches` and `recoveries`. Picking a different model yourself still clears the pin in every mode. Model health (cooldowns and blacklists) is persisted in `state.json`, so it survives an OpenCode restart; a blacklist still expires after 24 hours and lifts as soon as a turn on that model ends cleanly.
+- `/relay model <provider/model>` switches immediately using the plain-tail path, clears the chosen model's health marks once, logs `manual`, and is exempt from the automatic switch cap.
+- `/relay next` walks to the next healthy ladder candidate using the same fast path. At the bottom it reports the condition instead of silently doing nothing.
 
 ## Configuration
 
-Run `/relay-init` inside OpenCode to create a commented default config. It asks the model to call the `relay_init` tool (one small model turn), which writes the file below with `privacy.consent: false`, lists the `provider/model` ids from your configured providers (first 40), and prints next steps: edit the tiers, set consent only if you accept sending a redacted transcript to OpenRouter, and set `OPENROUTER_API_KEY` (never written to the file). It never overwrites an existing file, only writes inside the config directory (directory mode 0700, file mode 0600), and if it cannot list models it still writes the file. The generated `levels` ladder is a commented example for future runtime support; keep it commented and configure `tiers` for failover in this release. For example: `"tiers": { "primary": "your-provider/primary", "secondary": ["your-provider/fallback"], "tertiary": [] }`. Up to 10 of your configured models are listed in a comment block to pick from.
+Run `/relay-init` inside OpenCode to create a commented default config. It writes `privacy.consent: false`, lists up to 40 configured `provider/model` ids, and leaves the example `levels` ladder commented. Its generated comments and next steps still say "the levels ladder is not active yet" and recommend configuring `tiers` (`primary`, `secondary`, and `tertiary`). That bootstrap text is outdated: the runtime uses `levels` now. You can configure `levels` directly using the table below, or use the legacy `tiers` shape, which migrates on load. The remaining next steps cover consent and `OPENROUTER_API_KEY` (never written to the file). The command never overwrites an existing file and stays inside the user config directory.
 
 File: `~/.config/opencode/opencode-model-relay.jsonc` (JSONC, max 64 KB). It is read from the user config directory only, never from a project. `XDG_CONFIG_HOME` overrides the base directory. An invalid file falls back to defaults and shows a warning toast. Unknown keys are rejected.
 
 | Field | Type | Default | Notes |
 | --- | --- | --- | --- |
 | `mode` | deprecated | ignored | Removed from runtime configuration: failover uses the levels ladder. Loading a file with this legacy key ignores it and warns once about mode while preserving and validating all other settings, including automatic tiers migration. |
-| `levels` | `"provider/model"` \| `{ "find": { "match": string, "free": boolean, "via": "openrouter" } }`[] | `[]` | Parsed for the upcoming runtime redesign; current failover still uses `tiers`, so a `levels`-only config does not enable fallback. Once runtime support lands, the ladder will be tried top to bottom, first healthy model wins. Max 32 entries (also enforced after legacy migration); duplicates drop, first wins. With future runtime support, a find entry will resolve to the first matching model at failover time (free models only when `"free": true`; `"via": "openrouter"` searches the OpenRouter catalog). Any invalid entry falls back to the defaults with a warning naming the level index. Deprecates `tiers`: an existing tiers config auto-migrates on load. |
-| `tiers.primary` | `"provider/model"` | unset | If unset, the model currently in use heads the chain. Deprecated: auto-migrated to `levels` on load. |
-| `tiers.secondary` | `"provider/model"[]` | `[]` | Tried after primary, in order. Deprecated: auto-migrated to `levels` on load. |
-| `tiers.tertiary` | `"provider/model"[]` | `[]` | Tried after secondary, in order. Deprecated: auto-migrated to `levels` on load. |
+| `levels` | `"provider/model"` \| `{ "find": { "match": string, "free"?: boolean, "via"?: "openrouter" } }`[] | `[]` | Ordered ladder, walked from the top. Max 32 entries; duplicates drop, first wins. Find entries resolve lazily and skip when consent is off. Invalid entries fall back to defaults with a warning naming the level index. |
+| `tiers` | object with `primary`, `secondary[]`, `tertiary[]` | `{}` | Deprecated compatibility shape. Auto-migrates to `levels` in that order; explicit `levels` wins when both are present. |
 | `privacy.consent` | boolean | `false` | Must be `true` before anything is sent to OpenRouter. |
 | `privacy.zdr` | boolean | `false` | Adds `provider.zdr: true` to helper requests (zero data retention endpoints only). |
 | `openrouter.keyEnv` | string | `"OPENROUTER_API_KEY"` | Name of the environment variable that holds the key. The key is never read from config. |
@@ -84,32 +73,33 @@ File: `~/.config/opencode/opencode-model-relay.jsonc` (JSONC, max 64 KB). It is 
 | `handover.maxToolChars` | positive integer | `1500` | Per tool output cap before truncation. |
 | `handover.maxTranscriptChars` | positive integer | `60000` | Transcript cap (internally limited to 60000). |
 | `handover.maxCallsPerSession` | integer >= 0 | `3` | Helper-model calls per session; after that the plain tail is used. Plain-tail resume is the default critical path; optional narratives run asynchronously after resume. |
-| `judge.enabled` | boolean | `false` | Opt-in quality judge: after a finished turn, if the local heuristics find the turn suspicious, a judge model decides whether to switch to a healthier chain model. Never applies to the primary tier or its own handover turns. Two consecutive `switch: true` verdicts are required for a switch (no cooldown recorded for it). |
+| `judge.enabled` | boolean | `false` | Opt-in quality judge: after a finished turn, if local heuristics find it suspicious, a judge model decides whether to switch below level 1. Two consecutive `switch: true` verdicts are required (no cooldown is recorded for a quality switch). |
 | `judge.model` | string | `"google/gemini-2.5-flash-lite"` | OpenRouter model that judges. Keep it cheap: it runs after idle turns. |
 | `judge.prompt` | string | built-in prompt | System prompt for the judge; must answer strict JSON `{switch, reason, confidence}`. |
 | `judge.maxCallsPerSession` | integer >= 0 | `3` | Judge calls per session (failed calls count). |
 | `judge.minIntervalMs` | integer >= 0 | `60000` | Minimum time between judge calls per session. |
 | `judge.maxDailyUsd` | number | `0.5` (max 100) | Per-day judge spend cap across all sessions. |
-| `cooldownMs` | positive integer | `60000` | Base cooldown for a temporarily failed model; doubles per repeat, capped at 1 hour. A `Retry-After` header is honoured. |
-| `maxSwitchesPerSession` | positive integer | `6` | Hard cap on switches per session. |
-| `onExhausted` | `"stop"` | `"stop"` | Only behaviour in v1.0. |
-| `narrator.verbosity` | `"off"` \| `"quiet"` \| `"normal"` \| `"chatty"` | `"normal"` | `quiet` shows only exhausted, cap and config problems. `chain-recover` returns to a recovered model get their own `recovered` toast (facts: from, to) at `normal` and up. |
+| `cooldownMs` | positive integer | `60000` | Base cooldown for a temporarily failed model; reset-aware cooldowns are capped at six hours. |
+| `maxSwitchesPerSession` | positive integer | `6` | Automatic cap; the default scales to at least `levels.length + 1`. Manual commands are exempt. |
+| `onExhausted` | `"stop"` | `"stop"` | Exhaustion falls back to the deepest healthy level; if none exists, the user is told to run `/relay next`. |
+| `narrator.verbosity` | `"off"` \| `"quiet"` \| `"normal"` \| `"chatty"` | `"normal"` | `quiet` shows only exhausted, cap and config problems. |
 | `narrator.tone` | `"plain"` \| `"british"` | `"plain"` | `plain` is terse. `british` is opt-in dry humour (tea, queueing, "Plan B"): every message still states the facts first (models, reason, or the actual condition), static text only, no repeats back to back. |
 | `ledger.enabled` | boolean | `true` | Write the local switch log. |
 | `ledger.dir` | string | unset (data dir) | Must resolve inside the data directory, otherwise the data directory is used. |
 
 ## Privacy
 
-- Nothing leaves your machine except through OpenCode itself, unless you opt in. The only direct calls the plugin makes are the optional handover summary and (if `judge.enabled`) the optional quality judge, both to OpenRouter.
-- Opt in with `"privacy.consent": true` and an OpenRouter key in the environment variable named by `openrouter.keyEnv`. Without both, no network call is made: the handover uses the plain transcript tail and the judge does not run. You get a one-time toast saying so.
+- Main-model traffic goes through OpenCode. The plugin's direct network calls are the optional handover summary, the optional quality judge, and the consent-gated public catalog lookup; nothing leaves your machine without opt-in.
+- A `find` level using `via: "openrouter"` reads the public `GET /api/v1/models` catalog only when `privacy.consent` is true. The request carries no API key, transcript, or other user data, uses HTTPS, follows no redirects, and has a bounded response. Returned model ids are treated as untrusted data: malformed rows are ignored and ids are length-limited and validated against the allowed `provider/model` format before they can reach switching or handover text.
+- Helper calls require `"privacy.consent": true` and an OpenRouter key in the environment variable named by `openrouter.keyEnv`. Without both, the handover uses the plain transcript tail and the judge does not run; a one-time toast explains this. Public catalog discovery requires consent but no key.
 - Every helper request sends `provider.data_collection: "deny"`. With `privacy.zdr: true` it also requests zero-data-retention routing.
-- Everything sent passes through a redaction step first (private keys, common API token formats, bearer tokens, `KEY=value` lines, auth and cookie headers, URL credentials, secret-looking query parameters and CLI flags). Output of tools that touched sensitive paths (`.env`, SSH keys, `.pem`, `.npmrc`, `.netrc`, `credentials`, `secrets.json` and similar) is dropped. Redaction is pattern-based and best effort, not a guarantee.
+- Everything sent to a helper or judge passes through a redaction step first (private keys, common API token formats, bearer tokens, `KEY=value` lines, auth and cookie headers, URL credentials, secret-looking query parameters and CLI flags). Catalog discovery sends no user data or secrets; any catalog id later included in handover text remains validated untrusted data. Output of tools that touched sensitive paths (`.env`, SSH keys, `.pem`, `.npmrc`, `.netrc`, `credentials`, `secrets.json` and similar) is dropped. Redaction is pattern-based and best effort, not a guarantee.
 - Failover resumes on the plain-tail handover without waiting for a narrative: the hard latency budget is 6 seconds (5-second abort race plus the 300 ms handoff delay), with a typical budget of 2 seconds when abort completes promptly. If `privacy.consent` is false, or the configured `openrouter.keyEnv` is missing, no narrative call is made. Only enacted switches spend narrative attempts. Plain tails say a narrative is deferred only when one is scheduled; manual switches and ineligible calls use a neutral no-summary label. A late narrative is discarded if the resumed model, turn or handover intent changed, or the session lock is busy.
 - The helper request goes only to the configured base URL over `https`, with redirects not followed. The key is never written to config, logs, the switch log or error messages.
 - Transcripts and tool output are treated as untrusted data. The handover message says it is a model-generated summary, not user instructions.
 - Stored locally under `~/.local/share/opencode-model-relay` (or `$XDG_DATA_HOME/opencode-model-relay`):
-  - `switches.jsonl`: one row per switch with timestamp, HMAC'd session id, from/to model, failure kind (or `recover` for a `chain-recover` return) and optional helper cost. Metadata only, no prompt or response text.
-  - `state.json`: per-session sticky model and counters (helper/judge call counts, cooldowns, the optional daily judge spend bucket).
+  - `switches.jsonl`: one metadata row per switch attempt with timestamp, HMAC'd session id, from/to model, failure kind, `manual` or `switch_dropped` kind (with its enum reason), elapsed time and optional helper cost. No prompt or response text.
+  - `state.json`: per-session `pluginPinned` model, adoption/quarantine state and counters (helper/judge calls, cooldowns, the optional discovery cache and daily judge spend bucket).
   - `salt`: the random per-install salt used for the session-id HMAC.
 
 ## Reading the switch log
@@ -164,8 +154,8 @@ An honest comparison; pick what fits your setup.
 | Handover | re-prompts the session on the fallback model; large-context switches preserve context via compaction | structured handover: summary, tool-call status, files, todos, your last request verbatim |
 | LLM-written summary | not for failover (compaction-based context preservation for large-context switches only) | optional, opt-in, redacted |
 | Consent and redaction for data egress | n/a | explicit consent gate, redaction, `data_collection: "deny"` |
-| Config | per-agent chains | `tiers` (primary, secondary, tertiary) |
-| Sticky per session | not documented | yes |
+| Config | per-agent chains | ordered `levels` (deprecated `tiers` auto-migrate) |
+| Stay-put per session | not documented | yes |
 | Quality-failure judge | no | optional, opt-in: local heuristics + a cheap LLM judge (`judge.enabled`) |
 
 This table reflects the author's reading of both projects; check their READMEs for current behaviour.

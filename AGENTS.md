@@ -42,14 +42,14 @@ over with a structured summary. Design: `docs/superpowers/specs/2026-10-18-model
 2. Zod is the schema source; validate at boundaries (config file, OpenRouter
    responses, hook payloads) and fail safe. Comments explain why, not what.
 3. **No request proxying.** Main-model traffic always goes through OpenCode.
-   Only the helper calls (judge, handover) go direct to OpenRouter.
+   Direct OpenRouter calls: helpers (judge, handover) and the public model catalog.
 4. **Key from env only.** Never read the API key from config, and never write it
    to config, logs, the switch log, errors or toasts. Requests use `https`,
    `redirect: "manual"`, and the base URL stays `openrouter.ai` unless
    `allowCustomBaseUrl` is true.
 5. **Consent-gated egress.** Nothing is sent off the machine unless
-   `privacy.consent` is true. Requests carry `provider.data_collection: "deny"`.
-6. **Redact after truncate.** Everything sent passes `redact()` in `src/redact.ts`
+   `privacy.consent` is true. Helper calls carry `provider.data_collection: "deny"`.
+6. **Redact after truncate.** Helper input passes `redact()` in `src/redact.ts`
    and only sees input already truncated (`maxToolChars`, default 1500, max 15000;
    transcript capped by `maxTranscriptChars`, 60000). Output of
    sensitive paths (`.env*`, keys, credentials) is dropped.
@@ -107,9 +107,9 @@ over with a structured summary. Design: `docs/superpowers/specs/2026-10-18-model
 ## Gotchas (max 15, newest at bottom)
 
 - Older guidance: [graduated development gotchas](docs/process.md#graduated-development-gotchas).
-- Optional handover narratives awaited before abort delayed failover -> dispatch the redacted plain tail, then reserve an enacted switch's helper attempt before the async writer (2026-10-24)
 - Superseded switches spent helper attempts and late narratives could restart stale turns -> reserve after enactment and lock/check the resumed model, turn and intent before dispatch; label only scheduled narratives deferred (2026-10-24)
 - Physical-tail slicing dropped older valid ledger rows after malformed lines -> validate backward until the requested valid count, then reverse for chronology (2026-10-24)
+- Bootstrap comments lagged the runtime ladder -> document `/relay-init`'s legacy output separately; runtime uses `levels`, with `tiers` migrated and `mode` ignored (2026-10-24)
 
 ## Bugs - [open]/[fixed] + repro (max 10)
 

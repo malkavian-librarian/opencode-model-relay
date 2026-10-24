@@ -121,20 +121,21 @@ Publishing is an owner action; agents never publish or push tags.
 | `docs/coderabbit-log.md` | Log of CodeRabbit exchanges. |
 | `docs/superpowers/specs/2026-10-18-model-relay-design.md` | Design spec and hard constraints. |
 | `docs/superpowers/plans/2026-10-18-v1.0-failover-handover.md` | v1.0 implementation plan. |
+| `docs/superpowers/plans/2026-10-23-model-relay-levels-redesign.md` | Epic #62 levels redesign plan and child issue map. |
 
-## Epic #62 child status (2026-10-23 live)
+## Epic #62 child status (2026-10-24 live)
 
 | Child | Scope | Status | Next |
 |-------|-------|--------|------|
 | #63 | config schema + tiers migration + relay-init template | ✅ Merged (PR #74) | — |
-| #64 | strategy: walkFromTop, quarantine, reset-aware cooldowns | ⏳ Next (stashed sketch, TDD) | #66 |
+| #64 | strategy: walkFromTop, quarantine, reset-aware cooldowns | ✅ Merged (PR #78) | — |
 | #65 | v2 probe: switchModel persistence, retry-veto, synthetic targeting, pick-vs-resolution | ✅ Merged (PR #75) | — |
-| #66 | rewiring: adoption under lock, pin-machinery deletion, crash windows, `switch_dropped` | ⏳ Pending | #67 |
-| #67 | /relay model + /relay next fast-path commands | ⏳ Pending | #68 |
-| #68 | fast failover: plain-tail default, async narrative, latency budget | ⏳ Pending | #69 |
-| #69 | find levels: free-model discovery, health-aware resolution, consent gate | ⏳ Pending | #70 |
-| #70 | observability: verbose switch-log + /relay status ladder view | ⏳ Pending | #71 |
-| #71 | docs sweep: README/spec/SECURITY/CHANGELOG/AGENTS | ⏳ Pending | #72 |
+| #66 | rewiring: adoption under lock, pin-machinery deletion, crash windows, `switch_dropped` | ✅ Merged (PR #80) | — |
+| #67 | /relay model + /relay next fast-path commands | ✅ Merged (PR #84) | — |
+| #68 | fast failover: plain-tail default, async narrative, latency budget | ✅ Merged | — |
+| #69 | find levels: free-model discovery, health-aware resolution, consent gate | ✅ Merged | — |
+| #70 | observability: verbose switch-log + /relay status ladder view | ✅ Merged | — |
+| #71 | docs sweep: README/spec/SECURITY/CHANGELOG/AGENTS | 🔎 In review (PR #88 open) | QA re-review; then #72 |
 | #72 | deploy & enable plugin on owner machine (re-enable `.disabled`) | ⏳ Pending (`needs-owner`) | #73 |
 | #73 | wrap-up: commit all, delete merged branches, worktree audit, push | ⏳ Pending | — |
 
@@ -153,3 +154,4 @@ Older guidance moved from `AGENTS.md` to keep its cap; these rules still apply.
 - SessionLock dedup TTL (30 s) is only a cheap pre-filter, never an authorization boundary -> any once-only rule that guards a side effect (judge per-turn) must also be persisted on the state record (2026-10-19)
 - OpenCode v2 loads both `~/.config/opencode/plugins/*.js` and `opencode.jsonc` `"plugins"` separately, and `ctx.options`/`ctx.location` can come from an untrusted project tree -> never load from both sources at once, never read relay config/paths from `ctx.options` or `ctx.location`, and map v2 `{providerID, id}` <-> `{providerID, modelID}` (#56) (2026-10-22)
 - OpenCode 2's plugin loader silences `console`/`fs` writes during build time (module eval, `server()`, `setup()` body) -> spike/probe logs only persist from hook callbacks or tool `execute` at runtime (docs/spike-v2.md) (2026-10-22)
+- Optional handover narratives awaited before abort delayed failover -> dispatch the redacted plain tail, then reserve an enacted switch's helper attempt before the async writer (2026-10-24)

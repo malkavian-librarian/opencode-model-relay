@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Levels redesign (#63–#71): ordered `levels` ladders replace runtime tiers, with deprecated `tiers` auto-migration, stay-put failover, `/relay model` and `/relay next` fast paths, consent-gated free-model discovery, per-session quarantine, plain-tail resume with asynchronous narratives, and a verbose `/relay status` switch ledger.
 - OpenCode 2 (v2 plugin API) support (#56): the plugin now exports both a v1 `server()` and a v2 `setup(ctx)`; OpenCode 2 binaries run the v2 layer (session hooks `prompt`/`context`/`retry`, cross-project event subscription, native `ctx.session.switchModel`-based pinning) and OpenCode 1.x binaries keep the proven v1 hooks — the v1 layer stands down automatically when the v2 layer is live, so no double switching.
 - On v2 binaries `relay_status` / `relay_init` are registered natively via `ctx.tool.transform`, and `/relay` / `/relay-init` are native zero-turn commands that surface status through a synthetic session message (no model turn needed on 2.x).
 - The retry hook vetoes OpenCode's own retry (`decision.retry = false`) when the relay decides to switch: permanent failures at attempt 1, transient ones from attempt 2, mirroring the v1 `session.status` policy.
