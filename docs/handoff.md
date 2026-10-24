@@ -19,8 +19,8 @@ GitHub issue comments hold the detailed notes; this file indexes the latest stat
 
 - Status: PR [#88](https://github.com/malkavian-librarian/opencode-model-relay/pull/88) is open; the #71 issue remains open and its Relay board card is **In review**. The docs sweep targets merged #63–#70/#79 behavior.
 - AGENTS.md stays at 121 lines by replacement. Graduation proposal for the PR description: move the oldest active handover-latency gotcha to `docs/process.md#graduated-development-gotchas`, making room for the bootstrap/levels gotcha; direct-call rules now include the consent-gated public catalog. The cap guard forbids appends, not replacements.
-- Next: host publishes the documentation repair and records the graduation proposal in the PR description; obtain scoped QA re-review and current-head CI/CodeRabbit results. #72 remains owner-gated after #71.
-- Blockers: QA re-review and current-head checks after publication; no source, tests or other worktrees touched.
+- Next: obtain scoped QA re-review of the current pushed head and confirm current-head CI/CodeRabbit results; #72 remains owner-gated after #71.
+- Blockers: QA re-review and current-head checks; the documentation repair is already pushed in PR #88. No source, tests or other worktrees touched.
 
 ### 2026-10-24 - #66 controller rewiring merged - closed (opencode)
 
