@@ -48,7 +48,9 @@ const CORE: {
   lastSession: { sid?: string }
   /** Last session.model.selected model per session: probe Q4 corroboration for adoption (#66). */
   modelSelected: Map<string, string>
-} = { client: { current: undefined, epoch: 0 }, lastSession: {}, modelSelected: new Map() }
+  /** Latest context-hook pick per session: a stale in-flight lookup must never adopt (#66). */
+  lastContextPick: Map<string, string>
+} = { client: { current: undefined, epoch: 0 }, lastSession: {}, modelSelected: new Map(), lastContextPick: new Map() }
 
 let moduleActive = false
 
@@ -175,7 +177,8 @@ function adaptV2Client(ctx: V2Ctx): ClientLike {
     session: {
       get: async (a) => {
         const info = await Promise.resolve(session?.get?.({ sessionID: a.path.id }))
-        return { data: info && typeof info.parentID === "string" ? { parentID: info.parentID } : {} }
+        // A missing session propagates as `data: undefined` so callers can treat it as ineligible.
+        return { data: info ? (typeof info.parentID === "string" ? { parentID: info.parentID } : {}) : undefined }
       },
       messages: async (a) => ({ data: await messagesFor(a) }),
       abort: async (a) => Promise.resolve(session?.interrupt?.({ sessionID: a.path.id })),
@@ -293,10 +296,15 @@ function onContextHook(core: Core, ev: unknown): void {
     const { sessionID, model } = parsed.data
     CORE.lastSession.sid = sessionID
     const pick = `${model.providerID}/${model.id}`
+    if (CORE.lastContextPick.size >= MAX_TRACKED_SELECTIONS) CORE.lastContextPick.clear() // bound the map
+    CORE.lastContextPick.set(sessionID, pick)
     void (async () => {
       try {
         const session = await holderClient().session.get({ path: { id: sessionID } })
-        if (session.data?.parentID) return // child picks must not clear the parent's shared health
+        // No session found, or a child pick: eligibility is unproven — never clear shared health.
+        if (!session.data || session.data.parentID) return
+        // A newer context event for this session supersedes this (now stale) lookup.
+        if (CORE.lastContextPick.get(sessionID) !== pick) return
         const rec = core.state.get(sessionID)
         if (rec.pluginPinned === pick) return // the plugin set this model itself: nothing to adopt
         // Check after the lookup: a newer selection may arrive while session.get is pending.
