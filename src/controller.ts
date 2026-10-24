@@ -4,8 +4,8 @@ import type { RelayConfig } from "./config"
 import { classify, classifyRetryMessage } from "./classifier"
 import type { Classified } from "./types"
 import {
-  buildLadder, clearSuccess, effectiveMaxSwitches, hasRelayMarker, isHealthy, recordFailure, triedThisTurn,
-  walkFromTop, QUARANTINE_MS, type LevelEntry, type ModelHealth,
+  buildLadder, clearSuccess, effectiveMaxSwitches, hasRelayMarker, recordFailure, triedThisTurn,
+  isValidDiscoveredModelId, walkFromTopAsync, type FindResolutionInput, type ModelHealth,
 } from "./strategy"
 import { heuristicReasons, observeTurn } from "./heuristics"
 import { buildJudgeInput, parseVerdict } from "./judge"
@@ -42,6 +42,8 @@ export interface Deps {
   chat: typeof orChat
   log: (m: string) => void
   switchOpts?: { abortTimeoutMs?: number; abortDelayMs?: number }
+  fetchCatalog?: FindResolutionInput["fetchCatalog"]
+  openCodeModels?: FindResolutionInput["openCodeModels"]
 }
 
 export interface ManualSwitchResult {
@@ -55,22 +57,6 @@ export interface ManualSwitchResult {
 const errorText = (raw: unknown): string | undefined => {
   const r = raw as { data?: { message?: unknown } } | undefined
   return typeof r?.data?.message === "string" ? r.data.message : undefined
-}
-
-/** The deepest healthy, unquarantined level other than the current model: the onExhausted last resort (AC-07). */
-function fallbackLevel(
-  ladder: readonly LevelEntry[], health: Record<string, ModelHealth>,
-  quarantine: Readonly<Record<string, number>> | undefined, current: string, now: number,
-): string | undefined {
-  for (let i = ladder.length - 1; i >= 0; i--) {
-    const l = ladder[i]
-    if (typeof l !== "string" || l === current) continue
-    if (!isHealthy(health[l], now)) continue
-    const qAt = quarantine?.[l]
-    if (qAt !== undefined && now - qAt < QUARANTINE_MS) continue
-    return l
-  }
-  return undefined
 }
 
 export class Controller {
@@ -93,6 +79,14 @@ export class Controller {
   private async fetchMessages(id: string): Promise<OcMessage[]> {
     const r = await this.d.client.session.messages({ path: { id } })
     return r.data ?? []
+  }
+
+  private findInput(current: string, sessionID: string, now: number): FindResolutionInput {
+    return {
+      current, health: this.d.health, quarantine: this.d.state.get(sessionID).quarantine, now,
+      consent: this.d.cfg.privacy.consent, fetchCatalog: this.d.fetchCatalog,
+      openCodeModels: this.d.openCodeModels, cache: this.d.state,
+    }
   }
 
   async onSessionError(sessionID: string, rawError: unknown, from?: ModelRef): Promise<boolean> {
@@ -140,14 +134,21 @@ export class Controller {
         const i = newest.info
         const current = i.role === "assistant" ? `${i.providerID}/${i.modelID}` : `${i.model!.providerID}/${i.model!.modelID}`
         if (target === undefined) {
-          const ladder = buildLadder(this.d.cfg).filter((l): l is string => typeof l === "string")
-          const start = ladder.indexOf(current)
-          const tried = new Set(triedThisTurn(msgs))
-          const candidates = ladder.slice(start + 1).filter((m) => m !== current && !tried.has(m) && isHealthy(this.d.health[m], started))
-          target = candidates.find((m) => {
-            const at = this.d.state.get(sessionID).quarantine?.[m]
-            return at === undefined || started - at >= QUARANTINE_MS
+          const ladder = buildLadder(this.d.cfg)
+          let start = ladder.indexOf(current)
+          // A shared discovery cache can expire or be replaced by another session; it cannot own this session's position.
+          if (start < 0) start = ladder.findIndex((l) => {
+            if (typeof l === "string") return false
+            if (this.d.state.getFindCache(JSON.stringify(l), started) === current) return true
+            const remote = l.find.via === "openrouter"
+            const id = remote ? (current.startsWith("openrouter/") ? current.slice("openrouter/".length) : undefined) : current
+            return isValidDiscoveredModelId(id) && (remote || !l.find.free || id.endsWith("-free")) && new RegExp(l.find.match).test(id)
           })
+          const decision = await walkFromTopAsync({
+            ...this.findInput(current, sessionID, started), ladder: ladder.slice(start + 1),
+            tried: triedThisTurn(msgs), switchCount: 0, maxSwitches: Infinity, allowQuarantined: false,
+          })
+          if (decision.action === "switch") target = decision.to
         }
         if (target === undefined || target === current) return { status: "bottom", from: current }
 
@@ -223,6 +224,9 @@ export class Controller {
         // The judge says quality, not failure: the model is not cooled down or blacklisted.
       } else if (!inGrace) {
         recordFailure(d.health, current, c, now, d.cfg.cooldownMs, resetText)
+        for (const [key, cached] of Object.entries(d.state.findCache)) {
+          if (cached.model === current) d.state.invalidateFindCache(key)
+        }
         // The per-session quarantine rides the record (#64 wiring): refreshed with every mark.
         d.state.set(sessionID, { ...d.state.get(sessionID), quarantine: { ...(d.state.get(sessionID).quarantine ?? {}), [current]: now }, updated: now })
         d.state.save() // health (cooldowns, blacklists) is persisted together with the session record (#39)
@@ -230,21 +234,24 @@ export class Controller {
       }
 
       const ladder = buildLadder(d.cfg)
-      const decision = walkFromTop({
-        ladder, current, health: d.health, tried: triedThisTurn(msgs),
-        quarantine: rec.quarantine, now, switchCount: rec.switchCount, maxSwitches: effectiveMaxSwitches(d.cfg),
+      const input = this.findInput(current, sessionID, now)
+      const decision = await walkFromTopAsync({
+        ...input, ladder, tried: triedThisTurn(msgs),
+        switchCount: rec.switchCount, maxSwitches: effectiveMaxSwitches(d.cfg),
       })
       let to: string
       if (decision.action === "switch") to = decision.to
       else {
         // AC-07 onExhausted acts: a last-resort hop to the deepest healthy level (even at the cap,
         // P1-F4); none healthy -> the /relay next hint, never a silent no-op.
-        const fallback = fallbackLevel(ladder, d.health, rec.quarantine, current, now)
-        if (fallback === undefined) {
+        const fallback = await walkFromTopAsync({
+          ...input, ladder: [...ladder].reverse(), switchCount: 0, maxSwitches: Infinity, allowQuarantined: false,
+        })
+        if (fallback.action !== "switch") {
           await this.toast(decision.reason === "switch_cap" ? "cap_reached" : "exhausted", {}, "warning", EXHAUSTED_HINT)
           return false
         }
-        to = fallback
+        to = fallback.to
       }
 
       const ex = extractFromMessages(msgs, d.cfg.handover)

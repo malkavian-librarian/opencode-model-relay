@@ -1,0 +1,7 @@
+{
+  "data": [
+    { "id": "fake-org/glm-5.2:free", "pricing": { "prompt": "0" } },
+    { "id": "fake-org/glm-5.3:free", "pricing": { "prompt": "0" } },
+    { "id": "fake-org/glm-5.3", "pricing": { "prompt": "0.000001" } }
+  ]
+}

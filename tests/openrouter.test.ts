@@ -1,10 +1,88 @@
-import { describe, it, expect } from "vitest"
-import { orChat } from "../src/openrouter"
+import { describe, it, expect, vi } from "vitest"
+import { fetchOpenRouterModels, orChat } from "../src/openrouter"
 
 const ok = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } })
 const args = (fetchImpl: typeof fetch) => ({
   baseUrl: "https://openrouter.ai/api/v1", key: "sk-or-SECRETKEY123456", model: "z-ai/glm-5.2",
   system: "sys", user: "usr", maxTokens: 500, timeoutMs: 1000, zdr: false, fetchImpl,
+})
+
+describe("fetchOpenRouterModels", () => {
+  it("reads the public catalog without an authorization header", async () => {
+    let seen: { url: string; init: RequestInit } | undefined
+    const fetchImpl = (async (url: string, init: RequestInit) => {
+      seen = { url, init }
+      return ok({ data: [{ id: "fake-org/glm-5.3:free", pricing: { prompt: "0" } }] })
+    }) as typeof fetch
+    await expect(fetchOpenRouterModels({ baseUrl: "https://openrouter.ai/api/v1", fetchImpl })).resolves.toEqual([
+      { id: "fake-org/glm-5.3:free", pricing: { prompt: "0" } },
+    ])
+    expect(seen?.url).toBe("https://openrouter.ai/api/v1/models")
+    expect(seen?.init.method).toBe("GET")
+    expect(seen?.init.redirect).toBe("manual")
+    expect(seen?.init.headers).toBeUndefined()
+  })
+
+  it("fails safely for an oversized catalog and a non-OpenRouter host", async () => {
+    const oversized = (async () => new Response("{}", { status: 200, headers: { "content-length": "2097153" } })) as typeof fetch
+    await expect(fetchOpenRouterModels({ baseUrl: "https://openrouter.ai/api/v1", fetchImpl: oversized })).rejects.toThrow(/too large/)
+    let called = false
+    const fetchImpl = (async () => { called = true; return ok({ data: [] }) }) as typeof fetch
+    await expect(fetchOpenRouterModels({ baseUrl: "https://evil.example/api/v1", fetchImpl })).rejects.toThrow(/host/)
+    expect(called).toBe(false)
+  })
+
+  it("rejects an HTTP catalog URL before sending a request", async () => {
+    const fetchImpl = vi.fn(async () => ok({ data: [] }))
+    await expect(fetchOpenRouterModels({ baseUrl: "http://openrouter.ai/api/v1", fetchImpl })).rejects.toThrow(/https/)
+    expect(fetchImpl).not.toHaveBeenCalled()
+  })
+
+  it("rejects catalog redirects without following them", async () => {
+    const fetchImpl = vi.fn(async () => new Response(null, { status: 302, headers: { location: "https://evil.example" } }))
+    await expect(fetchOpenRouterModels({ baseUrl: "https://openrouter.ai/api/v1", fetchImpl })).rejects.toThrow(/302/)
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
+    expect(fetchImpl.mock.calls[0]).toEqual([expect.any(String), expect.objectContaining({ redirect: "manual" })])
+  })
+
+  it("times out and aborts catalog requests even when fetch ignores cancellation", async () => {
+    vi.useFakeTimers()
+    let signal: AbortSignal | null | undefined
+    const fetchImpl: typeof fetch = async (_url, init) => {
+      signal = init?.signal
+      return new Promise<Response>(() => {})
+    }
+    try {
+      const result = expect(fetchOpenRouterModels({ baseUrl: "https://openrouter.ai/api/v1", fetchImpl, timeoutMs: 20 })).rejects.toThrow(/timed out/)
+      await vi.advanceTimersByTimeAsync(20)
+      await result
+      expect(signal?.aborted).toBe(true)
+    } finally { vi.useRealTimers() }
+  })
+
+  it("rejects an oversized catalog body without a content-length header", async () => {
+    const fetchImpl = async () => new Response("a".repeat(2_097_153), { status: 200 })
+    await expect(fetchOpenRouterModels({ baseUrl: "https://openrouter.ai/api/v1", fetchImpl })).rejects.toThrow(/too large/)
+  })
+
+  it("cancels a chunked catalog body as soon as it exceeds the cap", async () => {
+    let cancelled = false
+    const chunk = new Uint8Array(1024 * 1024)
+    let chunks = 0
+    const fetchImpl = (async () => ({
+      ok: true, status: 200, headers: new Headers(),
+      body: {
+        getReader: () => ({
+          read: async () => ({ value: chunk, done: chunks++ >= 3 }),
+          cancel: async () => { cancelled = true },
+          releaseLock: () => {},
+        }),
+      },
+      text: async () => "{}",
+    })) as unknown as typeof fetch
+    await expect(fetchOpenRouterModels({ baseUrl: "https://openrouter.ai/api/v1", fetchImpl })).rejects.toThrow(/too large/)
+    expect(cancelled).toBe(true)
+  })
 })
 
 describe("orChat", () => {

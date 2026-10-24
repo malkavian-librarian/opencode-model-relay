@@ -7,7 +7,7 @@ import { StateStore } from "./state"
 import { SessionLock } from "./session-lock"
 import { SwitchLog } from "./switchlog"
 import { createNarrator } from "./narrator"
-import { orChat } from "./openrouter"
+import { fetchOpenRouterModels, orChat } from "./openrouter"
 import { modelKey, parseModel, type ClientLike } from "./types"
 import { isV2Active } from "./v2"
 
@@ -17,17 +17,28 @@ export const RELAY_TOOL_DESCRIPTION = "Show the opencode-model-relay failover st
 
 export const INIT_COMMAND_TEMPLATE = "Call the relay_init tool and print its output verbatim. Do nothing else."
 export const INIT_TOOL_DESCRIPTION = "Create a commented default opencode-model-relay config file (never overwrites an existing one) and list the configured models. Use it only when the user asks to set up or initialise the relay."
+const PROVIDER_DISCOVERY_TIMEOUT_MS = 5_000
 
 /** Lists "provider/model" ids from OpenCode's configured providers. Reads only ids, never provider options or keys. */
-export async function listProviderModels(client: ClientLike): Promise<string[]> {
+export async function listProviderModels(client: ClientLike, timeoutMs = PROVIDER_DISCOVERY_TIMEOUT_MS): Promise<string[]> {
   if (!client.config) throw new Error("client.config unavailable")
-  const res = await client.config.providers()
-  const out: string[] = []
-  for (const p of res?.data?.providers ?? []) {
-    if (typeof p?.id !== "string") continue
-    for (const modelId of Object.keys(p.models ?? {})) out.push(`${p.id}/${modelId}`)
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    const providers = client.config.providers()
+    const timeout = new Promise<undefined>((resolve) => {
+      timer = setTimeout(() => resolve(undefined), timeoutMs)
+    })
+    const res = await Promise.race([providers, timeout])
+    if (!res) return []
+    const out: string[] = []
+    for (const p of res.data?.providers ?? []) {
+      if (typeof p?.id !== "string") continue
+      for (const modelId of Object.keys(p.models ?? {})) out.push(`${p.id}/${modelId}`)
+    }
+    return out
+  } finally {
+    if (timer !== undefined) clearTimeout(timer)
   }
-  return out
 }
 
 type Env = Record<string, string | undefined>
@@ -57,6 +68,8 @@ export function createRelay(env: Env, client: ClientLike): RelayParts {
   const controller = new Controller({
     client, cfg, lock: new SessionLock(), state, health: state.health, narrate,
     switchLog: new SwitchLog(ledgerDir, cfg.ledger.enabled), env, now: Date.now, chat: orChat, log,
+    fetchCatalog: () => fetchOpenRouterModels({ baseUrl: cfg.openrouter.baseUrl, allowCustomBaseUrl: cfg.openrouter.allowCustomBaseUrl }),
+    openCodeModels: () => listProviderModels(client),
   })
   return { controller, state, warnings, narrate }
 }

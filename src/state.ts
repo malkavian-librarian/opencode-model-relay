@@ -22,6 +22,7 @@ export interface SessionRecord {
 
 /** Global per-day judge budget, keyed by UTC date so it resets itself at midnight. */
 export interface JudgeDaily { date?: string; calls?: number; costUsd?: number }
+export interface FindCacheEntry { model: string; resolvedAt: number }
 
 const TTL_MS = 14 * 24 * 3600 * 1000
 const MAX_SESSIONS = 500
@@ -29,12 +30,18 @@ const MAX_SESSIONS = 500
 // model, see controller.onSessionIdle); cooldowns expire by their own timestamp.
 const MAX_HEALTH = 200
 const PERMANENT_TTL_MS = 24 * 3600 * 1000
+export const FIND_CACHE_TTL_MS = 60 * 60 * 1000
+const MAX_FIND_CACHE = 64
 
 const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v)
 
 // Model keys are "provider/model" ids from config or OpenCode's own provider list; never transcript text.
 function isModelKey(v: unknown): v is string {
   return typeof v === "string" && v.length > 0 && v.length <= 256 && !/[\u0000-\u001f\u007f\u0080-\u009f]/.test(v)
+}
+
+function isDiscoveredModel(v: unknown): v is string {
+  return typeof v === "string" && v.length > 0 && v.length <= 128 && /^[A-Za-z0-9._:-]+(?:\/[A-Za-z0-9._:-]+)*$/.test(v)
 }
 
 // A hostile quarantine map is bounded: entries beyond MAX_QUARANTINE_MODELS are dropped at load.
@@ -118,6 +125,19 @@ function sanitizeHealth(raw: unknown, now: number): Record<string, ModelHealth> 
   return out
 }
 
+function sanitizeFindCache(raw: unknown, now: number): Record<string, FindCacheEntry> {
+  const out: Record<string, FindCacheEntry> = Object.create(null)
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return out
+  for (const [key, value] of Object.entries(raw).slice(0, MAX_FIND_CACHE)) {
+    if (key.length > 512 || !value || typeof value !== "object" || Array.isArray(value)) continue
+    const r = value as Record<string, unknown>
+    if (isDiscoveredModel(r.model) && isNum(r.resolvedAt) && r.resolvedAt >= 0 && r.resolvedAt <= now && now - r.resolvedAt <= FIND_CACHE_TTL_MS) {
+      out[key] = { model: r.model, resolvedAt: Math.floor(r.resolvedAt) }
+    }
+  }
+  return out
+}
+
 export class StateStore {
   // null-prototype so ids like "constructor" / "__proto__" are plain keys
   private sessions: Record<string, SessionRecord> = Object.create(null)
@@ -125,6 +145,7 @@ export class StateStore {
   readonly health: Record<string, ModelHealth> = Object.create(null)
   // Global judge budget of the current UTC day; the controller writes, this class owns persistence.
   readonly judgeDaily: JudgeDaily = Object.create(null)
+  readonly findCache: Record<string, FindCacheEntry> = Object.create(null)
   constructor(private file: string, private now: () => number = Date.now) {}
 
   load(): void {
@@ -132,7 +153,7 @@ export class StateStore {
     try {
       const raw: unknown = JSON.parse(fs.readFileSync(this.file, "utf8"))
       if (raw && typeof raw === "object" && !Array.isArray(raw)) {
-        const o = raw as { v?: unknown; sessions?: unknown; health?: unknown; judgeDaily?: unknown }
+        const o = raw as { v?: unknown; sessions?: unknown; health?: unknown; judgeDaily?: unknown; findCache?: unknown }
         if (o.v === 1 && o.sessions && typeof o.sessions === "object" && !Array.isArray(o.sessions)) {
           for (const [id, rec] of Object.entries(o.sessions)) {
             const clean = sanitize(rec)
@@ -143,11 +164,14 @@ export class StateStore {
         for (const k of Object.keys(this.health)) delete this.health[k]
         Object.assign(this.health, loadedHealth)
         Object.assign(this.judgeDaily, sanitizeJudgeDaily(o.judgeDaily))
+        for (const k of Object.keys(this.findCache)) delete this.findCache[k]
+        Object.assign(this.findCache, sanitizeFindCache(o.findCache, this.now()))
       }
     } catch {
       this.sessions = Object.create(null)
       for (const k of Object.keys(this.health)) delete this.health[k]
       for (const k of Object.keys(this.judgeDaily) as (keyof JudgeDaily)[]) delete this.judgeDaily[k]
+      for (const k of Object.keys(this.findCache)) delete this.findCache[k]
     }
     this.prune()
   }
@@ -156,6 +180,23 @@ export class StateStore {
     return this.sessions[id] ?? { switchCount: 0, updated: 0 }
   }
   set(id: string, r: SessionRecord): void { this.sessions[id] = r }
+
+  getFindCache(key: string, now = this.now()): string | undefined {
+    const entry = this.findCache[key]
+    if (!entry || entry.resolvedAt > now || now - entry.resolvedAt > FIND_CACHE_TTL_MS || !isDiscoveredModel(entry.model)) {
+      delete this.findCache[key]
+      return undefined
+    }
+    return entry.model
+  }
+
+  setFindCache(key: string, model: string, resolvedAt = this.now()): void {
+    if (key.length > 512 || !isDiscoveredModel(model) || !isNum(resolvedAt) || resolvedAt < 0) return
+    if (this.findCache[key] === undefined && Object.keys(this.findCache).length >= MAX_FIND_CACHE) delete this.findCache[Object.keys(this.findCache)[0] as string]
+    this.findCache[key] = { model, resolvedAt: Math.floor(resolvedAt) }
+  }
+
+  invalidateFindCache(key: string): void { delete this.findCache[key] }
 
   /** Drops persisted pluginPinned values that no longer resolve to a configured level (config change or hostile file). */
   validatePinned(known: ReadonlySet<string>): void {
@@ -193,7 +234,7 @@ export class StateStore {
     try {
       this.prune()
       fs.mkdirSync(path.dirname(this.file), { recursive: true, mode: 0o700 })
-      fs.writeFileSync(tmp, JSON.stringify({ v: 1, sessions: this.sessions, health: this.health, judgeDaily: this.judgeDaily }), { mode: 0o600 })
+      fs.writeFileSync(tmp, JSON.stringify({ v: 1, sessions: this.sessions, health: this.health, judgeDaily: this.judgeDaily, findCache: this.findCache }), { mode: 0o600 })
       fs.renameSync(tmp, this.file)
     } catch {
       /* state is best effort; never affect the session */

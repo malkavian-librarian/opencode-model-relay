@@ -9,6 +9,7 @@ import { StateStore } from "../src/state"
 import { createNarrator } from "../src/narrator"
 import { RELAY_MARKER } from "../src/defaults"
 import type { OcMessage } from "../src/types"
+import { listProviderModels } from "../src/server"
 
 const err429 = { name: "APIError", data: { statusCode: 429, isRetryable: true, message: "", responseBody: "slow", responseHeaders: {} } }
 const msgs = (model = { providerID: "a", modelID: "1" }, id = "a1"): OcMessage[] => [
@@ -137,6 +138,30 @@ describe("Controller.onSessionError", () => {
     expect(calls.logs[0]).toMatchObject({ sessionID: "s1", from: "a/1", to: "b/2", kind: "rate_limit" })
     expect(calls.logs[0].elapsedMs).toEqual(expect.any(Number))
     expect(calls.toast.join(" ")).toContain("b/2")
+  })
+  it("resolves a find level during production failover", async () => {
+    const entry = { find: { match: "glm-5", free: true, via: "openrouter" as const } }
+    const { c, d, calls } = setup({
+      cfg: { levels: ["a/1", entry, "b/2"], privacy: { consent: true } },
+    })
+    let fetches = 0
+    ;(d as any).fetchCatalog = async () => {
+      fetches++
+      return [{ id: "fake-org/glm-5.3:free", pricing: { prompt: "0" } }]
+    }
+    await expect(c.onSessionError("s1", err429)).resolves.toBe(true)
+    expect(fetches).toBe(1)
+    expect(calls.prompt[0].body.model).toEqual({ providerID: "openrouter", modelID: "fake-org/glm-5.3:free" })
+  })
+
+  it("skips a find level when production resolution fails", async () => {
+    const entry = { find: { match: "glm-5", free: true, via: "openrouter" as const } }
+    const { c, d, calls } = setup({
+      cfg: { levels: ["a/1", entry, "b/2"], privacy: { consent: true } },
+    })
+    ;(d as any).fetchCatalog = async () => { throw new Error("catalog unavailable") }
+    await expect(c.onSessionError("s1", err429)).resolves.toBe(true)
+    expect(calls.prompt[0].body.model).toEqual({ providerID: "b", modelID: "2" })
   })
   it("sends nothing to OpenRouter without consent, and uses the plain tail", async () => {
     const { c, calls } = setup({ env: { OPENROUTER_API_KEY: "k" } })
@@ -423,6 +448,24 @@ describe("Controller.onSessionError", () => {
   })
 })
 
+describe("OpenCode provider discovery", () => {
+  it("skips a hung provider list within its bounded timeout", async () => {
+    vi.useFakeTimers()
+    try {
+      let rejectProviders!: (error: Error) => void
+      const client: any = { config: { providers: vi.fn(() => new Promise((_, reject) => { rejectProviders = reject })) } }
+      const result = listProviderModels(client, 1_000)
+      await vi.advanceTimersByTimeAsync(1_000)
+      await expect(result).resolves.toEqual([])
+      rejectProviders(new Error("provider request stalled"))
+      await Promise.resolve()
+      expect(client.config.providers).toHaveBeenCalledOnce()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
 describe("Controller.onSessionIdle", () => {
   it("lifts the failing model's blacklist on the next successful turn and persists the clear", async () => {
     const { c, d } = setup({ cfg: { privacy: { consent: true } }, env: { OPENROUTER_API_KEY: "k" } })
@@ -521,6 +564,66 @@ describe("deferred narrative freshness", () => {
   }
 })
 
+describe("Controller find discovery (#69)", () => {
+  const entry = { find: { match: "glm", free: true, via: "openrouter" } }
+  const catalog = [{ id: "org/glm:free", pricing: { prompt: "0" } }]
+
+  for (const flow of ["failover", "next", "exhaustion"] as const) {
+    for (const consent of [false, true]) {
+      it(`${flow} resolves find levels only with consent=${consent}`, async () => {
+        const { c, d, calls } = setup({ cfg: { levels: ["a/1", entry], privacy: { consent }, maxSwitchesPerSession: 1 } })
+        const fetchCatalog = vi.fn(async () => catalog)
+        Object.assign(d, { fetchCatalog })
+        if (flow === "exhaustion") d.state.set("s1", { switchCount: 1, updated: 1_000_000 })
+        if (flow === "next") expect((await c.manualSwitch("s1")).status).toBe(consent ? "switched" : "bottom")
+        else expect(await c.onSessionError("s1", err429)).toBe(consent)
+        expect(fetchCatalog).toHaveBeenCalledTimes(consent ? 1 : 0)
+        expect(calls.prompt).toHaveLength(consent ? 1 : 0)
+        if (consent) {
+          expect(calls.prompt[0].body.model).toEqual({ providerID: "openrouter", modelID: "org/glm:free" })
+          const restored = new StateStore((d.state as any).file, () => 1_000_000); restored.load()
+          expect(restored.getFindCache(JSON.stringify(entry), 1_000_000)).toBe("openrouter/org/glm:free")
+        }
+      })
+    }
+  }
+
+  it.each([undefined, "openrouter/org/glm:free", "openrouter/org/glm-other:free"])("next keeps the current discovered level's position with cache=%s", async (cached) => {
+    const { c, d, calls } = setup({
+      cfg: { levels: ["a/1", entry, "b/2"], privacy: { consent: true } },
+      messages: msgs({ providerID: "openrouter", modelID: "org/glm:free" }),
+    })
+    if (cached) d.state.setFindCache(JSON.stringify(entry), cached, 1_000_000)
+    const fetchCatalog = vi.fn(async () => catalog)
+    Object.assign(d, { fetchCatalog })
+    expect(await c.manualSwitch("s1")).toMatchObject({ status: "switched", to: "b/2" })
+    expect(fetchCatalog).not.toHaveBeenCalled()
+    expect(calls.prompt[0].body.model).toEqual({ providerID: "b", modelID: "2" })
+    expect(d.state.get("s1").switchCount).toBe(0)
+  })
+
+  it("invalidates a failed discovered model even when a higher static level wins", async () => {
+    const { c, d } = setup({
+      cfg: { levels: ["b/2", entry], privacy: { consent: true } },
+      messages: msgs({ providerID: "openrouter", modelID: "org/glm:free" }),
+    })
+    d.state.setFindCache(JSON.stringify(entry), "openrouter/org/glm:free", 1_000_000)
+    expect(await c.onSessionError("s1", err429)).toBe(true)
+    expect(d.state.getFindCache(JSON.stringify(entry), 1_000_000)).toBeUndefined()
+  })
+
+  for (const flow of ["next", "exhaustion"] as const) {
+    it(`${flow} does not fall back to a quarantined discovery`, async () => {
+      const { c, d, calls } = setup({ cfg: { levels: ["a/1", entry], privacy: { consent: true }, maxSwitchesPerSession: 1 } })
+      Object.assign(d, { fetchCatalog: async () => catalog })
+      d.state.set("s1", { switchCount: 1, updated: 1_000_000, quarantine: { "openrouter/org/glm:free": 1_000_000 } })
+      if (flow === "next") expect((await c.manualSwitch("s1")).status).toBe("bottom")
+      else expect(await c.onSessionError("s1", err429)).toBe(false)
+      expect(calls.prompt).toHaveLength(0)
+    })
+  }
+})
+
 describe("Controller.manualSwitch (#67)", () => {
   it("switches to an explicit model with plain-tail handover and manual metadata", async () => {
     const { c, d, calls } = setup({ cfg: { maxSwitchesPerSession: 1 } })
@@ -546,6 +649,18 @@ describe("Controller.manualSwitch (#67)", () => {
     expect(calls.prompt[0].body.model).toEqual({ providerID: "c", modelID: "3" })
     expect(d.state.get("s1").switchCount).toBe(1)
     expect(calls.logs[0]).toMatchObject({ kind: "manual" })
+  })
+
+  it("next resolves a find level before falling through to a static model", async () => {
+    const entry = { find: { match: "glm-5", free: true, via: "openrouter" as const } }
+    const { c, d, calls, messages } = setup({
+      cfg: { levels: ["a/1", entry, "b/2"], privacy: { consent: true } },
+    })
+    d.state.set("s1", { pluginPinned: "a/1", switchCount: 1, updated: 1_000_000 })
+    messages.splice(0, messages.length, ...msgs({ providerID: "a", modelID: "1" }, "a1"))
+    ;(d as any).fetchCatalog = async () => [{ id: "fake-org/glm-5.3:free", pricing: { prompt: "0" } }]
+    await expect(c.manualSwitch("s1")).resolves.toMatchObject({ status: "switched", to: "openrouter/fake-org/glm-5.3:free" })
+    expect(calls.prompt[0].body.model).toEqual({ providerID: "openrouter", modelID: "fake-org/glm-5.3:free" })
   })
 
   it("reports lock contention and the bottom of the ladder without throwing", async () => {
