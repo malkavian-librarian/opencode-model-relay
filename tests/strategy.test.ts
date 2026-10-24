@@ -1,11 +1,15 @@
 import { describe, it, expect } from "vitest"
+import fs from "node:fs"
+import os from "node:os"
+import path from "node:path"
 import { defaultConfig } from "../src/config"
 import {
-  buildLadder, clearSuccess, effectiveMaxSwitches, hasRelayMarker,
+  buildLadder, clearSuccess, effectiveMaxSwitches, hasRelayMarker, resolveFindLevel, walkFromTopAsync,
   parseResetCooldown, recordFailure, triedThisTurn, walkFromTop,
   QUARANTINE_MS, RESET_COOLDOWN_MAX_MS,
   type Decision, type ModelHealth,
 } from "../src/strategy"
+import { StateStore } from "../src/state"
 import { RELAY_MARKER } from "../src/defaults"
 import type { Classified, OcMessage } from "../src/types"
 
@@ -131,6 +135,65 @@ describe("walkFromTop (#64)", () => {
   it("exhaustion reasons: switch_cap when at the cap, no_candidates when nothing is walkable", () => {
     expect(w({ switchCount: 6 })).toEqual(CAP)
     expect(w({ current: "c/3", health: { "a/1": { permanent: true }, "b/2": { permanent: true } } })).toEqual(NONE)
+  })
+})
+
+describe("find levels (#69)", () => {
+  const entry = { find: { match: "glm-5\\.[23]", free: true, via: "openrouter" as const } }
+  const base = { current: "openai/current", health: {}, tried: [], quarantine: {}, now: 1_000, switchCount: 0, maxSwitches: 6 }
+
+  it("does not fetch when consent is off", async () => {
+    let calls = 0
+    await expect(resolveFindLevel(entry, {
+      ...base, consent: false, fetchCatalog: async () => { calls++; return [] },
+    })).resolves.toBeUndefined()
+    expect(calls).toBe(0)
+  })
+
+  it("resolves a find level only while walking the failover ladder", async () => {
+    let calls = 0
+    await expect(walkFromTopAsync({ ladder: [entry], ...base, consent: true, fetchCatalog: async () => {
+      calls++
+      return [{ id: "fake-org/glm-5.2:free", pricing: { prompt: "0" } }]
+    }})).resolves.toEqual(sw("openrouter/fake-org/glm-5.2:free"))
+    expect(calls).toBe(1)
+  })
+
+  it("chooses the first healthy free catalog candidate and skips unhealthy ones", async () => {
+    await expect(resolveFindLevel(entry, {
+      ...base, consent: true, fetchCatalog: async () => [
+        { id: "fake-org/glm-5.2:free", pricing: { prompt: "0" } },
+        { id: "fake-org/glm-5.3:free", pricing: { prompt: "0" } },
+        { id: "fake-org/glm-5.4", pricing: { prompt: "1" } },
+      ], health: { "openrouter/fake-org/glm-5.2:free": { permanent: true } },
+    })).resolves.toBe("openrouter/fake-org/glm-5.3:free")
+  })
+
+  it("uses OpenCode -free ids for non-OpenRouter discovery", async () => {
+    await expect(resolveFindLevel({ find: { match: "glm-5", free: true } }, {
+      ...base, consent: true, openCodeModels: ["opencode/glm-5.2", "opencode/glm-5.3-free"],
+    })).resolves.toBe("opencode/glm-5.3-free")
+  })
+
+  it("rejects unsafe ids, caches for an hour, and invalidates a failed result", async () => {
+    let clock = 1_000
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-find-"))
+    const state = new StateStore(path.join(dir, "state.json"), () => clock)
+    state.load()
+    let calls = 0
+    const input = { ...base, consent: true, cache: state, fetchCatalog: async () => {
+      calls++
+      return [{ id: calls === 1 ? "fake-org/glm-5.2:free" : "bad/id?", pricing: { prompt: "0" } }]
+    }}
+    await expect(resolveFindLevel(entry, input)).resolves.toBe("openrouter/fake-org/glm-5.2:free")
+    await expect(resolveFindLevel(entry, input)).resolves.toBe("openrouter/fake-org/glm-5.2:free")
+    expect(calls).toBe(1)
+    clock += 60 * 60 * 1000 + 1
+    input.now = clock
+    await expect(resolveFindLevel(entry, input)).resolves.toBeUndefined()
+    expect(calls).toBe(2)
+    expect(state.getFindCache(JSON.stringify(entry), clock)).toBeUndefined()
+    fs.rmSync(dir, { recursive: true, force: true })
   })
 })
 

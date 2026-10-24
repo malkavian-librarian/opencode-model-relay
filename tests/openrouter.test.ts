@@ -1,10 +1,36 @@
 import { describe, it, expect } from "vitest"
-import { orChat } from "../src/openrouter"
+import { fetchOpenRouterModels, orChat } from "../src/openrouter"
 
 const ok = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } })
 const args = (fetchImpl: typeof fetch) => ({
   baseUrl: "https://openrouter.ai/api/v1", key: "sk-or-SECRETKEY123456", model: "z-ai/glm-5.2",
   system: "sys", user: "usr", maxTokens: 500, timeoutMs: 1000, zdr: false, fetchImpl,
+})
+
+describe("fetchOpenRouterModels", () => {
+  it("reads the public catalog without an authorization header", async () => {
+    let seen: { url: string; init: RequestInit } | undefined
+    const fetchImpl = (async (url: string, init: RequestInit) => {
+      seen = { url, init }
+      return ok({ data: [{ id: "fake-org/glm-5.3:free", pricing: { prompt: "0" } }] })
+    }) as typeof fetch
+    await expect(fetchOpenRouterModels({ baseUrl: "https://openrouter.ai/api/v1", fetchImpl })).resolves.toEqual([
+      { id: "fake-org/glm-5.3:free", pricing: { prompt: "0" } },
+    ])
+    expect(seen?.url).toBe("https://openrouter.ai/api/v1/models")
+    expect(seen?.init.method).toBe("GET")
+    expect(seen?.init.redirect).toBe("manual")
+    expect(seen?.init.headers).toBeUndefined()
+  })
+
+  it("fails safely for an oversized catalog and a non-OpenRouter host", async () => {
+    const oversized = (async () => new Response("{}", { status: 200, headers: { "content-length": "2097153" } })) as typeof fetch
+    await expect(fetchOpenRouterModels({ baseUrl: "https://openrouter.ai/api/v1", fetchImpl: oversized })).rejects.toThrow(/too large/)
+    let called = false
+    const fetchImpl = (async () => { called = true; return ok({ data: [] }) }) as typeof fetch
+    await expect(fetchOpenRouterModels({ baseUrl: "https://evil.example/api/v1", fetchImpl })).rejects.toThrow(/host/)
+    expect(called).toBe(false)
+  })
 })
 
 describe("orChat", () => {

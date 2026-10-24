@@ -1,5 +1,7 @@
 import type { RelayConfig } from "./config"
 import type { Classified, OcMessage } from "./types"
+import type { OpenRouterCatalogModel } from "./openrouter"
+import type { StateStore } from "./state"
 import { RELAY_MARKER } from "./defaults"
 
 export interface ModelHealth { permanent?: boolean; permanentAt?: number; cooldownUntil?: number; failures?: number }
@@ -77,6 +79,74 @@ function retryAfterUntil(ra: number | undefined, now: number): number | undefine
 // --- Levels ladder (redesign plan sections 4.1/4.2.3/4.5, #64) ---
 
 export type LevelEntry = RelayConfig["levels"][number]
+
+export interface FindResolutionInput {
+  current: string; health: Record<string, ModelHealth>; tried?: readonly string[]
+  quarantine?: Readonly<Record<string, number>>; now: number; consent: boolean
+  openCodeModels?: readonly string[]; fetchCatalog?: () => Promise<OpenRouterCatalogModel[]>
+  cache?: Pick<StateStore, "getFindCache" | "setFindCache" | "invalidateFindCache">
+  failed?: string
+}
+
+const DISCOVERED_ID = /^[A-Za-z0-9._:-]+(?:\/[A-Za-z0-9._:-]+)*$/
+const FIND_CACHE_KEY = (entry: LevelEntry): string => JSON.stringify(entry)
+
+/** External model ids may contain provider separators, but no control or URL/shell characters. */
+export function isValidDiscoveredModelId(id: unknown): id is string {
+  return typeof id === "string" && id.length > 0 && id.length <= 128 && DISCOVERED_ID.test(id)
+}
+
+/** Resolves one matcher only when walked; consent is checked before either local or remote discovery. */
+export async function resolveFindLevel(entry: Exclude<LevelEntry, string>, i: FindResolutionInput): Promise<string | undefined> {
+  if (!i.consent) return undefined
+  const key = FIND_CACHE_KEY(entry)
+  if (i.failed !== undefined && i.cache) i.cache.invalidateFindCache(key)
+  const cached = i.cache?.getFindCache(key, i.now)
+  const quarantined = (m: string): boolean => {
+    const at = i.quarantine?.[m]
+    return at !== undefined && i.now - at < QUARANTINE_MS
+  }
+  const usable = (m: string): boolean => m !== i.current && !i.tried?.includes(m) && isHealthy(i.health[m], i.now)
+  if (cached && usable(cached)) return cached
+  if (cached) i.cache?.invalidateFindCache(key)
+  let candidates: string[] = []
+  try {
+    const re = new RegExp(entry.find.match)
+    if (entry.find.via === "openrouter") {
+      const rows = i.fetchCatalog ? await i.fetchCatalog() : []
+      candidates = rows.filter((m) => typeof m.id === "string" && (!entry.find.free || m.pricing?.prompt === "0") && re.test(m.id) && isValidDiscoveredModelId(m.id))
+        .map((m) => `openrouter/${m.id}`)
+    } else {
+      candidates = (i.openCodeModels ?? []).filter((m) => isValidDiscoveredModelId(m) && (!entry.find.free || m.endsWith("-free")) && re.test(m))
+    }
+  } catch { return undefined }
+  const healthy = candidates.filter(usable)
+  const pick = healthy.find((m) => !quarantined(m)) ?? healthy[0]
+  if (pick !== undefined) i.cache?.setFindCache(key, pick, i.now)
+  return pick
+}
+
+/** Async ladder walk used by failover/command callers so find entries stay lazy. */
+export async function walkFromTopAsync(i: {
+  ladder: readonly LevelEntry[]; current: string; health: Record<string, ModelHealth>
+  tried?: readonly string[]; quarantine?: Readonly<Record<string, number>>; now: number
+  switchCount: number; maxSwitches: number; consent: boolean; openCodeModels?: readonly string[]
+  fetchCatalog?: () => Promise<OpenRouterCatalogModel[]>; cache?: FindResolutionInput["cache"]
+}): Promise<Decision> {
+  if (i.switchCount >= i.maxSwitches) return { action: "exhausted", reason: "switch_cap" }
+  const candidates: string[] = []
+  for (const level of i.ladder) {
+    const model = typeof level === "string" ? level : await resolveFindLevel(level, i)
+    if (model === undefined || model === i.current || i.tried?.includes(model) || !isHealthy(i.health[model], i.now)) continue
+    candidates.push(model)
+  }
+  const quarantined = (m: string): boolean => {
+    const at = i.quarantine?.[m]
+    return at !== undefined && i.now - at < QUARANTINE_MS
+  }
+  const pick = candidates.find((m) => !quarantined(m)) ?? candidates[0]
+  return pick === undefined ? { action: "exhausted", reason: "no_candidates" } : { action: "switch", to: pick }
+}
 
 /** Ordered, deduped ladder (first occurrence wins); find entries are carried unresolved — the discovery child (#69) resolves them. */
 export function buildLadder(cfg: RelayConfig): LevelEntry[] {
