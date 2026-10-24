@@ -7,12 +7,13 @@ import {
   buildLadder, clearSuccess, effectiveMaxSwitches, hasRelayMarker, recordFailure, triedThisTurn,
   isValidDiscoveredModelId, walkFromTopAsync, type FindResolutionInput, type ModelHealth,
 } from "./strategy"
+import { FIND_CACHE_TTL_MS } from "./state"
 import { heuristicReasons, observeTurn } from "./heuristics"
 import { buildJudgeInput, parseVerdict } from "./judge"
 import type { SessionLock } from "./session-lock"
 import type { StateStore } from "./state"
 import type { createNarrator, NarrationEvent } from "./narrator"
-import type { SwitchLog } from "./switchlog"
+import type { SwitchLog, SwitchLogRow } from "./switchlog"
 import type { orChat } from "./openrouter"
 import { buildHandover, extractFromMessages, writeNarrative } from "./handover"
 
@@ -36,7 +37,7 @@ export interface Deps {
   state: StateStore
   health: Record<string, ModelHealth>
   narrate: ReturnType<typeof createNarrator>
-  switchLog: { append: SwitchLog["append"] }
+  switchLog: { append: SwitchLog["append"]; recent?: (limit?: number) => SwitchLogRow[] }
   env: Record<string, string | undefined>
   now: () => number
   chat: typeof orChat
@@ -575,16 +576,56 @@ export class Controller {
   }
 
   status(sessionID?: string): string {
-    const d = this.d
-    const rec = sessionID ? d.state.get(sessionID) : undefined
-    const chain = buildLadder(d.cfg).map((l) => (typeof l === "string" ? l : "(unresolved find)")).join(" -> ")
+    try {
+      const d = this.d
+      const now = d.now()
+      const rec = sessionID ? d.state.get(sessionID) : undefined
+      const ladder = buildLadder(d.cfg)
+      const chain = ladder.map((level) => typeof level === "string" ? level : "(unresolved find)").join(" -> ")
+      const levels = ladder.map((level, index) => {
+        if (typeof level === "string") return `${index + 1}. ${level} ${this.healthStatus(level, now)}`
+        if (!d.cfg.privacy.consent) return `${index + 1}. find [consent-gated]`
+        const cached = d.state.findCache[JSON.stringify(level)]
+        if (!cached || cached.resolvedAt > now || now - cached.resolvedAt > FIND_CACHE_TTL_MS) {
+          return `${index + 1}. find [unresolved]`
+        }
+        return `${index + 1}. find [resolved -> ${cached.model} (cached, ageMs: ${Math.max(0, now - cached.resolvedAt)})] ${this.healthStatus(cached.model, now)}`
+      })
+      const rows = (d.switchLog.recent?.(10) ?? []).slice(-10)
+      const manual = rows.filter((row) => row.kind === "manual").length
+      const auto = rows.filter((row) => row.kind !== "manual" && row.kind !== "switch_dropped").length
+      return [
+        `chain: ${chain || "(no levels configured)"}`,
+        `ladder:\n${levels.join("\n") || "(no levels configured)"}`,
+        `pluginPinned: ${rec?.pluginPinned ?? "none"}`,
+        `pinned: ${rec?.pluginPinned ?? "none"}`,
+        `adoptedAt: ${rec?.adoptedAt ?? "none"}`,
+        `switches: ${rec?.switchCount ?? 0}`,
+        `consent: ${d.cfg.privacy.consent ? "on" : "off"}`,
+        `key: ${d.env[d.cfg.openrouter.keyEnv] ? "set" : "missing"}`,
+        `counts: manual ${manual}, auto ${auto}`,
+        "last 10 ledger entries:",
+        ...(rows.length ? rows.map((row) => this.formatLedgerRow(row)) : ["(none)"]),
+      ].join("\n")
+    } catch { return "relay status unavailable" }
+  }
+
+  private healthStatus(model: string, now: number): string {
+    const health = this.d.health[model]
+    if (health?.permanent) return `blacklisted-until: ${health.permanentAt === undefined ? "unknown" : health.permanentAt + 24 * 60 * 60 * 1000}`
+    if (health?.cooldownUntil !== undefined && health.cooldownUntil > now) return `cooldown ${health.cooldownUntil - now}ms`
+    return "healthy"
+  }
+
+  private formatLedgerRow(row: SwitchLogRow): string {
     return [
-      `chain: ${chain || "(no levels configured)"}`,
-      `pinned: ${rec?.pluginPinned ?? "none"}`,
-      `switches: ${rec?.switchCount ?? 0}`,
-      `consent: ${d.cfg.privacy.consent ? "on" : "off"}`,
-      `key: ${d.env[d.cfg.openrouter.keyEnv] ? "set" : "missing"}`,
-    ].join("\n")
+      `ts=${row.ts}`, `session=${row.session}`, `kind=${row.kind}`,
+      ...(row.reason === undefined ? [] : [`reason=${row.reason}`]),
+      `elapsedMs=${row.elapsedMs}`,
+      ...(row.from === undefined ? [] : [`from=${row.from}`]),
+      ...(row.to === undefined ? [] : [`to=${row.to}`]),
+      ...(row.helperCostUsd === undefined ? [] : [`helperCostUsd=${row.helperCostUsd}`]),
+    ].join(" ")
   }
 }
 

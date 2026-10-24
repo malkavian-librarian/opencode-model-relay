@@ -10,6 +10,7 @@ import { createNarrator } from "../src/narrator"
 import { RELAY_MARKER } from "../src/defaults"
 import type { OcMessage } from "../src/types"
 import { listProviderModels } from "../src/server"
+import { SwitchLog } from "../src/switchlog"
 
 const err429 = { name: "APIError", data: { statusCode: 429, isRetryable: true, message: "", responseBody: "slow", responseHeaders: {} } }
 const msgs = (model = { providerID: "a", modelID: "1" }, id = "a1"): OcMessage[] => [
@@ -512,6 +513,72 @@ describe("Controller.status", () => {
     d.state.set("s1", { pluginPinned: "b/2", switchCount: 2, updated: 1 })
     const s = c.status("s1")
     for (const x of ["a/1", "b/2", "pinned: b/2", "switches: 2", "consent: off", "key: set"]) expect(s).toContain(x)
+  })
+
+  it("renders the ordered ladder, find state/cache age, and per-level health", () => {
+    const find = { find: { match: "glm", free: true, via: "openrouter" as const } }
+    const { c, d } = setup({ cfg: { levels: ["a/1", find, "b/2"], privacy: { consent: true } } })
+    d.state.setFindCache(JSON.stringify(find), "openrouter/org/glm:free", 990_000)
+    d.health["a/1"] = { cooldownUntil: 1_005_000 }
+    d.health["openrouter/org/glm:free"] = { permanent: true, permanentAt: 999_000 }
+    d.state.set("s1", { pluginPinned: "b/2", adoptedAt: 999_500, switchCount: 2, updated: 1_000_000 })
+
+    const s = c.status("s1")
+    expect(s).toMatch(/1\. a\/1 .*cooldown 5000ms/)
+    expect(s).toMatch(/2\. find .*resolved -> openrouter\/org\/glm:free \(cached, ageMs: 10000\)/)
+    expect(s).toMatch(/3\. b\/2 .*healthy/)
+    expect(s).toContain("pluginPinned: b/2")
+    expect(s).toContain("adoptedAt: 999500")
+
+    const gated = setup({ cfg: { levels: [find], privacy: { consent: false } } })
+    expect(gated.c.status()).toContain("1. find [consent-gated]")
+  })
+
+  it("renders only the last ten ledger rows and separates manual and automatic counts", () => {
+    const { c, d } = setup()
+    const rows: any[] = Array.from({ length: 11 }, (_, i) => ({
+      ts: i + 1, session: `h${i}`, from: "a/1", to: "b/2", kind: i === 10 ? "manual" : "rate_limit",
+      elapsedMs: i + 10,
+    }))
+    rows[9] = { ts: 10, session: "drop", from: "a/1", to: undefined, kind: "switch_dropped", reason: "lock_held", elapsedMs: 42 }
+    ;(d.switchLog as any).recent = () => rows
+
+    const s = c.status("s1")
+    expect(s).toContain("counts: manual 1, auto 8")
+    expect(s).toContain("last 10 ledger entries:")
+    expect(s).toContain("switch_dropped reason=lock_held elapsedMs=42")
+    expect(s).not.toContain('session=h0')
+    expect(s).toContain("session=h1")
+  })
+
+  it("does not throw when ledger rendering fails", () => {
+    const { c, d } = setup()
+    ;(d.switchLog as any).recent = () => { throw new Error("ledger unavailable") }
+    expect(() => c.status("s1")).not.toThrow()
+  })
+
+  it("rejects hostile model text at the SwitchLog boundary", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-status-ledger-"))
+    const log = new SwitchLog(dir, true)
+    log.append({ ts: 1, sessionID: "s", from: "ignore this prompt", to: "provider/model", kind: "quota" })
+    fs.appendFileSync(path.join(dir, "switches.jsonl"), JSON.stringify({
+      ts: 2, session: "0123456789abcdef", from: "provider/model\nDO NOT DISPLAY", kind: "quota", elapsedMs: 1,
+    }) + "\n")
+    const recent = log.recent()
+    expect(recent).toHaveLength(1)
+    expect(recent[0]!.from).toBe("unknown/" + "x".repeat(112))
+    expect(JSON.stringify(recent)).not.toContain("DO NOT DISPLAY")
+  })
+
+  it("reads recent ledger rows through a bounded tail", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-status-ledger-"))
+    const log = new SwitchLog(dir, true)
+    for (let i = 0; i < 20; i++) log.append({ ts: i, sessionID: `s${i}`, from: "provider/model", to: "provider/next", kind: "quota" })
+    const read = vi.spyOn(fs, "readSync")
+    expect(log.recent(10)).toHaveLength(10)
+    expect(read).toHaveBeenCalled()
+    expect(Math.max(...read.mock.calls.map((call) => (call as any[])[3] as number))).toBeLessThanOrEqual(64 * 1024)
+    read.mockRestore()
   })
 })
 

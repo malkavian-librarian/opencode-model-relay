@@ -112,6 +112,45 @@ File: `~/.config/opencode/opencode-model-relay.jsonc` (JSONC, max 64 KB). It is 
   - `state.json`: per-session sticky model and counters (helper/judge call counts, cooldowns, the optional daily judge spend bucket).
   - `salt`: the random per-install salt used for the session-id HMAC.
 
+## Reading the switch log
+
+`/relay status` is the operational dashboard. It lists the configured ladder in order,
+including whether a find level is `unresolved`, `consent-gated`, or resolved to a
+cached model (with its cache age), then shows each level's health. Health is either
+`healthy`, a remaining cooldown, or a `blacklisted-until` timestamp. The dashboard
+also shows `pluginPinned`, the most recent `adoptedAt`, the switch count, key presence
+(`set` or `missing`, never the key), the consent state, the last ten ledger rows, and
+separate manual and automatic counts for those rows. The counts do not implement
+analytics; aggregation and `stats.json` remain tracked by [issue #7](https://github.com/malkavian-librarian/opencode-model-relay/issues/7).
+
+Each `switches.jsonl` row is metadata-only and uses these fields:
+
+| Field | Meaning |
+|---|---|
+| `ts` | Numeric Unix timestamp recorded when the event starts. |
+| `session` | The first 16 hexadecimal characters of the per-install HMAC of the OpenCode session id. |
+| `from` / `to` | The source and destination `provider/model` identifiers, when known. |
+| `kind` | An enum: failure kind, `quality`, `manual`, or `switch_dropped`. |
+| `reason` | For `switch_dropped` only: `lock_held`, `marker_guard`, or `superseded`. |
+| `elapsedMs` | Finite, non-negative numeric duration for the operation. |
+| `helperCostUsd` | Optional finite, non-negative helper-call cost. |
+
+Rows never contain prompts, responses, provider free text, raw session ids, API keys,
+or other secrets. `from` and `to` are accepted only as identifier-shaped
+`provider/model` references; malformed ledger rows are skipped, and invalid append
+values are represented by a fixed unknown reference. `switch_dropped` is useful because a dropped attempt is visible
+without pretending that a switch happened. The October evidence in the levels plan
+shows why: the real entries recorded `openai/gpt-6.1-sol` →
+`opencode/glm-5.3-flash-free` as `rate_limit`, `opencode/muse-spark-1.3` →
+`openai/gpt-6.1-sol` as `quota`, `openrouter/meta/muse-wonder` →
+`openai/gpt-6.1-sol` as `auth`, and the final two
+`opencode/glm-5.3-flash-free` → `openai/gpt-6.1-sol` entries as `rate_limit`.
+The same evidence records `openai/gpt-6.1-sol` as permanently marked at exactly
+10:02:49 on October 23, with no switch logged afterward. That 10:02 permanent-mark
+gap was therefore visible as a failure with no corresponding failover row; a future
+lock-held, marker-guard, or superseded attempt is represented explicitly as
+`switch_dropped` with its reason and elapsed time.
+
 ## Compared to opencode-auto-fallback
 
 An honest comparison; pick what fits your setup.
