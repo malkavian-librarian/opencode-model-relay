@@ -136,7 +136,9 @@ Each `switches.jsonl` row is metadata-only and uses these fields:
 | `helperCostUsd` | Optional finite, non-negative helper-call cost. |
 
 Rows never contain prompts, responses, provider free text, raw session ids, API keys,
-or other secrets. `switch_dropped` is useful because a dropped attempt is visible
+or other secrets. `from` and `to` are accepted only as identifier-shaped
+`provider/model` references; malformed ledger rows are skipped, and invalid append
+values are represented by a fixed unknown reference. `switch_dropped` is useful because a dropped attempt is visible
 without pretending that a switch happened. The October evidence in the levels plan
 shows why: the real entries recorded `openai/gpt-6.1-sol` →
 `opencode/glm-5.3-flash-free` as `rate_limit`, `opencode/muse-spark-1.3` →

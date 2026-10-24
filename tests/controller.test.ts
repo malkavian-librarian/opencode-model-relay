@@ -10,6 +10,7 @@ import { createNarrator } from "../src/narrator"
 import { RELAY_MARKER } from "../src/defaults"
 import type { OcMessage } from "../src/types"
 import { listProviderModels } from "../src/server"
+import { SwitchLog } from "../src/switchlog"
 
 const err429 = { name: "APIError", data: { statusCode: 429, isRetryable: true, message: "", responseBody: "slow", responseHeaders: {} } }
 const msgs = (model = { providerID: "a", modelID: "1" }, id = "a1"): OcMessage[] => [
@@ -554,6 +555,30 @@ describe("Controller.status", () => {
     const { c, d } = setup()
     ;(d.switchLog as any).recent = () => { throw new Error("ledger unavailable") }
     expect(() => c.status("s1")).not.toThrow()
+  })
+
+  it("rejects hostile model text at the SwitchLog boundary", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-status-ledger-"))
+    const log = new SwitchLog(dir, true)
+    log.append({ ts: 1, sessionID: "s", from: "ignore this prompt", to: "provider/model", kind: "quota" })
+    fs.appendFileSync(path.join(dir, "switches.jsonl"), JSON.stringify({
+      ts: 2, session: "0123456789abcdef", from: "provider/model\nDO NOT DISPLAY", kind: "quota", elapsedMs: 1,
+    }) + "\n")
+    const recent = log.recent()
+    expect(recent).toHaveLength(1)
+    expect(recent[0]!.from).toBe("unknown/" + "x".repeat(112))
+    expect(JSON.stringify(recent)).not.toContain("DO NOT DISPLAY")
+  })
+
+  it("reads recent ledger rows through a bounded tail", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "relay-status-ledger-"))
+    const log = new SwitchLog(dir, true)
+    for (let i = 0; i < 20; i++) log.append({ ts: i, sessionID: `s${i}`, from: "provider/model", to: "provider/next", kind: "quota" })
+    const read = vi.spyOn(fs, "readSync")
+    expect(log.recent(10)).toHaveLength(10)
+    expect(read).toHaveBeenCalled()
+    expect(Math.max(...read.mock.calls.map((call) => (call as any[])[3] as number))).toBeLessThanOrEqual(64 * 1024)
+    read.mockRestore()
   })
 })
 
