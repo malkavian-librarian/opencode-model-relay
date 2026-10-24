@@ -44,6 +44,13 @@ export interface Deps {
   switchOpts?: { abortTimeoutMs?: number; abortDelayMs?: number }
 }
 
+export interface ManualSwitchResult {
+  status: "switched" | "locked" | "bottom" | "invalid" | "unavailable"
+  from?: string
+  to?: string
+  elapsedMs?: number
+}
+
 /** The raw provider message is reset-wording input for recordFailure; it is only ever regex-matched, never executed. */
 const errorText = (raw: unknown): string | undefined => {
   const r = raw as { data?: { message?: unknown } } | undefined
@@ -111,6 +118,55 @@ export class Controller {
       await this.handle(sessionID, c, undefined, message)
     } catch (e) {
       try { this.d.log(`onRetryStatus failed: ${e instanceof Error ? e.message : String(e)}`) } catch { /* ignore */ }
+    }
+  }
+
+  /** Owner escape hatch: the same abort/switchModel seam as failover, but plain-tail and cap-exempt. */
+  async manualSwitch(sessionID: string, requested?: string): Promise<ManualSwitchResult> {
+    const started = this.d.now()
+    let target: string | undefined
+    try {
+      if (requested !== undefined) target = modelKey(parseModel(requested))
+      if (!this.d.lock.tryAcquire(sessionID)) return { status: "locked" }
+      try {
+        const session = await this.d.client.session.get({ path: { id: sessionID } })
+        if (session.data?.parentID) return { status: "unavailable" }
+        const msgs = await this.fetchMessages(sessionID)
+        const newest = [...msgs].reverse().find((m) => {
+          const i = m.info
+          return i.role === "assistant" ? !!(i.providerID && i.modelID) : !!i.model?.providerID && !!i.model.modelID
+        })
+        if (!newest) return { status: "unavailable" }
+        const i = newest.info
+        const current = i.role === "assistant" ? `${i.providerID}/${i.modelID}` : `${i.model!.providerID}/${i.model!.modelID}`
+        if (target === undefined) {
+          const ladder = buildLadder(this.d.cfg).filter((l): l is string => typeof l === "string")
+          const start = ladder.indexOf(current)
+          const tried = new Set(triedThisTurn(msgs))
+          const candidates = ladder.slice(start + 1).filter((m) => m !== current && !tried.has(m) && isHealthy(this.d.health[m], started))
+          target = candidates.find((m) => {
+            const at = this.d.state.get(sessionID).quarantine?.[m]
+            return at === undefined || started - at >= QUARANTINE_MS
+          }) ?? candidates[0]
+        }
+        if (target === undefined || target === current) return { status: "bottom", from: current }
+
+        const ex = extractFromMessages(msgs, this.d.cfg.handover)
+        const text = buildHandover({ cfg: this.d.cfg, ex, from: current, to: target, reason: "quality", summary: null })
+        const rec = this.d.state.get(sessionID)
+        this.d.state.set(sessionID, { ...rec, pluginPinned: target, pendingHandover: { to: target, at: started }, updated: started })
+        delete this.d.health[target]
+        this.d.state.save()
+        const superseded = await this.enactSwitch(sessionID, current, { to: parseModel(target), handoverText: text })
+        if (superseded !== undefined) return { status: "unavailable", from: current, to: superseded }
+        this.d.switchLog.append({ ts: started, sessionID, from: current, to: target, kind: "manual" })
+        return { status: "switched", from: current, to: target, elapsedMs: Math.max(0, this.d.now() - started) }
+      } finally {
+        this.d.lock.release(sessionID)
+      }
+    } catch (e) {
+      try { this.d.log(`manual switch failed: ${e instanceof Error ? e.message : String(e)}`) } catch { /* ignore */ }
+      return { status: "unavailable", ...(target ? { to: target } : {}) }
     }
   }
 

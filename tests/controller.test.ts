@@ -425,6 +425,42 @@ describe("Controller.status", () => {
   })
 })
 
+describe("Controller.manualSwitch (#67)", () => {
+  it("switches to an explicit model with plain-tail handover and manual metadata", async () => {
+    const { c, d, calls } = setup({ cfg: { maxSwitchesPerSession: 1 } })
+    d.health["b/2"] = { cooldownUntil: 2_000_000, failures: 2 }
+    const result = await c.manualSwitch("s1", "b/2")
+    expect(result).toMatchObject({ status: "switched", to: "b/2" })
+    expect(calls.chat).toHaveLength(0)
+    expect(calls.prompt[0].body.model).toEqual({ providerID: "b", modelID: "2" })
+    expect(calls.prompt[0].body.parts[0].text).toMatch(/summary unavailable/i)
+    expect(d.health["b/2"]).toBeUndefined()
+    expect(d.state.get("s1").switchCount).toBe(0)
+    expect(calls.logs[0]).toMatchObject({ from: "a/1", to: "b/2", kind: "manual" })
+  })
+
+  it("next walks to the next healthy ladder model and ignores the automatic cap", async () => {
+    const { c, d, calls, messages } = setup({ cfg: { maxSwitchesPerSession: 1, tiers: { primary: "a/1", secondary: ["b/2", "c/3"] } } })
+    d.state.set("s1", { pluginPinned: "b/2", switchCount: 1, updated: 1_000_000 })
+    messages.splice(0, messages.length, ...msgs({ providerID: "b", modelID: "2" }, "b1"))
+    const result = await c.manualSwitch("s1")
+    expect(result.status).toBe("switched")
+    expect(calls.prompt[0].body.model).toEqual({ providerID: "c", modelID: "3" })
+    expect(d.state.get("s1").switchCount).toBe(1)
+    expect(calls.logs[0]).toMatchObject({ kind: "manual" })
+  })
+
+  it("reports lock contention and the bottom of the ladder without throwing", async () => {
+    const locked = setup()
+    locked.d.lock.tryAcquire("s1")
+    await expect(locked.c.manualSwitch("s1", "b/2")).resolves.toMatchObject({ status: "locked" })
+
+    const bottom = setup({ cfg: { tiers: { primary: "a/1", secondary: [] } } })
+    await expect(bottom.c.manualSwitch("s1")).resolves.toMatchObject({ status: "bottom" })
+    expect(bottom.calls.logs).toEqual([])
+  })
+})
+
 // A judged turn: real user message, secondary-tier assistant with produced tokens, no text output ->
 // the "no_output" heuristic fires and the turn reaches the LLM judge.
 const judgedTurn = (id: string, modelID = "2"): OcMessage[] => [

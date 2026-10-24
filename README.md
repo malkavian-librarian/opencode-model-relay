@@ -38,7 +38,7 @@ The plugin ships both plugin shapes in one file: the v1 `server()` hooks and the
 
 - **OpenCode 1.x** calls `server()` at boot: the hooks described above run unchanged. The v2 `setup()` call that 1.x also makes carries only a partial context, so the v2 layer stays dormant — no registers, no double handling.
 - **OpenCode 2.x** calls `setup(ctx)` with the full v2 surface. The relay then uses `ctx.session.hook("retry")` (igniting switch + vetoing OpenCode's own retry), a cross-project event stream routed by session id, pinning through `ctx.session.switchModel` before model resolution, and the `context` hook to detect an explicit user pick. The v1 hooks stand down in that process (the relay decides once per process, never twice).
-- On v2, `relay_status` / `relay_init` are registered as real tools and `/relay` / `/relay-init` are native commands that print status via a synthetic message — no model turn required.
+- On v2, `relay_status` / `relay_init` are registered as real tools and `/relay` / `/relay-init` are native commands that print status via a synthetic message — no model turn required. `/relay model <provider/model>` forces a plain-tail switch and `/relay next` takes the next healthy ladder hop; both report progress immediately and completion without an LLM narrative.
 
 Details and the verified runtime shapes: [docs/spike-v2.md](docs/spike-v2.md).
 

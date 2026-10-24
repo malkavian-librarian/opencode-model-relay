@@ -8,7 +8,7 @@ const SALT_BYTES = 32
 export type SwitchDropReason = "lock_held" | "marker_guard" | "superseded"
 
 /** A failure-switch logs its FailureKind; a judge switch logs "quality"; a dropped switch logs "switch_dropped" with its reason. */
-export type SwitchKind = FailureKind | "switch_dropped"
+export type SwitchKind = FailureKind | "switch_dropped" | "manual"
 
 function readSalt(f: string): Buffer | null {
   try {

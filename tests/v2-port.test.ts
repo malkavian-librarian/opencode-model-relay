@@ -634,6 +634,44 @@ describe("v2 tools, commands and model list", () => {
     expect(out.content).toContain("- b/2")
     teardown?.()
   })
+
+  it("/relay model uses the fast manual path and emits receipt plus completion feedback", async () => {
+    const e = env()
+    const { ctx, calls } = makeCtx()
+    const teardown = await createV2Plugin(e.env).setup(ctx)
+    const relayCmd = calls.commands.find((c) => c.name === "relay")
+    await relayCmd!.execute({ sessionID: "s1", arguments: "model b/2" })
+    expect(calls.switchModel).toEqual([{ sessionID: "s1", model: { providerID: "b", id: "2" } }])
+    expect(calls.prompt[0].text).toMatch(/summary unavailable/i)
+    expect(calls.synthetic.map((x) => x.text).join(" ")).toMatch(/switching.*b\/2/i)
+    expect(calls.synthetic.map((x) => x.text).join(" ")).toMatch(/done|complete/i)
+    teardown?.()
+  })
+
+  it("rejects invalid model command input without switching or logging", async () => {
+    const e = env()
+    const { ctx, calls } = makeCtx()
+    const teardown = await createV2Plugin(e.env).setup(ctx)
+    const relayCmd = calls.commands.find((c) => c.name === "relay")
+    await expect(relayCmd!.execute({ sessionID: "s1", arguments: "model nope" })).resolves.toBeTruthy()
+    expect(calls.switchModel).toEqual([])
+    expect(calls.prompt).toEqual([])
+    expect(calls.synthetic.map((x) => x.text).join(" ")).toMatch(/invalid.*provider\/model/i)
+    expect(fs.existsSync(path.join(e.root, "data", "opencode-model-relay", "switches.jsonl"))).toBe(false)
+    teardown?.()
+  })
+
+  it("/relay next gives an explicit bottom-of-ladder message", async () => {
+    const e = env()
+    fs.writeFileSync(path.join(e.root, "cfg", "opencode", "opencode-model-relay.jsonc"), `{"tiers":{"primary":"a/1","secondary":[]}}`)
+    const { ctx, calls } = makeCtx()
+    const teardown = await createV2Plugin(e.env).setup(ctx)
+    const relayCmd = calls.commands.find((c) => c.name === "relay")
+    await relayCmd!.execute({ sessionID: "s1", arguments: "next" })
+    expect(calls.switchModel).toEqual([])
+    expect(calls.synthetic.map((x) => x.text).join(" ")).toMatch(/no healthy model|bottom|relay status/i)
+    teardown?.()
+  })
 })
 
 describe("v1 suppression while the v2 layer is active", () => {

@@ -4,7 +4,7 @@ import { classify } from "./classifier"
 import { INIT_TOOL_DESCRIPTION, RELAY_TOOL_DESCRIPTION, createRelay, listProviderModels } from "./server"
 import { initConfig } from "./init"
 import { configFile, dataDir } from "./config"
-import { modelKey, type ClientLike, type ModelRef, type OcMessage } from "./types"
+import { modelKey, parseModel, type ClientLike, type ModelRef, type OcMessage } from "./types"
 import type { Controller } from "./controller"
 import type { createNarrator } from "./narrator"
 import type { StateStore } from "./state"
@@ -373,6 +373,22 @@ function sidInput(input: unknown): string | undefined {
   return typeof sessionID === "string" ? sessionID : undefined
 }
 
+function commandArgs(input: unknown): string {
+  const args = (input as { arguments?: unknown } | undefined)?.arguments
+  return typeof args === "string" ? args.trim() : ""
+}
+
+function commandModelArg(args: string): string | undefined {
+  if (!args.startsWith("model ")) return undefined
+  const raw = args.slice("model ".length).trim()
+  if (!raw || /\s|[\u0000-\u001f\u007f]/.test(raw)) return undefined
+  try { return modelKey(parseModel(raw)) } catch { return undefined }
+}
+
+async function emitSynthetic(ctx: V2Ctx, sessionID: string, text: string): Promise<void> {
+  try { await Promise.resolve(ctx.session?.synthetic?.({ sessionID, text })) } catch { /* feedback is best effort */ }
+}
+
 function registerTools(env: Env, ctx: V2Ctx, controller: Controller, adapter: ClientLike): Promise<unknown> {
   const emptyInput = { type: "object", properties: {}, additionalProperties: false }
   try {
@@ -406,6 +422,26 @@ function registerCommands(env: Env, ctx: V2Ctx, controller: Controller, adapter:
         execute: async (input: unknown) => {
           try {
             const sessionID = sidInput(input)
+            const args = commandArgs(input)
+            if (sessionID && (args === "next" || args === "model" || args.startsWith("model "))) {
+              const requested = args === "next" ? undefined : commandModelArg(args)
+              if (args === "model" || (args.startsWith("model ") && requested === undefined)) {
+                await emitSynthetic(ctx, sessionID, "Invalid model: expected provider/model.")
+                return input ?? {}
+              }
+              const receipt = requested ? `Switching to ${requested}…` : "Switching to the next model…"
+              await emitSynthetic(ctx, sessionID, receipt)
+              const result = await controller.manualSwitch(sessionID, requested)
+              const text = result.status === "switched"
+                ? `Switched to ${result.to ?? requested} (done in ${result.elapsedMs ?? 0}ms).`
+                : result.status === "locked"
+                  ? "Failover in progress; retry in a moment."
+                  : result.status === "bottom"
+                    ? "No healthy model below this one; run /relay status for the ladder."
+                    : "The manual switch could not be completed; the current model was left unchanged."
+              await emitSynthetic(ctx, sessionID, text)
+              return input ?? {}
+            }
             if (sessionID) await Promise.resolve(ctx.session?.synthetic?.({ sessionID, text: controller.status(sessionID) }))
             return input ?? {}
           } catch { return (input as object | undefined) ?? {} }
