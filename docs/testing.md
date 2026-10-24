@@ -42,6 +42,10 @@ Chain locally in PowerShell: `npm run typecheck; if ($?) { npm test }; if ($?) {
   test child sessions and failed lookups as well as successful top-level adoption.
 - Removing a runtime config key must preserve valid sibling settings on upgrade;
   test legacy migration and invalid siblings to keep strict validation intact.
+- `CORE`'s corroboration map is module-scope state shared by every test in a file:
+  a test that reuses a sessionID after another test emitted a contradicting
+  `session.model.selected` gets its adoption silently vetoed. Use a fresh
+  sessionID per adoption test.
 
 ## Fixtures
 
