@@ -135,7 +135,7 @@ Publishing is an owner action; agents never publish or push tags.
 | #68 | fast failover: plain-tail default, async narrative, latency budget | ✅ Merged | — |
 | #69 | find levels: free-model discovery, health-aware resolution, consent gate | ✅ Merged | — |
 | #70 | observability: verbose switch-log + /relay status ladder view | ✅ Merged | — |
-| #71 | docs sweep: README/spec/SECURITY/CHANGELOG/AGENTS | ⏳ In progress | #72 |
+| #71 | docs sweep: README/spec/SECURITY/CHANGELOG/AGENTS | 🔎 In review (PR #88 open) | QA re-review; then #72 |
 | #72 | deploy & enable plugin on owner machine (re-enable `.disabled`) | ⏳ Pending (`needs-owner`) | #73 |
 | #73 | wrap-up: commit all, delete merged branches, worktree audit, push | ⏳ Pending | — |
 

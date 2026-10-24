@@ -15,12 +15,12 @@ GitHub issue comments hold the detailed notes; this file indexes the latest stat
 
 ## Entries (newest first)
 
-### 2026-10-24 - #71 levels redesign docs sweep in progress (opencode)
+### 2026-10-24 - #71 levels redesign docs sweep in review (opencode)
 
-- Status: Fresh `docs/issue-71-levels-sweep` branch from `origin/main`; reconciling README, spec, SECURITY, CHANGELOG, process map, plan and this handoff against merged #63–#70/#79 behavior.
+- Status: PR [#88](https://github.com/malkavian-librarian/opencode-model-relay/pull/88) is open; the #71 issue remains open and its Relay board card is **In review**. The docs sweep targets merged #63–#70/#79 behavior.
 - AGENTS.md is 121 lines and already has accurate commands/rules; cap guard means no append. Any gotcha graduation will be proposed in the PR, not added blindly.
-- Next: finish link/consistency inspection, run typecheck/tests/build/pack, commit, push, open PR and move #71 to In review.
-- Blockers: none; no source, tests or other worktrees touched.
+- Next: resolve the QA findings, rerun link/diff checks and the full gates, then obtain QA re-review on PR #88. The orchestrator decides whether to merge after PASS.
+- Blockers: QA re-review and the current-head CodeRabbit review; no source, tests or other worktrees touched.
 
 ### 2026-10-24 - #66 controller rewiring implemented, PR open (opencode)
 
