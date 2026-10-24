@@ -18,25 +18,23 @@ GitHub issue comments hold the detailed notes; this file indexes the latest stat
 ### 2026-10-24 - #71 levels redesign docs sweep in review (opencode)
 
 - Status: PR [#88](https://github.com/malkavian-librarian/opencode-model-relay/pull/88) is open; the #71 issue remains open and its Relay board card is **In review**. The docs sweep targets merged #63–#70/#79 behavior.
-- AGENTS.md is 121 lines and already has accurate commands/rules; cap guard means no append. Any gotcha graduation will be proposed in the PR, not added blindly.
-- Next: resolve the QA findings, rerun link/diff checks and the full gates, then obtain QA re-review on PR #88. The orchestrator decides whether to merge after PASS.
-- Blockers: QA re-review and the current-head CodeRabbit review; no source, tests or other worktrees touched.
+- AGENTS.md stays at 121 lines by replacement. Graduation proposal for the PR description: move the oldest active handover-latency gotcha to `docs/process.md#graduated-development-gotchas`, making room for the bootstrap/levels gotcha; direct-call rules now include the consent-gated public catalog. The cap guard forbids appends, not replacements.
+- Next: host publishes the documentation repair and records the graduation proposal in the PR description; obtain scoped QA re-review and current-head CI/CodeRabbit results. #72 remains owner-gated after #71.
+- Blockers: QA re-review and current-head checks after publication; no source, tests or other worktrees touched.
 
-### 2026-10-24 - #66 controller rewiring implemented, PR open (opencode)
+### 2026-10-24 - #66 controller rewiring merged - closed (opencode)
 
-- Status: `feat/issue-66-controller-rewiring` (TDD: RED with 41 failing replicas -> GREEN); local gates all green:
-  typecheck, 429/429 tests, build, `npm pack --dry-run`. PR awaits QA (controller.ts + config.ts security pass mandatory).
+- Status: [PR #80](https://github.com/malkavian-librarian/opencode-model-relay/pull/80) merged as `084f31c`; #66 closed. At implementation handoff, local typecheck, 429/429 tests, build and `npm pack --dry-run` passed.
 - Covers AC-01..AC-10: adoption under lock + 30 s grace, supersede re-read (abort->switchModel seam), retry storm
   token, switch_dropped ledger, onExhausted deepest-healthy fallback + /relay next hint, pin/mode deletion, judge
   level-1 rule, crash-window persist + on-load validation/discard.
-- Next: #67 (/relay commands). Blockers: none; #79 untouched (strategy.ts kept deletions-only per scope).
+- Next: none for #66; #67 also closed ([PR #84](https://github.com/malkavian-librarian/opencode-model-relay/pull/84) merged as `b7faccf`). Current epic work is #71, then owner-gated #72.
 
-### 2026-10-23 - #63 + #65 merged; ponytail docs #76; #64 next (opencode)
+### 2026-10-23 - #63 + #65 merged; #64 follow-up completed (opencode)
 
 - Status: #63 closed ([PR #74](https://github.com/malkavian-librarian/opencode-model-relay/pull/74)); #65 closed ([PR #75](https://github.com/malkavian-librarian/opencode-model-relay/pull/75)); board current.
-  #76 (this PR) adds Ponytail guidance, the board rule and Epic #62 status in `docs/process.md`.
-- Next: #64 in `.worktrees/levels-redesign`, starting from `origin/main`; follow
-  [issue #64](https://github.com/malkavian-librarian/opencode-model-relay/issues/64) TDD (U-01..U-08, E-01). The stashed strategy sketch is reference only.
+  #76 added Ponytail guidance, the board rule and Epic #62 status in `docs/process.md`.
+- Next: none for #63/#65; #64 closed ([PR #78](https://github.com/malkavian-librarian/opencode-model-relay/pull/78) merged as `b8f2452`). Current epic work is #71, then owner-gated #72.
 - Blockers: none; #5, #18, #19, #45, #72 are owner-gated.
   #71/#73: reconcile the differing `.md.local` plan copy with the committed plan.
 

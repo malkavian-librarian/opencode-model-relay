@@ -6,26 +6,26 @@ Release cut line decided: staged v1.0 / v1.1 / v1.2, see section 13.
 
 ## 1. Purpose
 
-An OpenCode plugin that keeps a coding session alive when the current model fails or underperforms. It detects failure, decides whether to switch, has a capable model write a handover, and resumes the work on another model in the same session. It also records per-model performance for 30 days so a later release can tune prompts per model.
+An OpenCode plugin that keeps a coding session alive when the current model fails or underperforms. It detects failure, decides whether to switch, builds a handover, and resumes the work on another model in the same session, with an optional asynchronous model-written narrative. Per-model performance history remains planned for #7.
 
-Why it exists: the installed `opencode-auto-fallback` keeps one flat model list, has no judge and no handover, and on the author's machine its free `opencode/*` models hit OpenCode's gateway 403 (`FreeTierError`: "free tier can only be used from within OpenCode"). Our edges over it: structured handover that preserves session state, tiers with a quality judge, per-model performance history.
+Why it exists: the installed `opencode-auto-fallback` keeps one flat model list, has no judge and no handover, and on the author's machine its free `opencode/*` models hit OpenCode's gateway 403 (`FreeTierError`: "free tier can only be used from within OpenCode"). Our edges over it: structured handover that preserves session state, ordered levels with a quality judge, and planned per-model performance history.
 
 Audience: the author first; then public GitHub/npm users who bring their own OpenRouter key.
 
 ## 2. Scope
 
-In scope: tiered switching, judge, handover, strategy modes, narrator, performance ledger with 30-day stats, `/relay` command, schema-validated config, npm packaging, public repo.
+In scope: ordered-level switching, judge, handover, narrator, switch log, `/relay` commands, schema-validated config, npm packaging, public repo. Strategy modes were removed by the levels redesign; full performance analytics remain planned (#7).
 Out of scope: prompt optimisation per model (future: GLM reads `stats.json`), auto-learned model order, request proxying, TUI settings screen, seeded/forked sessions as a default route (see 6.3), remote state.
 Delivery is staged (section 12-13); everything above remains the target design.
 
 ## 3. Hard constraints
 
-1. **No request proxying.** Main-model traffic always goes through OpenCode. Only the plugin's helper calls (judge, handover) go direct to OpenRouter. This avoids the gateway origin check.
+1. **No request proxying.** Main-model traffic always goes through OpenCode. The plugin calls OpenRouter directly only for helpers (judge, handover) and consent-gated public catalog discovery. Catalog requests carry no key or user data.
 2. **Key handling.** OpenRouter key comes from an env var (default `OPENROUTER_API_KEY`), never from the config file, ledger or logs. `openrouter.baseUrl` must be https, defaults to openrouter.ai, and changing it requires `allowCustomBaseUrl: true`. Requests use `redirect: "manual"` so the Authorization header is never forwarded. Redaction covers thrown errors and response bodies.
-3. **Data egress is opt-in.** Judge and handover send session content to OpenRouter and onward to whichever provider serves the model. Nothing is sent until `privacy.consent: true`. Until then the plugin runs local-only (hard-failure switching, plain-tail handover). First run shows a toast explaining this. OpenRouter requests set `provider.data_collection: "deny"`; optional `privacy.zdr`.
+3. **Data egress is opt-in.** Judge and handover send session content to OpenRouter and onward to whichever provider serves the model. Nothing is sent until `privacy.consent: true`, including catalog discovery. Until then the plugin runs local-only (hard-failure switching, plain-tail handover). First run shows a toast explaining this. Helper requests also require the environment key and set `provider.data_collection: "deny"`; optional `privacy.zdr`.
 4. **Redaction before egress.** A mandatory `redact` unit strips secret patterns (sk-/ghp_/AWS keys, JWTs, PEM blocks, `KEY=value` lines) and drops tool output read from `.env*`, key and credential files. Per-call byte cap.
 5. **Untrusted content.** Transcripts are wrapped as delimited data blocks the judge/writer are told not to obey. Judge output is strict JSON, schema-validated, `reason` capped and control-chars stripped. The handover message states it is a model-generated summary, not user instructions; the user's last request is carried verbatim and separately. A judge verdict never changes permissions; nothing is auto-approved after a switch.
-6. **Config is user-level only.** Load from the user config dir, never from the project tree. Path settings (`narrator.extraPool`, `ledger.dir`) must resolve (symlinks included) under the plugin's config/data dirs; pool files capped at 64 KB / 500 lines and treated as plain text. Parse JSONC with a size cap; never eval or require config.
+6. **Config is user-level only.** Load from the user config dir, never from the project tree. `ledger.dir` must resolve (symlinks included) under the plugin's data dir. The earlier `narrator.extraPool` proposal is historical (section 7). Parse JSONC with a size cap; never eval or require config.
 7. **Ledger holds metadata only**, no prompt or response text; reasons and error kinds are enums, never free provider text.
 8. **Fail safe.** Any internal failure leaves the session usable on its current model.
 
@@ -67,18 +67,21 @@ API facts verified against `@opencode-ai/plugin` 1.17.x and the reference plugin
 ## 6. Flows
 
 ### 6.1 Hard failure
-`session.error` / retry status -> classifier -> gate (eligible session, not plugin-caused, lock free) -> strategy -> narrator -> handover -> switcher -> sticky state persisted -> ledger.
+`session.error` / retry status -> classifier -> gate (eligible session, not plugin-caused, lock free) -> levels walk -> redacted plain-tail handover -> persist `pluginPinned` and intent -> abort, re-read model and resume -> switch log. Optional narratives run asynchronously after an enacted switch.
 
-### 6.2 Quality check (tier 2/3)
+### 6.2 Quality check (below level 1)
 `session.idle` -> gate (no parentID, last assistant message completed with tokens > 0, not our own turn) -> heuristics/judge budget -> async judge -> two consecutive `switch:true` -> 6.1 from strategy onward.
 
 ### 6.3 Handover and route
-Same-session handover is the only default route. For oversize history (estimated tokens > `seedThreshold` x target window, from `providers()` limits, falling back to a conservative default), use OpenCode compaction/summarise with the target model. Seeded or forked sessions are experimental and off by default: the SDK cannot move the TUI to a new session, so users would be stranded. The handover transcript itself is truncated or chunked to fit the writer's window. If the handover call or schema validation fails, use the plain tail and say so.
+Same-session plain-tail handover is the default route; the optional narrative follows asynchronously. The earlier `seedThreshold`-based compaction and seeded/forked-session routes are historical proposals, not runtime settings. Handover input is bounded by `maxTranscriptChars` and `maxToolChars`, then redacted before use.
 
-## 7. Settings (JSONC, schema-validated, `$schema` provided)
+## 7. Settings and commands (JSONC, schema-validated)
 
-`mode`; `tiers.primary` / `tiers.secondary[]` / `tiers.tertiary[]`; `privacy.consent`, `privacy.zdr`; `openrouter.keyEnv`, `baseUrl`, `allowCustomBaseUrl`; `judge.{enabled,model,prompt,maxCallsPerSession,minIntervalMs,maxDailyUsd}`; `handover.{model,writerPrompt,messageTemplate,maxToolChars}`; `seedThreshold`; `cooldownMs`; `maxSwitchesPerSession`; `maxHelperSpendUsdPerDay`; `onExhausted`; `narrator.{verbosity,tone,extraPool}`; `ledger.{enabled,retentionDays,dir}`.
-Defaults: `tone` is `plain` in the published package (British is opt-in; the author's own config sets `british`). `/relay init` writes a commented default config; with no OpenRouter key or consent the plugin still works (local-only mode). `/relay pick` lists models from configured providers and writes the choice.
+`levels` is the runtime ladder (section 4). Deprecated `tiers.primary` / `tiers.secondary[]` / `tiers.tertiary[]` migrate on load; explicit `levels` wins. Legacy `mode` is ignored with a warning. Current settings also include `privacy.{consent,zdr}`; `openrouter.{keyEnv,baseUrl,allowCustomBaseUrl}`; `judge.{enabled,model,prompt,maxCallsPerSession,minIntervalMs,maxDailyUsd}`; `handover.{model,writerPrompt,messageTemplate,maxToolChars,maxTranscriptChars,maxCallsPerSession}`; `cooldownMs`; `maxSwitchesPerSession`; `onExhausted`; `narrator.{verbosity,tone}`; `ledger.{enabled,dir}`. The [README configuration table](../../../README.md#configuration) describes types and defaults. Earlier proposals for `seedThreshold`, `maxHelperSpendUsdPerDay`, `narrator.extraPool` and `ledger.retentionDays` are historical, not accepted runtime settings.
+
+Defaults: `tone` is `plain` (British is opt-in). `/relay-init` creates a commented default config with consent off and lists configured models; it never overwrites an existing file. Its template and next steps still say the levels ladder is not active and recommend `tiers`: this is stale bootstrap text, not the runtime contract. Configure `levels` directly or use `tiers` migration as documented in the README. Helpers require consent and a key; public catalog discovery requires consent only.
+
+On v2, `/relay model <provider/model>` switches to an explicit model and `/relay next` walks downward to the next healthy candidate. Both give immediate feedback, use plain-tail resume, log `manual`, and are exempt from the automatic switch cap. `/relay` (including `/relay status`) shows status. The proposed `/relay pick` and `/relay init` spellings are historical and are not registered commands; use `/relay-init` for bootstrap.
 
 ## 8. Narrator
 
@@ -86,15 +89,19 @@ Facts first, flavour second: every message carries from-model, to-model and reas
 
 ## 9. Performance ledger
 
+The following full-ledger design is retained as a historical proposal for #7, not
+shipped behavior. The current metadata-only `switches.jsonl` schema and status view
+are documented in [Reading the switch log](../../../README.md#reading-the-switch-log).
+
 - Location: user data dir `~/.local/share/opencode-model-relay` (`XDG_DATA_HOME` overrides), never under the project tree. Directory 0700 / files 0600 on POSIX; on Windows rely on the user-private location and say so in docs.
 - Raw: per-process `events-<pid>.jsonl` (or a lockfile), one line per append, readers skip corrupt lines, monthly rotation. Fields: epoch-ms ts, HMAC session id (random per-install salt), model, tier, mode, latencyMs, tokens, cost, errorKind enum, judge verdict, switch from/to/reason enum, helper-call cost. Every completed turn is recorded (needed as the denominator).
-- Derived: `stats.json` (schema-versioned, atomic temp+rename write), per-model UTC daily buckets over a rolling 30 days: turns, failures by kind, judge rejection rate (tier 2/3), switch-away rate, survival, median latency, tokens, cost, helper overhead. Prune by `ts`, not bucket label; rebuild on startup.
+- Derived: proposed `stats.json` (schema-versioned, atomic temp+rename write), per-model UTC daily buckets over a rolling 30 days: turns, failures by kind, judge rejection rate (below level 1), switch-away rate, survival, median latency, tokens, cost, helper overhead. Prune by `ts`, not bucket label; rebuild on startup.
 - Survival: the next assistant turn on the same model in the same session completes with no switch within 30 minutes or 5 turns; sessions with no next turn are censored and excluded from the denominator.
 - `/relay stats` prints the per-model table including relay overhead $; `/relay purge` deletes ledger data.
 
 ## 10. Failure handling and guards
 
-Judge failure: hard failures still switch, quality check is a no-op. Handover failure: plain tail. No consent/key: local-only mode with one explanatory toast. Guards: single-flight lock, plugin-abort marks, per-model backoff, no re-choosing a tried model, switch cap, helper spend caps (per session and per day), judge never evaluates helper calls. Logs never contain transcripts, are size-capped and rotated, key redacted. Ledger failures never affect the session.
+Judge failure: hard failures still switch, quality check is a no-op. Handover failure: plain tail. Without consent, no discovery or helper egress; without a key, helper calls are skipped with one explanatory toast, while consent-gated public catalog discovery remains available. Guards: single-flight lock, plugin-abort marks, per-model backoff, no re-choosing a tried model, switch cap, helper call caps and daily judge spend cap; judge never evaluates helper calls. Logs never contain transcripts, are size-capped and rotated, key redacted. Ledger failures never affect the session.
 
 Gotcha (2026-10-23, #59): usage-exhaustion wording fell through to `unknown`, and the
 handover guard swallowed unattributed target failures -> classify exhaustion in both error
@@ -141,22 +148,29 @@ isolated failover E2E remain tracked in [#18](https://github.com/malkavian-libra
 
 ## 11. Testing
 
-- Unit (pure): classifier (real captured payloads incl. 403 FreeTierError, 429 with retry-after, quota, overflow, user abort), strategy (all modes, exhaustion, tried-model rule), config + path confinement, redact (secret corpus), narrator pools, ledger rollups/survival/UTC buckets.
+- Unit (pure): classifier (real captured payloads incl. 403 FreeTierError, 429 with retry-after, quota, overflow, user abort), strategy (levels walk, exhaustion, tried-model rule), config + path confinement, redact (secret corpus), narrator pools, switch-log validation. Full ledger rollups/survival/UTC buckets remain planned with #7.
 - Component with fakes: judge, handover (schema validation, injection fixtures), switcher (abort races, subagent gate, dedup), lock.
 - Recorded-event replay harness: real OpenCode event sequences replayed against the plugin; CI pinned to the plugin API version; compatibility matrix stated in the README.
 - Manual end-to-end in live OpenCode with a deliberately failing primary.
 
 ## 12. Delivery phases
 
+Historical roadmap from 2026-10-18, retained to explain the release decisions in
+section 13. The levels redesign supersedes the tier-era milestones; the current
+epic status is in [docs/process.md](../../process.md#epic-62-child-status-2026-10-24-live).
+
 0. **Spike (gate; findings written to `docs/spike.md`):** (a) `/relay` via `config.command` + `command.execute.before` runs with no model turn; (b) `chat.message` model rewrite is honoured; (c) real error payload shapes; (d) `session.prompt({model})` mid-session behaviour and non-await resume; (e) compaction/summarise with a target model for the oversize route.
 1. Repo scaffold, CI, README skeleton (written early to expose config confusion), LICENSE (MIT), SECURITY.md, CHANGELOG, `config`/`classifier`/`strategy`/`session-lock`/`redact` with tests.
 2. Switcher + handover (local-only and OpenRouter) + sticky persistence: hard-failure switching end to end.
-3. Judge + tier 2/3 quality path + caps.
+3. Judge + quality path below level 1 + caps (originally tiers 2/3).
 4. Narrator.
 5. Ledger + `stats.json` + `/relay`.
 6. Docs with before/after demo and "compared to opencode-auto-fallback" table, secret scan, publish public GitHub repo, npm with provenance (GitHub Actions, 2FA, lockfile + `npm ci`, `files` allowlist, `npm pack --dry-run` in CI, actions pinned by SHA).
 
 ## 13. Release cut line (open decision)
+
+Historical staged-release decision; tier and extra-mode references below describe
+the original plan, not the current levels contract.
 
 Critics (product lens) recommend shipping v1.0 as hard-failure failover + handover + minimal narrator + switch-event log + `/relay status`, then judge/tiers in v1.1, extra modes and full stats later. The author asked for the full set, so the spec keeps it all in scope but stages it:
 DECIDED (author, 2026-10-18): staged releases. v1.0 = phases 1-2 (+ plain narrator and switch log), v1.1 = phases 3-4 (judge, tiers 2/3 quality path, British pools), v1.2 = phase 5 (full ledger, `stats.json`, `/relay stats`). The public repo exists from the start; each tag ships a working plugin. The design for all three stages stays in this spec.

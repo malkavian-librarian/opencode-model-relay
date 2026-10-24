@@ -141,6 +141,11 @@ messages.
   then **removed** in the rewiring issue. This preserves current strategy behavior between the two;
   `levels` is now the runtime ladder; the implementation children below record the shipped
   walk, rewiring, command, failover, discovery and observability dispositions.
+- **Bootstrap limitation:** `/relay-init` still leaves `levels` commented and prints
+  the earlier "not active yet" / configure-`tiers` instructions (`src/init.ts`). Those
+  comments predate runtime rewiring: explicit `levels` works now, and legacy `tiers`
+  still works through migration. This docs sweep records the mismatch; source changes
+  are outside #71's scope.
 - `maxSwitchesPerSession` default auto-scales: **max(6, levels.length + 1)**; an explicit
   user value always wins. Manual switches (`/relay`) are **exempt** from the cap.
 
