@@ -278,7 +278,7 @@ describe("Controller.onSessionError", () => {
     await vi.waitFor(() => expect(calls.abort).toHaveLength(1))
     messages.push(asst("a-mid", "a", "1"))
     await c.onSessionError("s1", err429) // lock held -> dropped
-    expect(calls.logs[0]).toMatchObject({ kind: "switch_dropped", reason: "lock_held" }) // never silent (#66)
+    expect(calls.logs[0]).toMatchObject({ kind: "switch_dropped", reason: "lock_held", elapsedMs: expect.any(Number) }) // never silent (#66)
     release()
     await p1
     expect(calls.prompt).toHaveLength(1)

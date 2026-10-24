@@ -188,7 +188,7 @@ export class Controller {
     if (session.data?.parentID) return false
     if (!d.lock.tryAcquire(sessionID)) {
       // AC-06: the incident's silent drop class becomes diagnosable (metadata only, rule 8).
-      d.switchLog.append({ ts: d.now(), sessionID, ...(from ? { from: modelKey(from) } : {}), kind: "switch_dropped", reason: "lock_held" })
+      d.switchLog.append({ ts: d.now(), sessionID, ...(from ? { from: modelKey(from) } : {}), kind: "switch_dropped", reason: "lock_held", elapsedMs: Math.max(0, d.now() - started) })
       return false
     }
     try {
