@@ -421,18 +421,31 @@ describe("v2 stay-put and adoption (#66)", () => {
     }))
     const { ctx, calls } = makeCtx()
     let n = 0
-    // First lookup is slow, the second fast: the OLDER pick's lookup lands last.
-    ctx.session.get = async (a: { sessionID: string }) => { n++; if (n === 1) await new Promise((r) => setTimeout(r, 60)); return { id: a.sessionID, model: { id: "9", providerID: "z" } } }
+    let release!: () => void
+    const olderLookup = new Promise<void>((resolve) => { release = resolve })
+    ctx.session.get = async (a: { sessionID: string }) => {
+      if (++n === 1) await olderLookup
+      return { id: a.sessionID, model: { id: "9", providerID: "z" } }
+    }
     const teardown = await createV2Plugin(e.env).setup(ctx)
-    calls.hooks.context!({ sessionID: "s3", model: { providerID: "z", id: "9" } }) // older pick, slow lookup
-    calls.hooks.context!({ sessionID: "s3", model: { providerID: "c", id: "3" } }) // newer pick, fast lookup
-    await until(() => readState(e.stateFile).sessions.s3?.pluginPinned === "c/3")
-    await new Promise((r) => setTimeout(r, 150)) // the stale lookup completes AFTER the newer adoption
-    expect(readState(e.stateFile).sessions.s3?.pluginPinned).toBe("c/3") // the newer pick survives
-    expect(readState(e.stateFile).health["z/9"]?.failures).toBe(4) // the stale pick's health is NOT cleared
-    expect(readState(e.stateFile).health["c/3"]).toBeUndefined() // the newer pick's health cleared once
-    expect(calls.switchModel).toEqual([])
-    teardown?.()
+    try {
+      calls.hooks.context!({ sessionID: "s3", model: { providerID: "z", id: "9" } })
+      calls.hooks.context!({ sessionID: "s3", model: { providerID: "c", id: "3" } })
+      // The hook returns void; drain its lookup continuations while the older lookup stays blocked.
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      expect(n).toBe(2)
+      expect(readState(e.stateFile).sessions.s3?.pluginPinned).toBe("c/3")
+      release() // the older lookup can only finish after the newer adoption
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      expect(readState(e.stateFile).sessions.s3?.pluginPinned).toBe("c/3") // the newer pick survives
+      expect(readState(e.stateFile).health["z/9"]?.failures).toBe(4) // the stale pick's health is NOT cleared
+      expect(readState(e.stateFile).health["c/3"]).toBeUndefined() // the newer pick's health cleared once
+      expect(calls.switchModel).toEqual([])
+    } finally {
+      release()
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      teardown?.()
+    }
   })
   it("a context event whose session lookup finds no session never adopts (CodeRabbit, PR #80)", async () => {
     const e = env()
@@ -445,12 +458,13 @@ describe("v2 stay-put and adoption (#66)", () => {
     const { ctx, calls } = makeCtx()
     ctx.session.get = async () => undefined // the session cannot be found
     const teardown = await createV2Plugin(e.env).setup(ctx)
-    calls.hooks.context!({ sessionID: "s4", model: { providerID: "z", id: "9" } })
-    await new Promise((r) => setTimeout(r, 100))
-    expect(readState(e.stateFile).sessions.s4?.pluginPinned).toBe("b/2") // unverifiable session: no adoption
-    expect(readState(e.stateFile).health["z/9"]?.failures).toBe(4)
-    expect(calls.switchModel).toEqual([])
-    teardown?.()
+    try {
+      calls.hooks.context!({ sessionID: "s4", model: { providerID: "z", id: "9" } })
+      await new Promise<void>((resolve) => setImmediate(resolve)) // drain the missing-session hook's continuations
+      expect(readState(e.stateFile).sessions.s4?.pluginPinned).toBe("b/2") // unverifiable session: no adoption
+      expect(readState(e.stateFile).health["z/9"]?.failures).toBe(4)
+      expect(calls.switchModel).toEqual([])
+    } finally { teardown?.() }
   })
   it("the prompt hook never re-asserts a model (switchModel persists, probe Q1)", async () => {
     const e = env()

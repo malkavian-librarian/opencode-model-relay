@@ -61,3 +61,7 @@ Wall-clock assertions flake across machines and CI runners. For performance-styl
 tests, bound the input to the documented contract size (for example the 60000-char
 transcript cap) and use generous limits. Prefer fake timers for cooldown and timeout
 logic. Never assert tight millisecond bounds.
+
+- Void context hooks can outlive fixed sleeps -> gate racing lookups with deferred
+  promises and drain their promise continuations with `setImmediate` before asserting
+  state; keep the older lookup blocked until the newer adoption is observed (2026-10-24).
