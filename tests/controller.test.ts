@@ -513,6 +513,48 @@ describe("Controller.status", () => {
     const s = c.status("s1")
     for (const x of ["a/1", "b/2", "pinned: b/2", "switches: 2", "consent: off", "key: set"]) expect(s).toContain(x)
   })
+
+  it("renders the ordered ladder, find state/cache age, and per-level health", () => {
+    const find = { find: { match: "glm", free: true, via: "openrouter" as const } }
+    const { c, d } = setup({ cfg: { levels: ["a/1", find, "b/2"], privacy: { consent: true } } })
+    d.state.setFindCache(JSON.stringify(find), "openrouter/org/glm:free", 990_000)
+    d.health["a/1"] = { cooldownUntil: 1_005_000 }
+    d.health["openrouter/org/glm:free"] = { permanent: true, permanentAt: 999_000 }
+    d.state.set("s1", { pluginPinned: "b/2", adoptedAt: 999_500, switchCount: 2, updated: 1_000_000 })
+
+    const s = c.status("s1")
+    expect(s).toMatch(/1\. a\/1 .*cooldown 5000ms/)
+    expect(s).toMatch(/2\. find .*resolved -> openrouter\/org\/glm:free \(cached, ageMs: 10000\)/)
+    expect(s).toMatch(/3\. b\/2 .*healthy/)
+    expect(s).toContain("pluginPinned: b/2")
+    expect(s).toContain("adoptedAt: 999500")
+
+    const gated = setup({ cfg: { levels: [find], privacy: { consent: false } } })
+    expect(gated.c.status()).toContain("1. find [consent-gated]")
+  })
+
+  it("renders only the last ten ledger rows and separates manual and automatic counts", () => {
+    const { c, d } = setup()
+    const rows: any[] = Array.from({ length: 11 }, (_, i) => ({
+      ts: i + 1, session: `h${i}`, from: "a/1", to: "b/2", kind: i === 10 ? "manual" : "rate_limit",
+      elapsedMs: i + 10,
+    }))
+    rows[9] = { ts: 10, session: "drop", from: "a/1", to: undefined, kind: "switch_dropped", reason: "lock_held", elapsedMs: 42 }
+    ;(d.switchLog as any).recent = () => rows
+
+    const s = c.status("s1")
+    expect(s).toContain("counts: manual 1, auto 8")
+    expect(s).toContain("last 10 ledger entries:")
+    expect(s).toContain("switch_dropped reason=lock_held elapsedMs=42")
+    expect(s).not.toContain('session=h0')
+    expect(s).toContain("session=h1")
+  })
+
+  it("does not throw when ledger rendering fails", () => {
+    const { c, d } = setup()
+    ;(d.switchLog as any).recent = () => { throw new Error("ledger unavailable") }
+    expect(() => c.status("s1")).not.toThrow()
+  })
 })
 
 describe("deferred narrative freshness", () => {

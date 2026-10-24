@@ -10,6 +10,23 @@ export type SwitchDropReason = "lock_held" | "marker_guard" | "superseded"
 /** A failure-switch logs its FailureKind; a judge switch logs "quality"; a dropped switch logs "switch_dropped" with its reason. */
 export type SwitchKind = FailureKind | "switch_dropped" | "manual"
 
+export interface SwitchLogRow {
+  ts: number
+  session: string
+  from?: string
+  to?: string
+  kind: SwitchKind
+  reason?: SwitchDropReason
+  elapsedMs: number
+  helperCostUsd?: number
+}
+
+const SWITCH_KINDS = new Set<SwitchKind>([
+  "rate_limit", "quota", "auth", "free_tier_403", "server_5xx", "timeout", "model_not_found",
+  "overflow", "user_abort", "unknown", "quality", "switch_dropped", "manual",
+])
+const DROP_REASONS = new Set<SwitchDropReason>(["lock_held", "marker_guard", "superseded"])
+
 function readSalt(f: string): Buffer | null {
   try {
     const txt = fs.readFileSync(f, "utf8").trim()
@@ -79,5 +96,29 @@ export class SwitchLog {
       fs.mkdirSync(this.dir, { recursive: true, mode: 0o700 })
       fs.appendFileSync(path.join(this.dir, "switches.jsonl"), JSON.stringify(row) + "\n", { mode: 0o600 })
     } catch { /* logging is best effort */ }
+  }
+
+  /** Reads bounded, validated metadata for the status dashboard; untrusted rows never pass through raw. */
+  recent(limit = 10): SwitchLogRow[] {
+    if (!this.enabled || limit <= 0) return []
+    try {
+      const lines = fs.readFileSync(path.join(this.dir, "switches.jsonl"), "utf8").trim().split("\n").filter(Boolean)
+      const out: SwitchLogRow[] = []
+      for (const line of lines.slice(-Math.min(10, Math.floor(limit)))) {
+        const raw: unknown = JSON.parse(line)
+        if (!raw || typeof raw !== "object") continue
+        const r = raw as Record<string, unknown>
+        if (typeof r.ts !== "number" || !Number.isFinite(r.ts) || typeof r.session !== "string" ||
+          !/^[0-9a-f]{16}$/.test(r.session) || typeof r.kind !== "string" || !SWITCH_KINDS.has(r.kind as SwitchKind)) continue
+        const elapsedMs = typeof r.elapsedMs === "number" && Number.isFinite(r.elapsedMs) && r.elapsedMs >= 0 ? r.elapsedMs : 0
+        const row: SwitchLogRow = { ts: r.ts, session: r.session, kind: r.kind as SwitchKind, elapsedMs }
+        if (typeof r.from === "string") row.from = clean(r.from, 120)
+        if (typeof r.to === "string") row.to = clean(r.to, 120)
+        if (typeof r.reason === "string" && DROP_REASONS.has(r.reason as SwitchDropReason)) row.reason = r.reason as SwitchDropReason
+        if (typeof r.helperCostUsd === "number" && Number.isFinite(r.helperCostUsd) && r.helperCostUsd >= 0) row.helperCostUsd = r.helperCostUsd
+        out.push(row)
+      }
+      return out
+    } catch { return [] }
   }
 }
