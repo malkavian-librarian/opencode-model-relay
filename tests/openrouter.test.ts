@@ -64,6 +64,25 @@ describe("fetchOpenRouterModels", () => {
     const fetchImpl = async () => new Response("a".repeat(2_097_153), { status: 200 })
     await expect(fetchOpenRouterModels({ baseUrl: "https://openrouter.ai/api/v1", fetchImpl })).rejects.toThrow(/too large/)
   })
+
+  it("cancels a chunked catalog body as soon as it exceeds the cap", async () => {
+    let cancelled = false
+    const chunk = new Uint8Array(1024 * 1024)
+    let chunks = 0
+    const fetchImpl = (async () => ({
+      ok: true, status: 200, headers: new Headers(),
+      body: {
+        getReader: () => ({
+          read: async () => ({ value: chunk, done: chunks++ >= 3 }),
+          cancel: async () => { cancelled = true },
+          releaseLock: () => {},
+        }),
+      },
+      text: async () => "{}",
+    })) as unknown as typeof fetch
+    await expect(fetchOpenRouterModels({ baseUrl: "https://openrouter.ai/api/v1", fetchImpl })).rejects.toThrow(/too large/)
+    expect(cancelled).toBe(true)
+  })
 })
 
 describe("orChat", () => {

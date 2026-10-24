@@ -138,6 +138,30 @@ describe("Controller.onSessionError", () => {
     expect(calls.logs[0].elapsedMs).toEqual(expect.any(Number))
     expect(calls.toast.join(" ")).toContain("b/2")
   })
+  it("resolves a find level during production failover", async () => {
+    const entry = { find: { match: "glm-5", free: true, via: "openrouter" as const } }
+    const { c, d, calls } = setup({
+      cfg: { levels: ["a/1", entry, "b/2"], privacy: { consent: true } },
+    })
+    let fetches = 0
+    ;(d as any).fetchCatalog = async () => {
+      fetches++
+      return [{ id: "fake-org/glm-5.3:free", pricing: { prompt: "0" } }]
+    }
+    await expect(c.onSessionError("s1", err429)).resolves.toBe(true)
+    expect(fetches).toBe(1)
+    expect(calls.prompt[0].body.model).toEqual({ providerID: "openrouter", modelID: "fake-org/glm-5.3:free" })
+  })
+
+  it("skips a find level when production resolution fails", async () => {
+    const entry = { find: { match: "glm-5", free: true, via: "openrouter" as const } }
+    const { c, d, calls } = setup({
+      cfg: { levels: ["a/1", entry, "b/2"], privacy: { consent: true } },
+    })
+    ;(d as any).fetchCatalog = async () => { throw new Error("catalog unavailable") }
+    await expect(c.onSessionError("s1", err429)).resolves.toBe(true)
+    expect(calls.prompt[0].body.model).toEqual({ providerID: "b", modelID: "2" })
+  })
   it("sends nothing to OpenRouter without consent, and uses the plain tail", async () => {
     const { c, calls } = setup({ env: { OPENROUTER_API_KEY: "k" } })
     await c.onSessionError("s1", err429)
@@ -606,6 +630,18 @@ describe("Controller.manualSwitch (#67)", () => {
     expect(calls.prompt[0].body.model).toEqual({ providerID: "c", modelID: "3" })
     expect(d.state.get("s1").switchCount).toBe(1)
     expect(calls.logs[0]).toMatchObject({ kind: "manual" })
+  })
+
+  it("next resolves a find level before falling through to a static model", async () => {
+    const entry = { find: { match: "glm-5", free: true, via: "openrouter" as const } }
+    const { c, d, calls, messages } = setup({
+      cfg: { levels: ["a/1", entry, "b/2"], privacy: { consent: true } },
+    })
+    d.state.set("s1", { pluginPinned: "a/1", switchCount: 1, updated: 1_000_000 })
+    messages.splice(0, messages.length, ...msgs({ providerID: "a", modelID: "1" }, "a1"))
+    ;(d as any).fetchCatalog = async () => [{ id: "fake-org/glm-5.3:free", pricing: { prompt: "0" } }]
+    await expect(c.manualSwitch("s1")).resolves.toMatchObject({ status: "switched", to: "openrouter/fake-org/glm-5.3:free" })
+    expect(calls.prompt[0].body.model).toEqual({ providerID: "openrouter", modelID: "fake-org/glm-5.3:free" })
   })
 
   it("reports lock contention and the bottom of the ladder without throwing", async () => {

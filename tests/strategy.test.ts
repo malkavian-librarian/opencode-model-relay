@@ -202,15 +202,17 @@ describe("find levels (#69)", () => {
     let calls = 0
     const input = { ...base, consent: true, cache: state, fetchCatalog: async () => {
       calls++
-      return [{ id: calls === 1 ? "fake-org/glm-5.2:free" : "bad/id?", pricing: { prompt: "0" } }]
+      return [{ id: calls === 1 ? "fake-org/glm-5.2:free" : calls === 2 ? "fake-org/glm-5.3:free" : "bad/id?", pricing: { prompt: "0" } }]
     }}
     await expect(resolveFindLevel(entry, input)).resolves.toBe("openrouter/fake-org/glm-5.2:free")
     await expect(resolveFindLevel(entry, input)).resolves.toBe("openrouter/fake-org/glm-5.2:free")
     expect(calls).toBe(1)
+    await expect(resolveFindLevel(entry, { ...input, failed: "openrouter/fake-org/glm-5.2:free" })).resolves.toBe("openrouter/fake-org/glm-5.3:free")
+    expect(calls).toBe(2)
     clock += 60 * 60 * 1000 + 1
     input.now = clock
     await expect(resolveFindLevel(entry, input)).resolves.toBeUndefined()
-    expect(calls).toBe(2)
+    expect(calls).toBe(3)
     expect(state.getFindCache(JSON.stringify(entry), clock)).toBeUndefined()
     fs.rmSync(dir, { recursive: true, force: true })
   })

@@ -7,6 +7,36 @@ const MAX_RESPONSE_BYTES = 1_000_000
 const MAX_CATALOG_RESPONSE_BYTES = 2 * 1024 * 1024
 const DEFAULT_TIMEOUT_MS = 30_000
 
+/** Reads at most maxBytes and cancels the response reader before rejecting overflow. */
+async function readBoundedBody(res: Response, maxBytes: number, tooLarge: string): Promise<string> {
+  if (!res.body) return ""
+  const reader = res.body.getReader()
+  const chunks: Uint8Array[] = []
+  let total = 0
+  try {
+    for (;;) {
+      const next = await reader.read()
+      if (next.done) {
+        const body = new Uint8Array(total)
+        let offset = 0
+        for (const chunk of chunks) { body.set(chunk, offset); offset += chunk.byteLength }
+        return new TextDecoder().decode(body)
+      }
+      total += next.value.byteLength
+      if (total > maxBytes) {
+        await reader.cancel()
+        throw new Error(tooLarge)
+      }
+      chunks.push(next.value)
+    }
+  } catch (e) {
+    try { await reader.cancel() } catch { /* best effort */ }
+    throw e
+  } finally {
+    reader.releaseLock()
+  }
+}
+
 export interface OpenRouterCatalogModel { id: string; pricing?: { prompt?: string } }
 export interface OpenRouterCatalogArgs {
   baseUrl: string; allowCustomBaseUrl?: boolean; timeoutMs?: number; fetchImpl?: typeof fetch
@@ -36,8 +66,11 @@ export async function fetchOpenRouterModels(a: OpenRouterCatalogArgs): Promise<O
     const declared = Number(res.headers.get("content-length"))
     if (Number.isFinite(declared) && declared > MAX_CATALOG_RESPONSE_BYTES) throw new Error("OpenRouter catalog response too large")
     let raw: string
-    try { raw = await Promise.race([res.text(), timeout]) } catch { throw new Error(timedOut ? "OpenRouter catalog timed out" : "OpenRouter catalog read failed") }
-    if (new TextEncoder().encode(raw).byteLength > MAX_CATALOG_RESPONSE_BYTES) throw new Error("OpenRouter catalog response too large")
+    try { raw = await Promise.race([readBoundedBody(res, MAX_CATALOG_RESPONSE_BYTES, "OpenRouter catalog response too large"), timeout]) } catch (e) {
+      if (timedOut) throw new Error("OpenRouter catalog timed out")
+      if (e instanceof Error && /too large/.test(e.message)) throw e
+      throw new Error("OpenRouter catalog read failed")
+    }
     let json: unknown
     try { json = JSON.parse(raw) } catch { throw new Error("OpenRouter catalog returned invalid JSON") }
     const rows = json && typeof json === "object" && Array.isArray((json as { data?: unknown }).data) ? (json as { data: unknown[] }).data : []
@@ -93,11 +126,12 @@ export async function orChat(a: OrChatArgs): Promise<{ text: string; costUsd?: n
     if (Number.isFinite(declared) && declared > MAX_RESPONSE_BYTES) throw new Error("OpenRouter response too large")
     let raw: string
     try {
-      raw = await Promise.race([res.text(), timeout])
-    } catch {
-      throw new Error(timedOut ? "OpenRouter request timed out" : "OpenRouter request failed: could not read response")
+      raw = await Promise.race([readBoundedBody(res, MAX_RESPONSE_BYTES, "OpenRouter response too large"), timeout])
+    } catch (e) {
+      if (timedOut) throw new Error("OpenRouter request timed out")
+      if (e instanceof Error && /too large/.test(e.message)) throw e
+      throw new Error("OpenRouter request failed: could not read response")
     }
-    if (raw.length > MAX_RESPONSE_BYTES) throw new Error("OpenRouter response too large")
     let json: any
     try {
       json = JSON.parse(raw)
