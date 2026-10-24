@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest"
+import { describe, it, expect, vi } from "vitest"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
@@ -89,5 +89,15 @@ describe("SwitchLog", () => {
     new SwitchLog(d, true, () => { calls++ }).append(rec(1))
     expect(calls).toBe(3)
     expect(fs.readFileSync(f, "utf8")).toMatch(/^[0-9a-f]{64}$/)
+  })
+  it("collects older valid rows when malformed lines fill the physical tail", () => {
+    const d = dir(); const l = new SwitchLog(d, true)
+    l.append(rec(1)); l.append(rec(2)); l.append(rec(3))
+    fs.appendFileSync(path.join(d, "switches.jsonl"), "{malformed}\n".repeat(11))
+
+    const read = vi.spyOn(fs, "readSync")
+    expect(l.recent(10).map((row) => row.ts)).toEqual([1, 2, 3])
+    expect(Math.max(...read.mock.calls.map((call) => (call as any[])[3] as number))).toBeLessThanOrEqual(64 * 1024)
+    read.mockRestore()
   })
 })

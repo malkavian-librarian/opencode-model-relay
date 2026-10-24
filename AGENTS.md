@@ -109,6 +109,7 @@ over with a structured summary. Design: `docs/superpowers/specs/2026-10-18-model
 - Older guidance: [graduated development gotchas](docs/process.md#graduated-development-gotchas).
 - Optional handover narratives awaited before abort delayed failover -> dispatch the redacted plain tail, then reserve an enacted switch's helper attempt before the async writer (2026-10-24)
 - Superseded switches spent helper attempts and late narratives could restart stale turns -> reserve after enactment and lock/check the resumed model, turn and intent before dispatch; label only scheduled narratives deferred (2026-10-24)
+- Physical-tail slicing dropped older valid ledger rows after malformed lines -> validate backward until the requested valid count, then reverse for chronology (2026-10-24)
 
 ## Bugs - [open]/[fixed] + repro (max 10)
 

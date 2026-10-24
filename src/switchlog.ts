@@ -117,7 +117,9 @@ export class SwitchLog {
       const text = buffer.toString("utf8")
       const lines = (size > length ? text.slice(text.indexOf("\n") + 1) : text).split("\n").filter(Boolean)
       const out: SwitchLogRow[] = []
-      for (const line of lines.slice(-count)) {
+      for (let i = lines.length - 1; i >= 0 && out.length < count; i--) {
+        const line = lines[i]
+        if (line === undefined) continue
         let raw: unknown
         try { raw = JSON.parse(line) } catch { continue }
         if (!raw || typeof raw !== "object") continue
@@ -137,7 +139,7 @@ export class SwitchLog {
         if (typeof r.helperCostUsd === "number" && Number.isFinite(r.helperCostUsd) && r.helperCostUsd >= 0) row.helperCostUsd = r.helperCostUsd
         out.push(row)
       }
-      return out
+      return out.reverse()
     } catch { return [] }
   }
 }
