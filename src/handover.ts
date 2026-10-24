@@ -119,13 +119,14 @@ function defang(s: string): string {
     .replace(SECTION_TITLES, `$1${ZWSP}$2`)
 }
 
-export function buildHandover(a: { cfg: RelayConfig; ex: Extracted; from: string; to: string; reason: FailureKind; summary: string | null }): string {
+/** Builds a marked handover with fenced, untrusted context; only scheduled narratives are labeled deferred. */
+export function buildHandover(a: { cfg: RelayConfig; ex: Extracted; from: string; to: string; reason: FailureKind; summary: string | null; narrativeDeferred?: boolean }): string {
   const calls = a.ex.toolCalls.slice(-30).map((t) => `- ${t.status} ${t.name}${t.target ? " " + t.target : ""}`).join("\n") || "- (none)"
   const tail = a.ex.transcript.slice(-3000)
   const text = renderHandover(a.cfg.handover.messageTemplate, {
     from: a.from, to: a.to, reason: a.reason,
     // Both the LLM summary and the raw tail are untrusted: fence them as data the content cannot close.
-    summary: `<handover-data>\n${defang(a.summary ?? `(summary unavailable; recent transcript follows)\n${tail}`)}\n</handover-data>`,
+    summary: `<handover-data>\n${defang(a.summary ?? `(summary unavailable; ${a.narrativeDeferred ? "narrative deferred; " : ""}recent transcript follows)\n${tail}`)}\n</handover-data>`,
     toolCalls: defang(calls),
     files: defang(a.ex.filesTouched.map((f) => `- ${f}`).join("\n") || "- (none)"),
     todo: defang(a.ex.todo.map((t) => `- ${t}`).join("\n") || "- (none)"),

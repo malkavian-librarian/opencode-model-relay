@@ -12,6 +12,14 @@ Record of `@coderabbitai` exchanges, so agents do not repeat past mistakes.
 
 ## Entries (newest first)
 
+### 2026-10-24 - PR #85 (issue #68), repair round 1
+
+- Minor, `AGENTS.md`: graduated older guidance to `docs/process.md` to meet the 120-line cap.
+- Minor, `src/controller.ts`: reserve helper attempts only after enactment, preserving the budget when a pick supersedes the switch.
+- Major, `src/controller.ts`: discard deferred narratives when the resumed model, user turn or handover intent changes; check under the session lock.
+- Minor, `src/handover.ts`: label only scheduled narratives deferred; other plain tails use the neutral unavailable label.
+- Docstring warning: documented `buildHandover` and `SwitchLog.append`; controller entry points already have JSDoc. Provider coverage percentage requires a new provider check.
+
 ### 2026-10-19 - PR #53 (issue #26)
 
 - Major, src/controller.ts:266 "match the verdict to the turn before switching" (a stale verdict could trigger
