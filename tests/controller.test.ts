@@ -30,7 +30,16 @@ function setup(o: { cfg?: object; messages?: OcMessage[]; parentID?: string; env
     },
     tui: { showToast: async (a: any) => { calls.toast.push(a.body.message); return {} } },
   }
-  const cfg = ConfigSchema.parse({ tiers: { primary: "a/1", secondary: ["b/2"] }, ...(o.cfg ?? {}) })
+  // Mirror loadConfig's tiers->levels migration (#63): the runtime consumes levels only (#66), and
+  // production always builds its config through loadConfig, never through ConfigSchema.parse alone.
+  const tiers = { primary: "a/1", secondary: ["b/2"], ...((o.cfg as { tiers?: object } | undefined)?.tiers) } as { primary?: string; secondary?: string[]; tertiary?: string[] }
+  const seen = new Set<string>()
+  const levels = [tiers.primary, ...(tiers.secondary ?? []), ...(tiers.tertiary ?? [])].filter((m): m is string => {
+    if (m === undefined || seen.has(m)) return false
+    seen.add(m)
+    return true
+  })
+  const cfg = ConfigSchema.parse({ tiers, levels, ...(o.cfg ?? {}) })
   const state = new StateStore(path.join(fs.mkdtempSync(path.join(os.tmpdir(), "relay-c-")), "state.json"), () => 1_000_000); state.load()
   const lock = new SessionLock()
   const d: Deps = {
@@ -69,7 +78,7 @@ describe("Controller.onSessionError", () => {
       const { c, d, calls } = setup({ cfg: { tiers: { primary: "a/1", secondary: ["b/2", "c/3"] } }, messages: [
         ...msgs(), { info: { id: "h1", role: "user", model: { providerID: "b", modelID: "2" } }, parts: [{ type: "text", text: `${RELAY_MARKER}\ncontinue` }] },
       ] })
-      d.state.set("s1", { sticky: "b/2", origin: "a/1", switchCount: 1, updated: 1_000_000 })
+      d.state.set("s1", { pluginPinned: "b/2", switchCount: 1, updated: 1_000_000 })
       const stale = from?.providerID === "a"
       expect(await c.onSessionError("s1", err429, from)).toBe(!stale)
       expect(await c.onSessionError("s1", err429, from)).toBe(false)
@@ -92,6 +101,9 @@ describe("Controller.onSessionError", () => {
   })
   it("successive failed marker handovers retain tried-model exclusion, helper cap and switch cap", async () => {
     const { c, d, calls, messages } = setup({ cfg: { maxSwitchesPerSession: 2, privacy: { consent: true }, handover: { maxCallsPerSession: 1 }, tiers: { primary: "a/1", secondary: ["b/2", "c/3", "d/4"] } }, env: { OPENROUTER_API_KEY: "k" } })
+    // d/4 stays blacklisted through the loop's cooldown resets, so the cap iteration (AC-07) finds
+    // nothing healthy to fall back to: switch_cap strands with the cap toast, never a fourth hop.
+    d.health["d/4"] = { permanent: true, permanentAt: 1_000_000 }
     for (const [providerID, modelID] of [["a", "1"], ["b", "2"], ["c", "3"]] as const) {
       if (providerID !== "a") messages.push({ info: { id: `h${modelID}`, role: "user", model: { providerID, modelID } }, parts: [{ type: "text", text: `${RELAY_MARKER}\ncontinue` }] })
       // Even expired cooldowns must not reselect a model already tried in this turn.
@@ -99,7 +111,7 @@ describe("Controller.onSessionError", () => {
       await c.onSessionError("s1", err429)
     }
     expect(calls.prompt.map((p) => p.body.model)).toEqual([{ providerID: "b", modelID: "2" }, { providerID: "c", modelID: "3" }])
-    expect(d.state.get("s1")).toMatchObject({ switchCount: 2, helperCalls: 1, sticky: "c/3" })
+    expect(d.state.get("s1")).toMatchObject({ switchCount: 2, helperCalls: 1, pluginPinned: "c/3" })
     expect(calls.chat).toHaveLength(1)
     expect(calls.logs).toHaveLength(2)
     expect(calls.toast.join(" ")).toMatch(/limit/i)
@@ -107,7 +119,7 @@ describe("Controller.onSessionError", () => {
   it("marker text alone cannot supply a missing or conflicting current model", async () => {
     for (const model of [undefined, { providerID: "", modelID: "2" }, { providerID: "a", modelID: "1" }]) {
       const { c, d, calls } = setup({ messages: [{ info: { id: "h1", role: "user", model }, parts: [{ type: "text", text: `${RELAY_MARKER}\ncontinue` }] }] })
-      d.state.set("s1", { sticky: "b/2", origin: "a/1", switchCount: 1, updated: 1_000_000 })
+      d.state.set("s1", { pluginPinned: "b/2", switchCount: 1, updated: 1_000_000 })
       expect(await c.onSessionError("s1", err429, { providerID: "b", modelID: "2" })).toBe(false)
       expect(d.health).toEqual({})
       expect(calls.prompt).toEqual([])
@@ -121,7 +133,7 @@ describe("Controller.onSessionError", () => {
     const text: string = calls.prompt[0].body.parts[0].text
     expect(text).toContain("fix the login bug")
     expect(text).toContain("UNKNOWN")
-    expect(d.state.get("s1")).toMatchObject({ sticky: "b/2", origin: "a/1", switchCount: 1 })
+    expect(d.state.get("s1")).toMatchObject({ pluginPinned: "b/2", switchCount: 1 })
     expect(calls.logs[0]).toMatchObject({ sessionID: "s1", from: "a/1", to: "b/2", kind: "rate_limit" })
     expect(calls.toast.join(" ")).toContain("b/2")
   })
@@ -160,7 +172,7 @@ describe("Controller.onSessionError", () => {
     expect(calls.prompt).toHaveLength(2)
     expect(calls.chat).toHaveLength(1)
     expect(calls.prompt[1].body.parts[0].text).toMatch(/summary unavailable/i)
-    expect(d.state.get("s1")).toMatchObject({ switchCount: 2, origin: "a/1", helperCalls: 1 })
+    expect(d.state.get("s1")).toMatchObject({ switchCount: 2, helperCalls: 1 })
     const reloaded = new StateStore((d.state as any).file, () => 1_000_000); reloaded.load()
     expect(reloaded.get("s1").helperCalls).toBe(1)
   })
@@ -233,6 +245,7 @@ describe("Controller.onSessionError", () => {
     await vi.waitFor(() => expect(calls.abort).toHaveLength(1))
     messages.push(asst("a-mid", "a", "1"))
     await c.onSessionError("s1", err429) // lock held -> dropped
+    expect(calls.logs[0]).toMatchObject({ kind: "switch_dropped", reason: "lock_held" }) // never silent (#66)
     release()
     await p1
     expect(calls.prompt).toHaveLength(1)
@@ -245,14 +258,15 @@ describe("Controller.onSessionError", () => {
     await c.onSessionError("s1", err429)
     expect(calls.prompt).toHaveLength(2)
     expect(calls.prompt[1].body.model).toEqual({ providerID: "c", modelID: "3" })
-    expect(d.state.get("s1")).toMatchObject({ sticky: "c/3", origin: "a/1", switchCount: 2 })
-    expect(calls.logs[1]).toMatchObject({ from: "b/2", to: "c/3" })
+    expect(d.state.get("s1")).toMatchObject({ pluginPinned: "c/3", switchCount: 2 })
+    expect(calls.logs[2]).toMatchObject({ from: "b/2", to: "c/3" }) // logs[0] is the lock-held drop entry
   })
   it("a dropped (lock-held) event does not poison dedup for later real failures", async () => {
     const { c, d, calls, messages } = setup({ cfg: { tiers: { primary: "a/1", secondary: ["b/2", "c/3"] } } })
     d.lock.tryAcquire("s1")
     await c.onSessionError("s1", err429)
     expect(calls.prompt).toHaveLength(0)
+    expect(calls.logs[0]).toMatchObject({ kind: "switch_dropped", reason: "lock_held" }) // never silent (#66)
     d.lock.release("s1")
     void messages
     await c.onSessionError("s1", err429)
@@ -260,11 +274,11 @@ describe("Controller.onSessionError", () => {
   })
   it("records health for the sticky model, not the origin, when the sticky model fails", async () => {
     const { c, d } = setup({ cfg: { tiers: { primary: "a/1", secondary: ["b/2", "c/3"] } }, messages: msgs({ providerID: "b", modelID: "2" }, "b9") })
-    d.state.set("s1", { sticky: "b/2", origin: "a/1", switchCount: 1, updated: 1 })
+    d.state.set("s1", { pluginPinned: "b/2", switchCount: 1, updated: 1 })
     await c.onSessionError("s1", err429)
     expect(d.health["b/2"]?.cooldownUntil).toBeGreaterThan(1_000_000)
     expect(d.health["a/1"]).toBeUndefined()
-    expect(d.state.get("s1").origin).toBe("a/1")
+    expect(d.state.get("s1").pluginPinned).toBe("a/1")
     expect(d.state.get("s1").switchCount).toBe(2)
   })
   it("carries the user's last request verbatim; tool-output injection stays out of that slot", async () => {
@@ -289,6 +303,7 @@ describe("Controller.onSessionError", () => {
     expect(calls.abort).toHaveLength(0)
     expect(calls.prompt).toHaveLength(0)
     expect(calls.toast.join(" ")).toMatch(/no healthy model/i)
+    expect(calls.toast.join(" ")).toMatch(/relay next/) // the stranded session is told what to do (#66)
   })
   it("all other models cooling: exhausted toast, no abort/prompt", async () => {
     const { c, d, calls } = setup()
@@ -297,6 +312,7 @@ describe("Controller.onSessionError", () => {
     expect(calls.abort).toHaveLength(0)
     expect(calls.prompt).toHaveLength(0)
     expect(calls.toast.join(" ")).toMatch(/no healthy model/i)
+    expect(calls.toast.join(" ")).toMatch(/relay next/)
   })
   it("marks permanent failures so the model is never chosen again", async () => {
     const { c, d, calls } = setup({ cfg: { tiers: { primary: "a/1", secondary: ["b/2", "c/3"] } } })
@@ -304,12 +320,22 @@ describe("Controller.onSessionError", () => {
     expect(d.health["a/1"]?.permanent).toBe(true)
     expect(calls.prompt[0].body.model.modelID).toBe("2")
   })
-  it("stops at maxSwitchesPerSession with a cap toast", async () => {
+  it("at the switch cap the deepest healthy level still takes over (onExhausted acts, P1-F4)", async () => {
     const { c, d, calls } = setup({ cfg: { maxSwitchesPerSession: 1 } })
-    d.state.set("s1", { sticky: "b/2", origin: "a/1", switchCount: 1, updated: 1 })
+    d.state.set("s1", { pluginPinned: "a/1", switchCount: 1, updated: 1 })
+    await c.onSessionError("s1", err429)
+    expect(calls.prompt).toHaveLength(1)
+    expect(calls.prompt[0].body.model).toEqual({ providerID: "b", modelID: "2" })
+    expect(d.state.get("s1")).toMatchObject({ pluginPinned: "b/2", switchCount: 2 })
+  })
+  it("at the cap with nothing healthy: cap toast plus the /relay next hint, never a silent no-op", async () => {
+    const { c, d, calls } = setup({ cfg: { maxSwitchesPerSession: 1 } })
+    d.state.set("s1", { pluginPinned: "a/1", switchCount: 1, updated: 1 })
+    d.health["b/2"] = { cooldownUntil: 2_000_000 }
     await c.onSessionError("s1", err429)
     expect(calls.prompt).toHaveLength(0)
     expect(calls.toast.join(" ")).toMatch(/limit/i)
+    expect(calls.toast.join(" ")).toMatch(/relay next/)
   })
   it("never throws even if the client misbehaves", async () => {
     const { c, d } = setup()
@@ -391,11 +417,11 @@ describe("Controller.onSessionIdle", () => {
 })
 
 describe("Controller.status", () => {
-  it("reports chain, key/consent state and sticky model", () => {
+  it("reports chain, key/consent state and the pinned model", () => {
     const { c, d } = setup({ env: { OPENROUTER_API_KEY: "k" } })
-    d.state.set("s1", { sticky: "b/2", origin: "a/1", switchCount: 2, updated: 1 })
+    d.state.set("s1", { pluginPinned: "b/2", switchCount: 2, updated: 1 })
     const s = c.status("s1")
-    for (const x of ["a/1", "b/2", "switches: 2", "consent: off", "key: set"]) expect(s).toContain(x)
+    for (const x of ["a/1", "b/2", "pinned: b/2", "switches: 2", "consent: off", "key: set"]) expect(s).toContain(x)
   })
 })
 
@@ -449,7 +475,10 @@ describe("Controller quality judge (#26)", () => {
   })
 
   for (const [name, o] of Object.entries({
-    "primary tier": { cfg: judgeCfg, messages: judgedTurn("a1", "1") },
+    "level 1 (a/1)": { cfg: judgeCfg, messages: [
+      { info: { id: "u1", role: "user", agent: "build" }, parts: [{ type: "text", text: "fix the login bug" }] },
+      { info: { id: "a1", role: "assistant", providerID: "a", modelID: "1", tokens: { output: 10 } }, parts: [{ type: "step-start" }, { type: "step-finish" }] },
+    ] },
     "no tokens": { cfg: judgeCfg, messages: [
       { info: { id: "u1", role: "user" }, parts: [{ type: "text", text: "go" }] },
       { info: { id: "a1", role: "assistant", providerID: "b", modelID: "2" }, parts: [{ type: "step-finish" }] },
@@ -501,7 +530,7 @@ describe("Controller quality judge (#26)", () => {
     // chain-sticky switch path: the next healthy model in the chain is a/1 (nothing ruled it out)
     expect(calls.prompt[0].body.model).toEqual({ providerID: "a", modelID: "1" })
     expect(calls.logs[0]).toMatchObject({ from: "b/2", to: "a/1", kind: "quality" })
-    expect(d.state.get("s1")).toMatchObject({ switchCount: 1, sticky: "a/1", judgeCalls: 2 })
+    expect(d.state.get("s1")).toMatchObject({ switchCount: 1, pluginPinned: "a/1", judgeCalls: 2 })
     expect(d.state.judgeDaily).toMatchObject({ calls: 2, costUsd: 0.02 })
     expect(d.health["b/2"]).toBeUndefined() // quality is not a failure: b/2 was not cooled down
   })
@@ -682,6 +711,11 @@ describe("Controller.onRetryStatus", () => {
     expect(calls.prompt).toHaveLength(1)
     expect(calls.logs[0]).toMatchObject({ kind: "rate_limit" })
   })
+  it("reset wording in the retry message becomes a reset-aware cooldown (#66 resetText wiring)", async () => {
+    const { c, d } = setup()
+    await c.onRetryStatus("s1", 2, "Rate limit exceeded, retry-after: 300")
+    expect(d.health["a/1"]?.cooldownUntil).toBe(1_000_000 + 300_000)
+  })
   it("unknown and overflow text never switch", async () => {
     const { c, calls } = setup()
     for (const m of ["something odd happened", "", "context length exceeded"]) {
@@ -703,5 +737,100 @@ describe("Controller.onRetryStatus", () => {
     const { c, d } = setup()
     ;(d.client.session as any).get = async () => { throw new Error("down") }
     await expect(c.onRetryStatus("s1", 3, "rate limit")).resolves.toBeUndefined()
+  })
+})
+
+describe("manual-pick adoption, crash windows and drops (#66)", () => {
+  it("adoptPick merges under the lock, clears the pick's marks once, keeps every counter", () => {
+    const { c, d } = setup()
+    d.state.set("s1", { pluginPinned: "b/2", switchCount: 3, helperCalls: 2, judgeCalls: 1, updated: 1 })
+    d.health["z/9"] = { cooldownUntil: 2_000_000, failures: 5, permanent: true, permanentAt: 1_000_000 }
+    c.adoptPick("s1", "z/9")
+    expect(d.state.get("s1")).toMatchObject({ pluginPinned: "z/9", adoptedAt: 1_000_000, switchCount: 3, helperCalls: 2, judgeCalls: 1 })
+    expect(d.health["z/9"]).toBeUndefined()
+  })
+  it("adoptPick is a no-op while the failover lock is held (the re-read adopts, or the switch supersedes)", () => {
+    const { c, d } = setup()
+    d.lock.tryAcquire("s1")
+    c.adoptPick("s1", "z/9")
+    expect(d.state.get("s1").pluginPinned).toBeUndefined()
+    d.lock.release("s1")
+  })
+  it("U-03: failures of a freshly adopted pick within the 30 s grace window do not re-mark it, but the failover service still runs", async () => {
+    const { c, d, calls } = setup()
+    c.adoptPick("s1", "a/1")
+    await c.onSessionError("s1", err429)
+    expect(d.health["a/1"]).toBeUndefined() // not re-marked inside the grace window
+    expect(calls.prompt[0].body.model).toEqual({ providerID: "b", modelID: "2" })
+    expect(d.state.get("s1").pluginPinned).toBe("b/2")
+  })
+  it("U-03: past the grace window the adopted model is marked again", async () => {
+    const { c, d } = setup({ cfg: { tiers: { primary: "a/1", secondary: ["b/2", "c/3"] } } })
+    d.state.set("s1", { pluginPinned: "a/1", adoptedAt: 1_000_000 - 31_000, switchCount: 0, updated: 1 })
+    await c.onSessionError("s1", err429)
+    expect(d.health["a/1"]?.cooldownUntil).toBeGreaterThan(1_000_000)
+  })
+  it("U-02: the plugin's own switch clears the pick's grace and keeps every counter (merge, never overwrite)", async () => {
+    const { c, d, calls } = setup({ messages: msgs({ providerID: "z", modelID: "9" }, "z1") })
+    d.state.set("s1", { switchCount: 2, helperCalls: 1, updated: 1 })
+    c.adoptPick("s1", "z/9")
+    expect(d.state.get("s1").adoptedAt).toBe(1_000_000)
+    await c.onSessionError("s1", err429)
+    expect(calls.prompt[0].body.model).toEqual({ providerID: "a", modelID: "1" })
+    expect(d.state.get("s1")).toMatchObject({ pluginPinned: "a/1", switchCount: 3, helperCalls: 1 })
+    expect(d.state.get("s1").adoptedAt).toBeUndefined() // the grace window belongs to the pick, never the plugin's target
+  })
+  it("U-01: a pick landing mid-failover supersedes the pending switch: adopted under the held lock, logged superseded, no prompt", async () => {
+    const { c, d, calls, messages } = setup({ cfg: { tiers: { primary: "a/1", secondary: ["b/2"] } } })
+    d.health["z/9"] = { cooldownUntil: 2_000_000 }
+    let release!: () => void
+    const gate = new Promise<void>((r) => { release = r })
+    ;(d.client.session as any).abort = async (a: any) => { calls.abort.push(a); await gate; return {} }
+    d.switchOpts = { abortTimeoutMs: 2000, abortDelayMs: 0 } // the gated abort must outlive vi.waitFor's polling
+    const p = c.onSessionError("s1", err429)
+    await vi.waitFor(() => expect(calls.abort).toHaveLength(1))
+    // The owner picks z/9 while the failover is between its abort and switchModel: the pick supersedes.
+    messages.push({ info: { id: "u2", role: "user", model: { providerID: "z", modelID: "9" } }, parts: [{ type: "text", text: "picked" }] })
+    release()
+    expect(await p).toBe(false)
+    expect(calls.prompt).toHaveLength(0)
+    expect(d.state.get("s1")).toMatchObject({ pluginPinned: "z/9", switchCount: 0 })
+    expect(typeof d.state.get("s1").adoptedAt).toBe("number")
+    expect(d.health["z/9"]).toBeUndefined() // the pick's marks cleared
+    expect(calls.logs[0]).toMatchObject({ kind: "switch_dropped", reason: "superseded", from: "a/1", to: "z/9" })
+  })
+  it("U-07: a marker-guarded drop is logged, never silent", async () => {
+    const { c, d, calls } = setup({ messages: [
+      ...msgs(),
+      { info: { id: "h1", role: "user", model: { providerID: "b", modelID: "2" } }, parts: [{ type: "text", text: `${RELAY_MARKER}\ncontinue` }] },
+    ] })
+    // Newest is our own handover prompt, but the session is not on the plugin's model.
+    d.state.set("s1", { pluginPinned: "c/3", switchCount: 1, updated: 1_000_000 })
+    expect(await c.onSessionError("s1", err429)).toBe(false)
+    expect(calls.logs[0]).toMatchObject({ kind: "switch_dropped", reason: "marker_guard" })
+    expect(calls.prompt).toHaveLength(0)
+  })
+  it("U-08: an exhausted walk falls back to the deepest healthy level (tried-this-turn does not strand the session)", async () => {
+    const { c, d, calls } = setup({ cfg: { tiers: { primary: "a/1", secondary: ["b/2", "c/3"] } }, messages: [
+      ...msgs(),
+      { info: { id: "h1", role: "user", model: { providerID: "b", modelID: "2" } }, parts: [{ type: "text", text: `${RELAY_MARKER}\ncontinue` }] },
+    ] })
+    d.state.set("s1", { pluginPinned: "b/2", switchCount: 1, updated: 1_000_000 }) // the marker handover is ours: the guard passes
+    d.health["c/3"] = { cooldownUntil: 2_000_000 }
+    await c.onSessionError("s1", err429)
+    expect(calls.prompt[0].body.model).toEqual({ providerID: "a", modelID: "1" })
+    expect(d.state.get("s1").pluginPinned).toBe("a/1")
+  })
+  it("U-10: an off-ladder current model is judged (only level 1 is exempt)", async () => {
+    const { c, calls } = setup({
+      cfg: { tiers: { primary: "a/1", secondary: ["b/2"], tertiary: ["c/3"] }, privacy: { consent: true }, judge: { enabled: true, minIntervalMs: 0 } },
+      env: { OPENROUTER_API_KEY: "k" },
+      messages: [
+        { info: { id: "u1", role: "user", agent: "build" }, parts: [{ type: "text", text: "fix the login bug" }] },
+        { info: { id: "z1", role: "assistant", providerID: "z", modelID: "9", tokens: { output: 10 } }, parts: [{ type: "step-start" }, { type: "step-finish" }] },
+      ],
+    })
+    await c.onSessionIdle("s1")
+    expect(calls.chat).toHaveLength(1)
   })
 })

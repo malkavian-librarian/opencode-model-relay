@@ -15,6 +15,15 @@ GitHub issue comments hold the detailed notes; this file indexes the latest stat
 
 ## Entries (newest first)
 
+### 2026-10-24 - #66 controller rewiring implemented, PR open (opencode)
+
+- Status: `feat/issue-66-controller-rewiring` (TDD: RED with 41 failing replicas -> GREEN); local gates all green:
+  typecheck, 429/429 tests, build, `npm pack --dry-run`. PR awaits QA (controller.ts + config.ts security pass mandatory).
+- Covers AC-01..AC-10: adoption under lock + 30 s grace, supersede re-read (abort->switchModel seam), retry storm
+  token, switch_dropped ledger, onExhausted deepest-healthy fallback + /relay next hint, pin/mode deletion, judge
+  level-1 rule, crash-window persist + on-load validation/discard.
+- Next: #67 (/relay commands). Blockers: none; #79 untouched (strategy.ts kept deletions-only per scope).
+
 ### 2026-10-23 - #63 + #65 merged; ponytail docs #76; #64 next (opencode)
 
 - Status: #63 closed ([PR #74](https://github.com/malkavian-librarian/opencode-model-relay/pull/74)); #65 closed ([PR #75](https://github.com/malkavian-librarian/opencode-model-relay/pull/75)); board current.

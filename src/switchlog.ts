@@ -5,8 +5,10 @@ import type { FailureKind } from "./types"
 
 const SALT_BYTES = 32
 
-/** A failure-switch logs its FailureKind; a chain-recover return logs "recover"; a judge switch logs "quality". */
-export type SwitchKind = FailureKind | "recover"
+export type SwitchDropReason = "lock_held" | "marker_guard" | "superseded"
+
+/** A failure-switch logs its FailureKind; a judge switch logs "quality"; a dropped switch logs "switch_dropped" with its reason. */
+export type SwitchKind = FailureKind | "switch_dropped"
 
 function readSalt(f: string): Buffer | null {
   try {
@@ -61,11 +63,17 @@ export class SwitchLog {
     return this.salt
   }
 
-  append(r: { ts: number; sessionID: string; from: string; to: string; kind: SwitchKind; helperCostUsd?: number }): void {
+  append(r: { ts: number; sessionID: string; from?: string; to?: string; kind: SwitchKind; reason?: SwitchDropReason; helperCostUsd?: number }): void {
     if (!this.enabled) return
     try {
       const session = createHmac("sha256", this.getSalt()).update(r.sessionID).digest("hex").slice(0, 16)
-      const row = { ts: r.ts, session, from: clean(r.from, 120), to: clean(r.to, 120), kind: r.kind, ...(r.helperCostUsd !== undefined ? { helperCostUsd: r.helperCostUsd } : {}) }
+      const row = {
+        ts: r.ts, session, kind: r.kind,
+        ...(r.from !== undefined ? { from: clean(r.from, 120) } : {}),
+        ...(r.to !== undefined ? { to: clean(r.to, 120) } : {}),
+        ...(r.reason !== undefined ? { reason: r.reason } : {}),
+        ...(r.helperCostUsd !== undefined ? { helperCostUsd: r.helperCostUsd } : {}),
+      }
       fs.mkdirSync(this.dir, { recursive: true, mode: 0o700 })
       fs.appendFileSync(path.join(this.dir, "switches.jsonl"), JSON.stringify(row) + "\n", { mode: 0o600 })
     } catch { /* logging is best effort */ }

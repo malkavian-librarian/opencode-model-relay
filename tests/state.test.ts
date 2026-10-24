@@ -11,12 +11,12 @@ describe("StateStore", () => {
     const s = new StateStore(file()); s.load()
     expect(s.get("x")).toMatchObject({ switchCount: 0 })
   })
-  it("persists sticky state across instances", () => {
+  it("persists pluginPinned, adoptedAt and quarantine across instances", () => {
     const f = file()
     const a = new StateStore(f); a.load()
-    a.set("s1", { sticky: "b/2", origin: "a/1", switchCount: 1, updated: Date.now() }); a.save()
+    a.set("s1", { pluginPinned: "b/2", adoptedAt: 123, quarantine: { "a/1": 99 }, switchCount: 1, updated: Date.now() }); a.save()
     const b = new StateStore(f); b.load()
-    expect(b.get("s1")).toMatchObject({ sticky: "b/2", origin: "a/1", switchCount: 1 })
+    expect(b.get("s1")).toMatchObject({ pluginPinned: "b/2", adoptedAt: 123, quarantine: { "a/1": 99 }, switchCount: 1 })
   })
   it("expires entries older than 14 days and caps at 500 sessions", () => {
     const f = file(); let t = 0
@@ -29,23 +29,26 @@ describe("StateStore", () => {
     expect(b.get("old").switchCount).toBe(0)
     expect(Object.keys(JSON.parse(fs.readFileSync(f, "utf8")).sessions).length).toBeLessThanOrEqual(500)
   })
-  it("validates recoveries at load: keeps a non-negative count (floored), drops bad values", () => {
+  it("validates pluginPinned, adoptedAt and quarantine at load: keeps good values, drops bad ones", () => {
     const f = file()
     const now = Date.now()
     fs.writeFileSync(f, JSON.stringify({ v: 1, sessions: {
-      ok: { switchCount: 1, recoveries: 2.7, updated: now },
-      neg: { switchCount: 1, recoveries: -1, updated: now },
-      str: { switchCount: 1, recoveries: "3", updated: now },
-      pin: { switchCount: 1, lastPin: 5, updated: now },
+      ok: { switchCount: 1, pluginPinned: "b/2", adoptedAt: 2.9, quarantine: { "a/1": 5 }, updated: now },
+      badPin: { switchCount: 1, pluginPinned: 42, updated: now },
+      negAt: { switchCount: 1, adoptedAt: -1, updated: now },
+      strAt: { switchCount: 1, adoptedAt: "soon", updated: now },
+      qBad: { switchCount: 1, quarantine: { "a/1": -1, "x/9": "y" }, updated: now },
       judge: { switchCount: 1, judgeCalls: 2.9, lastJudgeAt: -1, updated: now },
       judgeBad: { switchCount: 1, judgeCalls: "9", lastJudgeAt: "then", updated: now },
     } }))
     const s = new StateStore(f); s.load()
-    expect(s.get("ok").recoveries).toBe(2)
-    expect(s.get("neg").recoveries).toBeUndefined()
-    expect(s.get("str").recoveries).toBeUndefined()
-    expect(s.get("ok").lastPin).toBeUndefined()
-    expect(s.get("pin").lastPin).toBeUndefined()
+    expect(s.get("ok").pluginPinned).toBe("b/2")
+    expect(s.get("ok").adoptedAt).toBe(2)
+    expect(s.get("ok").quarantine).toEqual({ "a/1": 5 })
+    expect(s.get("badPin").pluginPinned).toBeUndefined()
+    expect(s.get("negAt").adoptedAt).toBeUndefined()
+    expect(s.get("strAt").adoptedAt).toBeUndefined()
+    expect(s.get("qBad").quarantine).toBeUndefined()
     expect(s.get("judge")).toMatchObject({ judgeCalls: 2 })
     expect(s.get("judge").lastJudgeAt).toBeUndefined() // negative timestamps are not dateable
     expect(s.get("judgeBad").judgeCalls).toBeUndefined()
@@ -193,7 +196,7 @@ describe("StateStore", () => {
       const now = 1_000_000
       const f = file()
       fs.writeFileSync(f, JSON.stringify({ v: 1, sessions: {
-        good: { sticky: "b/2", switchCount: 1, updated: now },
+        good: { pluginPinned: "b/2", switchCount: 1, updated: now },
         noUpdated: { switchCount: 1 },
         strUpdated: { switchCount: 1, updated: "yesterday" },
         noCount: { updated: now },
@@ -201,20 +204,21 @@ describe("StateStore", () => {
         strRec: "x",
         arrRec: [],
         nanCount: { switchCount: null, updated: now },
-        badSticky: { sticky: 42, origin: {}, switchCount: 3, updated: now },
+        badPinned: { pluginPinned: 42, adoptedAt: {}, quarantine: "no", switchCount: 3, updated: now },
       } }))
       const s = new StateStore(f, () => now); s.load()
-      expect(s.get("good")).toMatchObject({ sticky: "b/2", switchCount: 1 })
+      expect(s.get("good")).toMatchObject({ pluginPinned: "b/2", switchCount: 1 })
       for (const k of ["noUpdated", "strUpdated", "noCount", "nullRec", "strRec", "arrRec", "nanCount"]) {
         expect(s.get(k).switchCount).toBe(0)
       }
-      const bs = s.get("badSticky")
+      const bs = s.get("badPinned")
       expect(bs.switchCount).toBe(3)
-      expect(bs.sticky).toBeUndefined()
-      expect(bs.origin).toBeUndefined()
+      expect(bs.pluginPinned).toBeUndefined()
+      expect(bs.adoptedAt).toBeUndefined()
+      expect(bs.quarantine).toBeUndefined()
       s.save()
       const saved = JSON.parse(fs.readFileSync(f, "utf8")).sessions
-      expect(Object.keys(saved).sort()).toEqual(["badSticky", "good"])
+      expect(Object.keys(saved).sort()).toEqual(["badPinned", "good"])
     })
 
     it("prototype-ish ids do not leak or pollute", () => {
@@ -225,6 +229,42 @@ describe("StateStore", () => {
       expect(s.get("toString").switchCount).toBe(0)
       expect(({} as Record<string, unknown>).switchCount).toBeUndefined()
       expect(() => s.save()).not.toThrow()
+    })
+  })
+
+  describe("crash-restart windows (#66)", () => {
+    it("discards a pending-handover intent on load (never resumes and discards at once)", () => {
+      const f = file()
+      const now = Date.now()
+      fs.writeFileSync(f, JSON.stringify({ v: 1, sessions: {
+        s1: { switchCount: 1, pluginPinned: "b/2", pendingHandover: { to: "b/2", at: now }, updated: now },
+      } }))
+      const s = new StateStore(f); s.load()
+      expect(s.get("s1").pendingHandover).toBeUndefined() // discard wins: the intent never survives a reload
+      expect(s.get("s1").pluginPinned).toBe("b/2")
+    })
+    it("validatePinned drops pluginPinned values absent from the configured levels, keeps known ones", () => {
+      const f = file()
+      const now = Date.now()
+      fs.writeFileSync(f, JSON.stringify({ v: 1, sessions: {
+        known: { switchCount: 1, pluginPinned: "a/1", updated: now },
+        gone: { switchCount: 1, pluginPinned: "z/9", updated: now },
+        none: { switchCount: 1, updated: now },
+      } }))
+      const s = new StateStore(f); s.load()
+      s.validatePinned(new Set(["a/1", "b/2"]))
+      expect(s.get("known").pluginPinned).toBe("a/1")
+      expect(s.get("gone").pluginPinned).toBeUndefined()
+      expect(s.get("none").switchCount).toBe(1)
+    })
+    it("a hostile quarantine map is bounded at load", () => {
+      const f = file()
+      const now = Date.now()
+      const many: Record<string, number> = {}
+      for (let i = 0; i < 200; i++) many["m" + i + "/1"] = now
+      fs.writeFileSync(f, JSON.stringify({ v: 1, sessions: { s1: { switchCount: 1, quarantine: many, updated: now } } }))
+      const s = new StateStore(f); s.load()
+      expect(Object.keys(s.get("s1").quarantine ?? {}).length).toBeLessThanOrEqual(64)
     })
   })
 

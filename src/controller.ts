@@ -3,8 +3,10 @@ import { modelKey, parseModel } from "./types"
 import type { RelayConfig } from "./config"
 import { classify, classifyRetryMessage } from "./classifier"
 import type { Classified } from "./types"
-import { buildChain, buildTiers, decideSwitch, hasRelayMarker, recordFailure, tierOf, triedThisTurn, type ModelHealth } from "./strategy"
-import { decidePin } from "./pin"
+import {
+  buildLadder, clearSuccess, effectiveMaxSwitches, hasRelayMarker, isHealthy, recordFailure, triedThisTurn,
+  walkFromTop, QUARANTINE_MS, type LevelEntry, type ModelHealth,
+} from "./strategy"
 import { heuristicReasons, observeTurn } from "./heuristics"
 import { buildJudgeInput, parseVerdict } from "./judge"
 import type { SessionLock } from "./session-lock"
@@ -13,10 +15,19 @@ import type { createNarrator, NarrationEvent } from "./narrator"
 import type { SwitchLog } from "./switchlog"
 import type { orChat } from "./openrouter"
 import { buildHandover, extractFromMessages, writeNarrative } from "./handover"
-import { performSwitch } from "./switcher"
 
-// In-memory bound for the judge streak map (one entry per judged session, emptied on restart).
-const MAX_JUDGE_STREAKS = 500
+// In-memory bounds for the per-session maps (judge streaks, retry-storm tokens): one entry per
+// session, emptied on restart (fail safe) and cleared wholesale when the bound is hit.
+const MAX_SESSION_ENTRIES = 500
+// Failures of a freshly adopted pick within this window do not re-mark it (retry-storm ordering, panel P1-F7).
+const ADOPTION_GRACE_MS = 30_000
+// Retry events for a session are consumed for this long after an enacted switch (AC-05 storm token).
+const RETRY_STORM_MS = 30_000
+// Absorbed switcher defaults: the abort race timeout and the pre-prompt delay; the AC-02 re-read
+// sits between the abort and the prompt (switchModel), the only seam where a pick can be honoured.
+const ABORT_TIMEOUT_MS = 5000
+const ABORT_DELAY_MS = 300
+const EXHAUSTED_HINT = " Run /relay next to retry the ladder now."
 
 export interface Deps {
   client: ClientLike
@@ -33,17 +44,42 @@ export interface Deps {
   switchOpts?: { abortTimeoutMs?: number; abortDelayMs?: number }
 }
 
+/** The raw provider message is reset-wording input for recordFailure; it is only ever regex-matched, never executed. */
+const errorText = (raw: unknown): string | undefined => {
+  const r = raw as { data?: { message?: unknown } } | undefined
+  return typeof r?.data?.message === "string" ? r.data.message : undefined
+}
+
+/** The deepest healthy, unquarantined level other than the current model: the onExhausted last resort (AC-07). */
+function fallbackLevel(
+  ladder: readonly LevelEntry[], health: Record<string, ModelHealth>,
+  quarantine: Readonly<Record<string, number>> | undefined, current: string, now: number,
+): string | undefined {
+  for (let i = ladder.length - 1; i >= 0; i--) {
+    const l = ladder[i]
+    if (typeof l !== "string" || l === current) continue
+    if (!isHealthy(health[l], now)) continue
+    const qAt = quarantine?.[l]
+    if (qAt !== undefined && now - qAt < QUARANTINE_MS) continue
+    return l
+  }
+  return undefined
+}
+
 export class Controller {
   private warnedConsent = false // controller-global (one toast per process), not per session
   // Judge "two consecutive switch:true verdicts" streak, in memory only: a restart resets it (fail safe).
   private judgeStreak = new Map<string, number>()
+  // Retry-storm tokens: sessionID -> switch enacted at. In memory only: a restart is fail safe because
+  // the transcript re-read and the attribution guard reject stale events on their own.
+  private storm = new Map<string, number>()
   constructor(private d: Deps) {}
 
-  private async toast(ev: NarrationEvent, v?: Parameters<Deps["narrate"]>[1], variant: "info" | "warning" = "info") {
+  private async toast(ev: NarrationEvent, v?: Parameters<Deps["narrate"]>[1], variant: "info" | "warning" = "info", suffix = "") {
     try {
       const message = this.d.narrate(ev, v)
       if (!message) return
-      await this.d.client.tui.showToast({ body: { message, variant } })
+      await this.d.client.tui.showToast({ body: { message: message + suffix, variant } })
     } catch { /* toast is best effort */ }
   }
 
@@ -54,7 +90,7 @@ export class Controller {
 
   async onSessionError(sessionID: string, rawError: unknown, from?: ModelRef): Promise<boolean> {
     try {
-      return await this.handle(sessionID, classify(rawError), from)
+      return await this.handle(sessionID, classify(rawError), from, errorText(rawError))
     } catch (e) {
       try { this.d.log(`onSessionError failed: ${e instanceof Error ? e.message : String(e)}`) } catch { /* ignore */ }
       return false
@@ -68,23 +104,24 @@ export class Controller {
    */
   async onRetryStatus(sessionID: string, attempt: number, message: string): Promise<void> {
     try {
+      if (this.stormActive(sessionID)) return // AC-05: the old turn's retries are consumed, not re-handled
       const c = classifyRetryMessage(message)
       if (!c.switchable) return
       if (!c.permanent && !(attempt >= 2)) return
-      await this.handle(sessionID, c)
+      await this.handle(sessionID, c, undefined, message)
     } catch (e) {
       try { this.d.log(`onRetryStatus failed: ${e instanceof Error ? e.message : String(e)}`) } catch { /* ignore */ }
     }
   }
 
   /**
-   * Runs the switch decision. Returns whether a handover was enacted (or attempted): the v2 retry
-   * hook may only veto OpenCode's own retry when the relay actually took the turn over (#56).
-   * `from` (optional) is the model the failure is attributed to (v2 retry events carry it); when
-   * known and equal to the handover target, the failure is the handover turn itself failing and the
-   * chain advances instead of being discarded.
+   * Runs the switch decision. Returns whether a handover was enacted: the v2 retry hook may only veto
+   * OpenCode's own retry when the relay actually took the turn over (#56). `from` (optional) is the model
+   * the failure is attributed to (v2 retry events carry it); it must agree with the current turn, never
+   * poison a newer model. `resetText` is the raw provider message: reset wording in it becomes a
+   * reset-aware cooldown (#64 wiring).
    */
-  private async handle(sessionID: string, c: Classified, from?: ModelRef): Promise<boolean> {
+  private async handle(sessionID: string, c: Classified, from?: ModelRef, resetText?: string): Promise<boolean> {
     const d = this.d
     // A plugin-caused abort is consumed here; an unmarked abort is the user pressing Esc. Neither switches.
     if (c.kind === "user_abort") { d.lock.consumePluginAbort(sessionID); return false }
@@ -92,7 +129,11 @@ export class Controller {
 
     const session = await d.client.session.get({ path: { id: sessionID } })
     if (session.data?.parentID) return false
-    if (!d.lock.tryAcquire(sessionID)) return false
+    if (!d.lock.tryAcquire(sessionID)) {
+      // AC-06: the incident's silent drop class becomes diagnosable (metadata only, rule 8).
+      d.switchLog.append({ ts: d.now(), sessionID, ...(from ? { from: modelKey(from) } : {}), kind: "switch_dropped", reason: "lock_held" })
+      return false
+    }
     try {
       // The transcript is read under the lock (#40): a user message arriving while a switch runs must not
       // make this failure handler blame the freshly switched (recovered) model.
@@ -108,27 +149,45 @@ export class Controller {
       const current = `${m.providerID}/${m.modelID}`
       // Explicit attribution must agree with the current turn, never poison a newer model.
       if (from && modelKey(from) !== current) return false
-      // Marker text is untrusted: require both model context and persisted sticky state.
-      // Missing attribution alone is not evidence of a stale error; the target can fail
-      // before producing an assistant message. Lock/dedup and switch caps still apply.
-      if (hasRelayMarker(newest.parts) && d.state.get(sessionID).sticky !== current) return false
+      const now = d.now()
+      let rec = { ...d.state.get(sessionID) } // session records are merged, never whole-record overwritten (AC-01)
+      // Marker guard (#56, AC-03): marker text is untrusted; a marker newest while the session is not
+      // on the plugin-set model is a stale error, and the drop is logged, never silent (AC-06).
+      if (hasRelayMarker(newest.parts) && rec.pluginPinned !== current) {
+        d.switchLog.append({ ts: now, sessionID, from: current, kind: "switch_dropped", reason: "marker_guard" })
+        return false
+      }
 
       if (d.lock.isDuplicate(`${sessionID}:${ni.id}`)) return false
 
+      // Adoption grace (AC-01): failures of a just-adopted pick within the window do not re-mark it.
+      const inGrace = rec.adoptedAt !== undefined && rec.pluginPinned === current && now - rec.adoptedAt < ADOPTION_GRACE_MS
       if (c.kind === "quality") {
-        // The judge says quality, not failure: the model is not cooled down or blacklisted, it can win the
-        // chain back later (or via chain-recover); only the switch itself is triggered.
-      } else {
-        recordFailure(d.health, current, c, d.now(), d.cfg.cooldownMs)
+        // The judge says quality, not failure: the model is not cooled down or blacklisted.
+      } else if (!inGrace) {
+        recordFailure(d.health, current, c, now, d.cfg.cooldownMs, resetText)
+        // The per-session quarantine rides the record (#64 wiring): refreshed with every mark.
+        d.state.set(sessionID, { ...d.state.get(sessionID), quarantine: { ...(d.state.get(sessionID).quarantine ?? {}), [current]: now }, updated: now })
         d.state.save() // health (cooldowns, blacklists) is persisted together with the session record (#39)
+        rec = { ...d.state.get(sessionID) }
       }
-      const rec = { ...d.state.get(sessionID) }
-      const decision = decideSwitch({
-        cfg: d.cfg, current, health: d.health, now: d.now(), switchCount: rec.switchCount, tried: triedThisTurn(msgs),
+
+      const ladder = buildLadder(d.cfg)
+      const decision = walkFromTop({
+        ladder, current, health: d.health, tried: triedThisTurn(msgs),
+        quarantine: rec.quarantine, now, switchCount: rec.switchCount, maxSwitches: effectiveMaxSwitches(d.cfg),
       })
-      if (decision.action === "exhausted") {
-        await this.toast(decision.reason === "switch_cap" ? "cap_reached" : "exhausted", {}, "warning")
-        return false
+      let to: string
+      if (decision.action === "switch") to = decision.to
+      else {
+        // AC-07 onExhausted acts: a last-resort hop to the deepest healthy level (even at the cap,
+        // P1-F4); none healthy -> the /relay next hint, never a silent no-op.
+        const fallback = fallbackLevel(ladder, d.health, rec.quarantine, current, now)
+        if (fallback === undefined) {
+          await this.toast(decision.reason === "switch_cap" ? "cap_reached" : "exhausted", {}, "warning", EXHAUSTED_HINT)
+          return false
+        }
+        to = fallback
       }
 
       const ex = extractFromMessages(msgs, d.cfg.handover)
@@ -149,25 +208,40 @@ export class Controller {
         await this.toast(d.cfg.privacy.consent ? "no_key" : "no_consent")
       }
 
-      const text = buildHandover({ cfg: d.cfg, ex, from: current, to: decision.to, reason: c.kind, summary })
+      const text = buildHandover({ cfg: d.cfg, ex, from: current, to, reason: c.kind, summary })
       const agent = [...msgs].reverse().find((m) => m.info.role === "user")?.info.agent
-      await performSwitch(
-        { client: d.client, lock: d.lock, log: d.log, ...(d.switchOpts ?? {}) },
-        { sessionID, to: parseModel(decision.to), ...(agent ? { agent } : {}), handoverText: text },
-      )
-
-      d.state.set(sessionID, {
-        sticky: decision.to, origin: rec.origin ?? current, switchCount: rec.switchCount + 1, helperCalls, updated: d.now(),
-        ...(rec.recoveries !== undefined ? { recoveries: rec.recoveries } : {}),
-        ...(rec.judgeCalls !== undefined ? { judgeCalls: rec.judgeCalls } : {}),
-        ...(rec.lastJudgeAt !== undefined ? { lastJudgeAt: rec.lastJudgeAt } : {}),
-      })
+      // AC-04: the plugin-set model and the crash-window intent are persisted BEFORE switchModel; a
+      // reload discards the intent and the next context hook re-syncs to whatever the session runs.
+      const next: typeof rec = {
+        ...d.state.get(sessionID), pluginPinned: to, pendingHandover: { to, at: now },
+        switchCount: rec.switchCount + 1, helperCalls, updated: now,
+      }
+      delete next.adoptedAt // the grace window belongs to an adopted pick, never to the plugin's own switch
+      d.state.set(sessionID, next)
       d.state.save()
+
+      const supersededBy = await this.enactSwitch(sessionID, current, { to: parseModel(to), ...(agent ? { agent } : {}), handoverText: text })
+      if (supersededBy !== undefined) {
+        // AC-02: the pick supersedes the pending switch; adopt it under the still-held lock (merged
+        // write, marks cleared once, the switchCount rolled back: nothing was enacted).
+        const adopted: typeof rec = {
+          ...d.state.get(sessionID), pluginPinned: supersededBy, adoptedAt: d.now(),
+          switchCount: rec.switchCount, updated: d.now(),
+        }
+        delete adopted.pendingHandover // no switch was enacted; the intent is spent
+        d.state.set(sessionID, adopted)
+        delete d.health[supersededBy] // the owner chose it: cooldown, blacklist and failure count all clear, once
+        d.state.save()
+        d.switchLog.append({ ts: d.now(), sessionID, from: current, to: supersededBy, kind: "switch_dropped", reason: "superseded" })
+        return false
+      }
+      this.storm.set(sessionID, now) // AC-05: retry events for the old turn are consumed from here
+      if (this.storm.size >= MAX_SESSION_ENTRIES) this.storm.clear() // bound the in-memory map
       d.switchLog.append({
-        ts: d.now(), sessionID, from: current, to: decision.to, kind: c.kind,
+        ts: now, sessionID, from: current, to, kind: c.kind,
         ...(helperCost !== undefined ? { helperCostUsd: helperCost } : {}),
       })
-      await this.toast("switch_done", { from: current, to: decision.to, reason: c.kind })
+      await this.toast("switch_done", { from: current, to, reason: c.kind })
       return true
     } finally {
       d.lock.release(sessionID)
@@ -175,11 +249,70 @@ export class Controller {
   }
 
   /**
+   * The switch enactment, absorbed from the switcher so the AC-02 re-read can sit between the abort
+   * and switchModel: abort (plugin-marked), wait, re-read the session's resolved model, then fire the
+   * handover prompt without awaiting it (a prompt resolves only when the whole model turn is over).
+   * Returns the pick that superseded the switch, or undefined when the prompt was fired.
+   */
+  private async enactSwitch(
+    sessionID: string, current: string,
+    a: { to: ModelRef; agent?: string; handoverText: string },
+  ): Promise<string | undefined> {
+    const d = this.d
+    d.lock.markPluginAbort(sessionID)
+
+    let timer: ReturnType<typeof setTimeout> | undefined
+    let outcome: "ok" | "rejected" | "timeout"
+    try {
+      // async wrapper so a synchronous throw from abort() becomes a rejection; the
+      // .then(ok, rejected) handlers also swallow a late rejection after the timeout fired.
+      const abortP = (async () => d.client.session.abort({ path: { id: sessionID } }))()
+        .then(() => "ok" as const, () => "rejected" as const)
+      const timeoutP = new Promise<"timeout">((r) => { timer = setTimeout(() => r("timeout"), d.switchOpts?.abortTimeoutMs ?? ABORT_TIMEOUT_MS) })
+      outcome = await Promise.race([abortP, timeoutP])
+    } finally {
+      if (timer !== undefined) clearTimeout(timer)
+    }
+    // The abort mark stays set on ok/timeout (handle() swallows the resulting MessageAbortedError);
+    // cleared only when abort was rejected (no abort error will arrive).
+    if (outcome === "rejected") d.lock.consumePluginAbort(sessionID)
+
+    const delay = d.switchOpts?.abortDelayMs ?? ABORT_DELAY_MS
+    if (delay > 0) await new Promise<void>((r) => { setTimeout(r, delay) })
+
+    // AC-02: re-read the session's resolved model after the abort and before switchModel. In v2 every
+    // user row carries the session's current model, so a pick that landed mid-failover is visible here.
+    // In v1 user rows carry the model they were sent with, so an absent model just means "unchanged".
+    const msgs = await this.fetchMessages(sessionID)
+    const newestUser = [...msgs].reverse().find((m) => m.info.role === "user")
+    const um = newestUser?.info.model
+    if (um?.providerID && um.modelID) {
+      const resolved = `${um.providerID}/${um.modelID}`
+      if (resolved !== current) return resolved // the pick supersedes the pending switch
+    }
+
+    try {
+      Promise.resolve(
+        d.client.session.prompt({
+          path: { id: sessionID },
+          body: {
+            model: a.to,
+            ...(a.agent ? { agent: a.agent } : {}),
+            parts: [{ type: "text", text: a.handoverText }],
+          },
+        }),
+      ).catch((e: unknown) => { try { d.log(`prompt failed: ${e instanceof Error ? e.message : String(e)}`) } catch { /* ignore */ } })
+    } catch (e) {
+      try { d.log(`prompt failed: ${e instanceof Error ? e.message : String(e)}`) } catch { /* ignore */ }
+    }
+    return undefined
+  }
+
+  /**
    * session.idle: a turn completed without a plugin-seen failure. The turn's model proves itself: its
-   * blacklist (permanent, 24 h) and cooldown clear, "#39". Reading the transcript outside the lock is safe
-   * here: the mark is idempotent (nothing to clear), never switches, and failures only clear after a full
-   * turn really ended on that model. Never throws. The quality judge (#26) runs fire-and-forget after the
-   * health mark: idle handling is never delayed by the judge's OpenRouter call.
+   * cooldown and blacklist clear but the failures count stays (#64 success-clears-less, wired here);
+   * the entry then drops out at the next save's prune. The storm token and any pending-handover marker
+   * are spent. Never throws. The quality judge (#26) runs fire-and-forget after the health mark.
    */
   async onSessionIdle(sessionID: string): Promise<void> {
     try {
@@ -189,8 +322,15 @@ export class Controller {
       const newest = [...msgs].reverse().find((m) => m.info.role === "assistant" && m.info.providerID && m.info.modelID)
       if (!newest) return
       const model = `${newest.info.providerID}/${newest.info.modelID}`
+      this.storm.delete(sessionID) // the turn is over: the retry storm is spent
+      const rec = this.d.state.get(sessionID)
       if (this.d.health[model] !== undefined) {
-        delete this.d.health[model]
+        clearSuccess(this.d.health, model)
+        this.d.state.save()
+      }
+      if (rec.pendingHandover !== undefined) {
+        const { pendingHandover: _spent, ...rest } = rec // the handover turn ended: the intent marker is spent
+        this.d.state.set(sessionID, { ...rest, updated: this.d.now() })
         this.d.state.save()
       }
       // The judge runs after the health mark and never delays it; the event hook calls onSessionIdle
@@ -199,6 +339,51 @@ export class Controller {
     } catch (e) {
       try { this.d.log(`onSessionIdle failed: ${e instanceof Error ? e.message : String(e)}`) } catch { /* ignore */ }
     }
+  }
+
+  /**
+   * Adopts the owner's manually picked model (AC-01): merges the record under the SessionLock (never
+   * lock-free next to a failover), sets pluginPinned := pick, clears the pick's marks once and opens
+   * the grace window. When the lock is held the adoption is skipped: the failover's post-abort re-read
+   * adopts the pick instead (or its switch supersedes it). Never throws.
+   */
+  adoptPick(sessionID: string, pick: string): void {
+    const d = this.d
+    let locked = false
+    try {
+      locked = d.lock.tryAcquire(sessionID)
+      if (!locked) return
+      const now = d.now()
+      d.state.set(sessionID, { ...d.state.get(sessionID), pluginPinned: pick, adoptedAt: now, updated: now })
+      delete d.health[pick] // the owner chose it: cooldown, blacklist and failure count all clear, once
+      d.state.save()
+    } catch {
+      /* adoption never throws into the host */
+    } finally {
+      if (locked) d.lock.release(sessionID)
+    }
+  }
+
+  /**
+   * True when a switch was enacted for this session within RETRY_STORM_MS and the retrying model is
+   * not the plugin-set one: the event belongs to the old, already-failed-over turn and is consumed (AC-05).
+   */
+  stormActive(sessionID: string, fromKey?: string): boolean {
+    const at = this.storm.get(sessionID)
+    if (at === undefined) return false
+    if (this.d.now() - at >= RETRY_STORM_MS) { this.storm.delete(sessionID); return false }
+    if (fromKey !== undefined && fromKey === this.d.state.get(sessionID).pluginPinned) return false
+    return true
+  }
+
+  /**
+   * Load-time crash-window validation (AC-04): pluginPinned values that no longer resolve to a
+   * configured level are dropped silently; the next context hook re-syncs to the runtime's model.
+   */
+  validatePersistedPins(): void {
+    const known = new Set(buildLadder(this.d.cfg).filter((l): l is string => typeof l === "string"))
+    this.d.state.validatePinned(known)
+    this.d.state.save()
   }
 
   /**
@@ -211,8 +396,9 @@ export class Controller {
       const cfg = d.cfg.judge
       if (!cfg.enabled) return
       const now = d.now()
-      // The primary tier never uses the judge; a model in no tier is never judged either.
-      if (tierOf(buildTiers(d.cfg), current) <= 0) return
+      // The judge never evaluates level 1 (AC-09): that model is the owner's chosen primary, and
+      // judging it would risk switching the session away from it on one bad turn.
+      if (buildLadder(d.cfg)[0] === current) return
       // Egress is consent-gated like the handover summary; nothing leaves without both consent and key.
       const key = d.env[d.cfg.openrouter.keyEnv]
       if (!d.cfg.privacy.consent || !key) return
@@ -273,7 +459,7 @@ export class Controller {
 
       const streak = verdict.switch ? (this.judgeStreak.get(sessionID) ?? 0) + 1 : 0
       if (streak <= 0) { this.judgeStreak.delete(sessionID); return }
-      if (this.judgeStreak.size >= MAX_JUDGE_STREAKS) this.judgeStreak.clear() // bound the in-memory map
+      if (this.judgeStreak.size >= MAX_SESSION_ENTRIES) this.judgeStreak.clear() // bound the in-memory map
       this.judgeStreak.set(sessionID, streak)
       if (streak < 2) return // two consecutive switch:true verdicts required
       this.judgeStreak.delete(sessionID)
@@ -290,73 +476,25 @@ export class Controller {
   }
 
   /**
-   * chat.message: returns the model key the new user turn must run on, or undefined to leave it alone.
-   * Pins the sticky model, clears stickiness on an explicit user pick, and in chain-recover returns the session
-   * to a recovered higher-priority model. A recovery is not a failure: switchCount is untouched, the switch log
-   * gets kind "recover". Never throws; on any error the turn keeps its model.
+   * chat.message (v1 hook contract, server.ts): stay-put (#66). The pin machinery is gone and the turn
+   * always keeps the session's model; v2 adoption lives in the context hook. Never throws.
    */
-  onChatMessage(sessionID: string, inputModelKey: string, parts: unknown): string | undefined {
-    const d = this.d
-    let locked = false
-    try {
-      const rec = d.state.get(sessionID)
-      // Recover only on a real user turn: never on our own handover prompt (same failing turn) and never while
-      // a switch holds the lock (the failure path owns the session then).
-      // Budget: a recovery is free but the failure switch away from a model that relapses is not, so leave one
-      // switch of headroom (never strand the session on a failing model at the cap), and cap recoveries too.
-      const max = d.cfg.maxSwitchesPerSession
-      const budget = rec.switchCount < max - 1 && (rec.recoveries ?? 0) < max
-      locked = d.cfg.mode === "chain-recover" && budget && !!rec.sticky && !hasRelayMarker(parts) && d.lock.tryAcquire(sessionID)
-      const p = decidePin(rec, inputModelKey, locked
-        ? { mode: d.cfg.mode, chain: buildChain(d.cfg, rec.origin ?? rec.sticky ?? inputModelKey), health: d.health, now: d.now() }
-        : undefined)
-      if (p.action === "pin") return p.to
-      if (p.action === "none") return undefined
-      // Drop sticky/origin but keep the switch and helper-call counters (caps must survive).
-      const next: typeof rec = { switchCount: rec.switchCount, updated: d.now() }
-      if (rec.helperCalls !== undefined) next.helperCalls = rec.helperCalls
-      if (rec.recoveries !== undefined) next.recoveries = rec.recoveries
-      if (rec.judgeCalls !== undefined) next.judgeCalls = rec.judgeCalls
-      if (rec.lastJudgeAt !== undefined) next.lastJudgeAt = rec.lastJudgeAt
-      if (p.action === "recover") {
-        next.recoveries = (rec.recoveries ?? 0) + 1
-        if (!p.clearSticky) {
-          // The turn arrived on another model than the recovered one (TUI still showing origin or the old sticky
-          // model; which one is unconfirmed, #19): keep pinning that incoming model to the recovered one, so
-          // remember it as lastPin (seen by decidePin, not a user pick). Keep the session's origin as the chain
-          // anchor (no primary: buildChain puts it first); fallback only when state had none (seeded session).
-          next.sticky = p.to
-          next.origin = rec.origin ?? inputModelKey
-          next.lastPin = inputModelKey
-        }
-        d.state.set(sessionID, next); d.state.save()
-        d.switchLog.append({ ts: d.now(), sessionID, from: rec.sticky as string, to: p.to, kind: "recover" })
-        // Fire-and-forget: toast never rejects internally; recovery must not delay the turn.
-        void this.toast("recovered", { from: rec.sticky as string, to: p.to })
-        return p.to
-      }
-      d.state.set(sessionID, next); d.state.save()
-      return undefined
-    } catch (e) {
-      try { d.log(`onChatMessage failed: ${e instanceof Error ? e.message : String(e)}`) } catch { /* ignore */ }
-      return undefined
-    } finally {
-      if (locked) d.lock.release(sessionID)
-    }
+  onChatMessage(_sessionID: string, _inputModelKey: string, _parts: unknown): string | undefined {
+    return undefined
   }
 
   status(sessionID?: string): string {
     const d = this.d
     const rec = sessionID ? d.state.get(sessionID) : undefined
-    const chain = buildChain(d.cfg, rec?.sticky ?? d.cfg.tiers.primary ?? "(current model)")
+    const chain = buildLadder(d.cfg).map((l) => (typeof l === "string" ? l : "(unresolved find)")).join(" -> ")
     return [
-      `chain: ${chain.join(" -> ")}`,
-      `mode: ${d.cfg.mode}`,
-      `sticky: ${rec?.sticky ?? "none"}`,
+      `chain: ${chain || "(no levels configured)"}`,
+      `pinned: ${rec?.pluginPinned ?? "none"}`,
       `switches: ${rec?.switchCount ?? 0}`,
-      `recoveries: ${rec?.recoveries ?? 0}`,
       `consent: ${d.cfg.privacy.consent ? "on" : "off"}`,
       `key: ${d.env[d.cfg.openrouter.keyEnv] ? "set" : "missing"}`,
     ].join("\n")
   }
 }
+
+// (No module-scope helpers follow the class: the judge reads the clock through the local `now` above.)

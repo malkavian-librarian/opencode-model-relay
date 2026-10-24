@@ -35,7 +35,9 @@ function setup(messages: OcMessage[]) {
     },
     tui: { showToast: async () => ({}) },
   }
-  const cfg = ConfigSchema.parse({ tiers: { primary: PRIMARY, secondary: [SECONDARY] }, privacy: { consent: false } })
+  // Mirror loadConfig's tiers->levels migration (#63): the runtime consumes levels only (#66).
+  const tiers = { primary: PRIMARY, secondary: [SECONDARY] }
+  const cfg = ConfigSchema.parse({ tiers, levels: [tiers.primary, ...tiers.secondary], privacy: { consent: false } })
   const state = new StateStore(path.join(fs.mkdtempSync(path.join(os.tmpdir(), "relay-rf-")), "state.json"), () => 1_000_000)
   state.load()
   const lock = new SessionLock()
@@ -117,7 +119,7 @@ describe("real fixture: Controller on the first failing turn", () => {
     expect(calls.prompt).toHaveLength(1)
     expect(calls.prompt[0].body.model).toEqual({ providerID: "openrouter", modelID: "meta-llama/llama-3.1-8b-instruct" })
     expect(calls.prompt[0].body.parts[0].text).toContain(FIRST_REQUEST)
-    expect(d.state.get("ses_example")).toMatchObject({ sticky: SECONDARY, origin: PRIMARY, switchCount: 1 })
+    expect(d.state.get("ses_example")).toMatchObject({ pluginPinned: SECONDARY, switchCount: 1 })
   })
 
   it("dedups on the newest message id", async () => {

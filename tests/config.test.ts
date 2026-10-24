@@ -29,7 +29,8 @@ describe("config", () => {
   it("missing file -> defaults, no warning", () => {
     const r = loadConfig(path.join(tmp(), "nope.jsonc"))
     expect(r.warnings).toEqual([])
-    expect(r.config.mode).toBe("chain-sticky")
+    expect(r.config.cooldownMs).toBe(60000)
+    expect(r.config.levels).toEqual([])
   })
   it("parses JSONC with comments and trailing commas", () => {
     const f = path.join(tmp(), "c.jsonc")
@@ -50,26 +51,50 @@ describe("config", () => {
     expect(r.warnings[0]).toMatch(/tiers\.secondary/)
     expect(r.config.tiers.secondary).toEqual([])
   })
-  it("accepts every mode with one deprecation warning; an unknown mode falls back to defaults with one warning", () => {
-    const d = tmp()
-    for (const mode of ["chain-sticky", "chain-recover", "escalate"]) {
-      fs.writeFileSync(path.join(d, `${mode}.jsonc`), JSON.stringify({ mode, cooldownMs: 5 }))
-      const r = loadConfig(path.join(d, `${mode}.jsonc`))
+  it("ignores removed mode with one warning while preserving valid settings", () => {
+    const f = path.join(tmp(), "c.jsonc")
+    for (const mode of ["chain-sticky", "chain-recover", "escalate", "round-robin"]) {
+      fs.writeFileSync(f, JSON.stringify({
+        mode, cooldownMs: 5, levels: ["a/1", "b/2"],
+        privacy: { consent: true }, judge: { enabled: true, model: "p/judge" },
+      }))
+      const r = loadConfig(f)
       expect(r.warnings).toHaveLength(1)
-      expect(r.warnings[0]).toContain("mode is deprecated: accepted but still honored")
-      expect(r.config.mode).toBe(mode)
+      expect(r.warnings[0]).toMatch(/mode is deprecated.*ignored/)
+      expect(r.config).toMatchObject({
+        cooldownMs: 5, levels: ["a/1", "b/2"],
+        privacy: { consent: true }, judge: { enabled: true, model: "p/judge" },
+      })
+      expect(r.config).not.toHaveProperty("mode")
     }
-    fs.writeFileSync(path.join(d, "bad.jsonc"), JSON.stringify({ mode: "round-robin", cooldownMs: 5 }))
-    const r = loadConfig(path.join(d, "bad.jsonc"))
-    expect(r.warnings).toHaveLength(1)
-    expect(r.warnings[0]).toMatch(/^invalid config \(mode: /)
-    expect(r.config.mode).toBe("chain-sticky")
-    expect(r.config.cooldownMs).toBe(60000)
   })
-  it("a config without mode gets no mode deprecation warning", () => {
+  it("still migrates tiers when a removed mode is present", () => {
+    const f = path.join(tmp(), "c.jsonc")
+    fs.writeFileSync(f, JSON.stringify({ mode: "chain-sticky", tiers: { primary: "a/1", secondary: ["b/2"] } }))
+    const r = loadConfig(f)
+    expect(r.config.levels).toEqual(["a/1", "b/2"])
+    expect(r.config.tiers).toMatchObject({ primary: "a/1", secondary: ["b/2"] })
+    expect(r.warnings.filter((w) => w.includes("mode is deprecated"))).toHaveLength(1)
+    expect(r.warnings.filter((w) => w.includes("tiers is deprecated"))).toHaveLength(1)
+  })
+  it("a removed mode does not bypass strict validation or safe defaults", () => {
+    const f = path.join(tmp(), "c.jsonc")
+    for (const invalid of [
+      { bogus: 1 }, { cooldownMs: -1 }, { privacy: { consent: "yes" } },
+      { judge: { enabled: "yes" } }, { openrouter: { baseUrl: "https://evil.example/v1" } },
+    ]) {
+      fs.writeFileSync(f, JSON.stringify({ mode: "chain-sticky", ...invalid }))
+      const r = loadConfig(f)
+      expect(r.config).toEqual(defaultConfig())
+      expect(r.warnings).toHaveLength(1)
+      expect(r.warnings[0]).toMatch(/invalid config/)
+    }
+  })
+  it("a config without mode is clean", () => {
     const f = path.join(tmp(), "c.jsonc")
     fs.writeFileSync(f, JSON.stringify({ cooldownMs: 5 }))
     expect(loadConfig(f).warnings).toEqual([])
+    expect(loadConfig(f).config.cooldownMs).toBe(5)
   })
   it("rejects unknown keys (strict)", () => {
     const f = path.join(tmp(), "c.jsonc")

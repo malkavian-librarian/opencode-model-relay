@@ -30,6 +30,23 @@ Chain locally in PowerShell: `npm run typecheck; if ($?) { npm test }; if ($?) {
 - Ponytail rule: new non-trivial logic (a branch, loop, parser, money or security
   code, or a new script) needs one small test; trivial changes need none.
 
+### Harness gotchas
+
+- `ConfigSchema.parse({ tiers })` leaves `levels` empty: `loadConfig` performs the
+  tiers-to-levels migration. Harnesses that bypass the loader must derive levels
+  from their merged tiers so controller switch tests exercise the configured ladder.
+- Seed state timestamps and cooldowns relative to `Date.now()`. Values near 1970
+  (`updated: 1`, `cooldownUntil: 4_000_000`) expire during `StateStore.load()` and
+  its health sweep, so the intended fixture state disappears before assertions.
+- Context adoption must resolve session eligibility before clearing shared health;
+  test child sessions and failed lookups as well as successful top-level adoption.
+- Removing a runtime config key must preserve valid sibling settings on upgrade;
+  test legacy migration and invalid siblings to keep strict validation intact.
+- `CORE`'s corroboration map is module-scope state shared by every test in a file:
+  a test that reuses a sessionID after another test emitted a contradicting
+  `session.model.selected` gets its adoption silently vetoed. Use a fresh
+  sessionID per adoption test.
+
 ## Fixtures
 
 Hand-written fixtures encode our assumptions about OpenCode and OpenRouter payloads,
@@ -44,3 +61,7 @@ Wall-clock assertions flake across machines and CI runners. For performance-styl
 tests, bound the input to the documented contract size (for example the 60000-char
 transcript cap) and use generous limits. Prefer fake timers for cooldown and timeout
 logic. Never assert tight millisecond bounds.
+
+- Void context hooks can outlive fixed sleeps -> gate racing lookups with deferred
+  promises and drain their promise continuations with `setImmediate` before asserting
+  state; keep the older lookup blocked until the newer adoption is observed (2026-10-24).

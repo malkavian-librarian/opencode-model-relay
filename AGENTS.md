@@ -117,7 +117,6 @@ over with a structured summary. Design: `docs/superpowers/specs/2026-10-18-model
 - SessionLock dedup TTL (30 s) is only a cheap pre-filter, never an authorization boundary -> any once-only rule that guards a side effect (judge per-turn) must also be persisted on the state record (2026-10-19)
 - OpenCode v2 loads both `~/.config/opencode/plugins/*.js` and `opencode.jsonc` `"plugins"` separately, and `ctx.options`/`ctx.location` can come from an untrusted project tree -> never load from both sources at once, never read relay config/paths from `ctx.options` or `ctx.location`, and map v2 `{providerID, id}` <-> `{providerID, modelID}` (#56) (2026-10-22)
 - OpenCode 2's plugin loader silences `console`/`fs` writes during build time (module eval, `server()`, `setup()` body) -> spike/probe logs only persist from hook callbacks or tool `execute` at runtime (docs/spike-v2.md) (2026-10-22)
-- Test seeds with a 1970 timestamp (`updated: 1`, `cooldownUntil: 4_000_000`) are pruned by `StateStore.load()` TTL/php health sweep -> seed `updated`/cooldowns with `Date.now()`-based values (2026-10-22)
 
 ## Bugs - [open]/[fixed] + repro (max 10)
 
