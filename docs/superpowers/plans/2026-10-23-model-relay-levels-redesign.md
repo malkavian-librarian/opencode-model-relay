@@ -139,7 +139,8 @@ messages.
   deprecation warning; `tiers` + `levels` both present → `levels` wins + warning (no silent
   merge). `mode` is deprecated but still honored by the existing runtime in the config issue,
   then **removed** in the rewiring issue. This preserves current strategy behavior between the two;
-  `levels` remains schema-only until the strategy/controller work lands.
+  `levels` is now the runtime ladder; the implementation children below record the shipped
+  walk, rewiring, command, failover, discovery and observability dispositions.
 - `maxSwitchesPerSession` default auto-scales: **max(6, levels.length + 1)**; an explicit
   user value always wins. Manual switches (`/relay`) are **exempt** from the cap.
 

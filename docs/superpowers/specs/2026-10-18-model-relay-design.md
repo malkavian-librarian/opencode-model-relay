@@ -31,38 +31,36 @@ Delivery is staged (section 12-13); everything above remains the target design.
 
 ## 4. Concepts
 
-- **Tier:** `primary` (one model), `secondary`, `tertiary` (ordered candidate lists). Models are `providerID/modelID` from the user's configured OpenCode providers.
-- **Failure kinds** (classifier output `{kind, retryable, retryAfterMs, permanent}`):
-  - hard: `rate_limit` (transient, honour retry-after), `quota` (permanent), `auth`, `free_tier_403` (permanent for the session's gateway), `server_5xx`, `timeout`, `model_not_found` (permanent).
-  - `overflow`: context too long. Not a switch trigger by default; try OpenCode compaction first, switch only to a model with a larger window.
-  - `user_abort`: never a failure.
-  - quality: judged only.
-- **Trigger rules:** primary switches on hard failures only; secondary/tertiary on hard failures and judge verdicts. Judge-triggered switches fire only at idle, never mid-turn, never while a user question is pending, and need two consecutive `switch:true` verdicts.
-- **Sticky:** per session, the first working candidate stays. Sticky state persists to `state.json` (atomic write, expiry after 14 days, bounded size) so restarts do not revert to a dead model. Permanent errors blacklist the model; transient errors set a per-model cooldown with exponential backoff.
-- **Modes** (`mode`): `chain-sticky` (default), `chain-recover` (return to primary after cooldown, on the next turn), `escalate` (tiers read cheap to strong; failure or rejected output moves up). A model already tried for the same failing turn is never re-chosen. At `maxSwitchesPerSession` the plugin stops and tells the user; the counter is not reset.
-- **Exhausted:** default `onExhausted: "stop"`.
-- **Eligible sessions only:** skip sessions with `parentID` (subagents), title/summary/compaction agents, and turns whose assistant message has no tokens. The same gate applies to judge, switcher and pin.
+The levels redesign adopts the dispositions in [the plan's section 6](../plans/2026-10-23-model-relay-levels-redesign.md#6-adversarial-panel--round-1-2026-10-23); the shipped issues take precedence if the plan and implementation differ.
+
+- **Level:** an ordered `levels` entry, either a `providerID/modelID` string or a `{ find: { match, free?, via? } }` matcher. The ladder is capped at 32 entries and deduplicated, keeping the first occurrence. A legacy `tiers` object is accepted only as a compatibility input and migrates to levels in `primary`, `secondary`, `tertiary` order; explicit `levels` wins when both are present.
+- **Failure kinds** (classifier output `{kind, retryable, retryAfterMs, permanent}`) are `rate_limit`, `quota`, `auth`, `free_tier_403`, `server_5xx`, `timeout`, `model_not_found`, `overflow`, `user_abort`, `unknown`, and `quality`. Overflow, user abort and unknown are not automatic switch triggers.
+- **Stay-put:** the plugin switches only for failover or an explicit manual command. There is no automatic recovery mode or pin rewrite on ordinary turns. The model the plugin last set is persisted as `pluginPinned`.
+- **Failover walk:** on a switchable failure, walk from level 1, skipping the current model, unhealthy models, models tried in the same turn and recently quarantined models. Quarantine lasts 10 minutes per session and is a preference: the quarantined model may be used when it is the only healthy candidate. A matcher resolves lazily during the walk; unresolved levels are skipped.
+- **Manual adoption:** a context model different from `pluginPinned` is the owner's pick. Adoption merges the session record under the session lock, sets `pluginPinned`, clears that model's health marks once and records a short grace window. A pending failover re-reads the model after abort and abandons itself when the pick supersedes it.
+- **Health:** transient failures use exponential cooldowns with reset-aware deadlines capped at six hours; permanent quota/auth/model-not-found marks are retained for 24 hours. A successful turn clears cooldown and permanent marks but keeps the failure count. The default automatic switch cap is `max(6, levels.length + 1)`; an explicit non-default value wins and manual commands are exempt.
+- **Discovery:** OpenCode find levels use the configured model list and the `-free` convention. `via: "openrouter"` reads the public catalog only at resolution time, filters by regex and free pricing, caches the result for 60 minutes and invalidates it when the resolved model fails. Discovery is skipped before consent, and external ids are bounded and validated before switching or handover text.
+- **Exhaustion:** the controller tries the deepest healthy level as a last resort; if no candidate exists, it reports the condition and suggests `/relay next`.
+- **Eligibility:** subagent sessions (`parentID`) and internal/non-token turns are skipped. Hooks fail safe and leave the current model in place.
 
 ## 5. Architecture
 
-TypeScript, ESM, dependencies kept to `zod` and a JSONC parser; `@opencode-ai/plugin` is a peer dependency.
+TypeScript, ESM, with `zod` and a JSONC parser; `@opencode-ai/plugin` is a peer dependency.
 
 | Unit | Job |
 |---|---|
-| `config` | Load/validate settings, resolve env key, defaults, path confinement. Config dir is `~/.config/opencode` on every platform (matches OpenCode itself, including Windows); `XDG_CONFIG_HOME` overrides. |
-| `classifier` | Input: `session.error` (APIError{statusCode,isRetryable,responseBody}, ProviderAuthError, UnknownError, MessageAbortedError) and `session.status {type:"retry"}`. `FreeTierError` matched on responseBody. Pure. |
-| `strategy` | Pure `(sessionState, trigger) -> nextModel | exhausted`, one implementation per mode. |
-| `session-lock` | Per-session state machine `idle | switching | cooling` with single-flight mutex; dedup errors by `(sessionID, messageID, kind)`; plugin-abort marks with TTL (swallow the next abort/idle caused by us; an abort we did not mark is a user cancel and sets `userCancelled`). Judge and switcher share the lock. |
-| `judge` | Async, never blocks idle. Cheap heuristics first (repeated identical tool calls, N consecutive tool errors, no-diff turns), then OpenRouter call for the verdict. Per-session and global daily call/USD caps. |
-| `handover` | Structured, not summary-only: verbatim last user message, todo list, files touched, unanswered question, tool-call ledger (each call DONE/UNKNOWN/FAILED with an instruction to verify state before repeating UNKNOWN non-read-only calls), plus a writer-model narrative (default GLM 5.2) validated against a fixed schema; falls back to plain tail. Writer prompt and message template configurable. |
-| `switcher` | Under lock: mark abort, abort (raced against timeout), skip filesystem `revert` (only drop a trailing errored assistant message), then fire `session.prompt({model, agent, parts})` without awaiting, with a continuation monitor. Subagent sessions are never switched. |
-| `pin` | Stickiness is carried by passing `model` in every prompt the plugin sends. `chat.message` model rewrite is an optional enhancement gated on the spike; an explicit user model choice clears stickiness. |
-| `narrator` | Static pools, enum-built messages (never interpolate provider text). Toast for all events; tagged `noReply` session note only for switch-done and exhausted. Notes carry a marker and are excluded from transcripts, judge input and "last user request" extraction. |
-| `ledger` | See section 9. |
-| `command` | `/relay` registered through the `config` hook (`config.command`), handled in `command.execute.before` (set `output.parts=[]`, reply via toast/`noReply`); a `relay_*` tool is the fallback if the spike shows the command still triggers a model turn. |
-| `openrouter` | fetch client: https only, timeout, retry-once, no redirects, redaction. |
-| `redact` | Section 3.4. |
-| `index` | Wires `event`, `config`, `command.execute.before`, optionally `chat.message`. |
+| `config` | Load and validate user-level settings, migrate deprecated tiers, cap and deduplicate levels, resolve the environment key, and confine paths to the user config/data directories. |
+| `classifier` | Classify `session.error` and retry-status input into the bounded failure-kind enum. |
+| `strategy` | Walk the ordered levels, resolve find entries lazily, apply health/quarantine/tried-model rules, and return a switch target or exhaustion. |
+| `session-lock` | Provide single-flight per-session mutual exclusion and deduplicate failure events; adoption, failover and deferred narrative checks share this lock. |
+| `controller` | Enforce eligibility and attribution, record health/quarantine, adopt manual picks, persist `pluginPinned` before switching, enact failover, expose status and manual commands, and never throw into the host. |
+| `judge` | Asynchronously apply local heuristics and, with consent and a key, call OpenRouter for a validated verdict; two consecutive positive verdicts can trigger a `quality` switch below level 1. |
+| `handover` | Build the structured redacted handover and use the plain tail for immediate resume; an optional narrative is written asynchronously after an enacted switch. |
+| `switchlog` | Append metadata-only rows with HMAC session ids, enum kinds/reasons, bounded model references and elapsed time; read a bounded, validated tail for status. |
+| `command` | Register `/relay`, `/relay model <provider/model>` and `/relay next` on v2; emit immediate synthetic progress and completion feedback. The status tool is also available for the v2 API. |
+| `openrouter` | Make consent-gated helper and public-catalog requests over HTTPS with host validation, bounded responses and no redirects. Catalog discovery sends no key or user data. |
+| `redact` | Apply the section 3 redaction and truncation rules before helper egress. |
+| `index` | Wire the v1 and v2 plugin surfaces while ensuring only the active host layer handles a session. |
 
 API facts verified against `@opencode-ai/plugin` 1.17.x and the reference plugin: provider/model lists and context limits come from `client.config.providers()`; per-turn latency/tokens/cost come from `message.updated` on the assistant message (idle carries only sessionID); OpenCode retries retryable errors itself and emits `session.status {type:"retry"}` before `session.error`, so the plugin does not run its own backoff loop; `session.prompt` blocks for the whole turn so it is fired without await; subagent detection via `session.get` parentID.
 

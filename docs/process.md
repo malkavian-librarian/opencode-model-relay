@@ -121,20 +121,21 @@ Publishing is an owner action; agents never publish or push tags.
 | `docs/coderabbit-log.md` | Log of CodeRabbit exchanges. |
 | `docs/superpowers/specs/2026-10-18-model-relay-design.md` | Design spec and hard constraints. |
 | `docs/superpowers/plans/2026-10-18-v1.0-failover-handover.md` | v1.0 implementation plan. |
+| `docs/superpowers/plans/2026-10-23-model-relay-levels-redesign.md` | Epic #62 levels redesign plan and child issue map. |
 
-## Epic #62 child status (2026-10-23 live)
+## Epic #62 child status (2026-10-24 live)
 
 | Child | Scope | Status | Next |
 |-------|-------|--------|------|
 | #63 | config schema + tiers migration + relay-init template | ✅ Merged (PR #74) | — |
-| #64 | strategy: walkFromTop, quarantine, reset-aware cooldowns | ⏳ Next (stashed sketch, TDD) | #66 |
+| #64 | strategy: walkFromTop, quarantine, reset-aware cooldowns | ✅ Merged | — |
 | #65 | v2 probe: switchModel persistence, retry-veto, synthetic targeting, pick-vs-resolution | ✅ Merged (PR #75) | — |
-| #66 | rewiring: adoption under lock, pin-machinery deletion, crash windows, `switch_dropped` | ⏳ Pending | #67 |
-| #67 | /relay model + /relay next fast-path commands | ⏳ Pending | #68 |
-| #68 | fast failover: plain-tail default, async narrative, latency budget | ⏳ Pending | #69 |
-| #69 | find levels: free-model discovery, health-aware resolution, consent gate | ⏳ Pending | #70 |
-| #70 | observability: verbose switch-log + /relay status ladder view | ⏳ Pending | #71 |
-| #71 | docs sweep: README/spec/SECURITY/CHANGELOG/AGENTS | ⏳ Pending | #72 |
+| #66 | rewiring: adoption under lock, pin-machinery deletion, crash windows, `switch_dropped` | ✅ Merged | — |
+| #67 | /relay model + /relay next fast-path commands | ✅ Merged | — |
+| #68 | fast failover: plain-tail default, async narrative, latency budget | ✅ Merged | — |
+| #69 | find levels: free-model discovery, health-aware resolution, consent gate | ✅ Merged | — |
+| #70 | observability: verbose switch-log + /relay status ladder view | ✅ Merged | — |
+| #71 | docs sweep: README/spec/SECURITY/CHANGELOG/AGENTS | ⏳ In progress | #72 |
 | #72 | deploy & enable plugin on owner machine (re-enable `.disabled`) | ⏳ Pending (`needs-owner`) | #73 |
 | #73 | wrap-up: commit all, delete merged branches, worktree audit, push | ⏳ Pending | — |
 

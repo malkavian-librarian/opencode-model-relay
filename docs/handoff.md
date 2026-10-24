@@ -15,6 +15,13 @@ GitHub issue comments hold the detailed notes; this file indexes the latest stat
 
 ## Entries (newest first)
 
+### 2026-10-24 - #71 levels redesign docs sweep in progress (opencode)
+
+- Status: Fresh `docs/issue-71-levels-sweep` branch from `origin/main`; reconciling README, spec, SECURITY, CHANGELOG, process map, plan and this handoff against merged #63–#70/#79 behavior.
+- AGENTS.md is 121 lines and already has accurate commands/rules; cap guard means no append. Any gotcha graduation will be proposed in the PR, not added blindly.
+- Next: finish link/consistency inspection, run typecheck/tests/build/pack, commit, push, open PR and move #71 to In review.
+- Blockers: none; no source, tests or other worktrees touched.
+
 ### 2026-10-24 - #66 controller rewiring implemented, PR open (opencode)
 
 - Status: `feat/issue-66-controller-rewiring` (TDD: RED with 41 failing replicas -> GREEN); local gates all green:
