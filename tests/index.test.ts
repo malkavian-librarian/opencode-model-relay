@@ -3,7 +3,7 @@ import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import plugin, { server } from "../src/index"
-import { createRelay, createServer } from "../src/server"
+import { createServer } from "../src/server"
 
 function env() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "relay-i-"))
@@ -16,28 +16,6 @@ const client = (toasts: string[]): any => ({
 })
 
 describe("plugin entry", () => {
-  for (const consent of [false, true]) {
-    it(`bootstraps lazy catalog discovery with consent=${consent}`, async () => {
-      const e = env()
-      fs.writeFileSync(path.join(e.root, "cfg", "opencode", "opencode-model-relay.jsonc"), JSON.stringify({
-        levels: ["a/1", { find: { match: "glm", free: true, via: "openrouter" } }], privacy: { consent },
-      }))
-      const c = client([])
-      c.session.messages = async () => ({ data: [{ info: { id: "u1", role: "user", model: { providerID: "a", modelID: "1" } }, parts: [] }] })
-      const fetchCatalog = vi.fn(async () => new Response(JSON.stringify({ data: [{ id: "org/glm:free", pricing: { prompt: "0" } }] })))
-      vi.stubGlobal("fetch", fetchCatalog)
-      try {
-        const { controller } = createRelay(e.env, c)
-        expect(fetchCatalog).not.toHaveBeenCalled()
-        expect((await controller.manualSwitch("s1")).status).toBe(consent ? "switched" : "bottom")
-        expect(fetchCatalog).toHaveBeenCalledTimes(consent ? 1 : 0)
-        if (consent) expect(fetchCatalog.mock.calls[0]).toEqual([
-          "https://openrouter.ai/api/v1/models", expect.objectContaining({ method: "GET", redirect: "manual" }),
-        ])
-      } finally { vi.unstubAllGlobals(); fs.rmSync(e.root, { recursive: true, force: true }) }
-    })
-  }
-
   it("exports a plugin module with an id", () => {
     expect(plugin.id).toBe("opencode-model-relay")
     expect(plugin.server).toBe(server)

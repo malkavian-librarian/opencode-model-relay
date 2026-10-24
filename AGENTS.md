@@ -109,7 +109,6 @@ over with a structured summary. Design: `docs/superpowers/specs/2026-10-18-model
 - Older guidance: [graduated development gotchas](docs/process.md#graduated-development-gotchas).
 - Optional handover narratives awaited before abort delayed failover -> dispatch the redacted plain tail, then reserve an enacted switch's helper attempt before the async writer (2026-10-24)
 - Superseded switches spent helper attempts and late narratives could restart stale turns -> reserve after enactment and lock/check the resumed model, turn and intent before dispatch; label only scheduled narratives deferred (2026-10-24)
-- Find helpers had no runtime callers -> wire all three walks through consent-gated discovery while preserving next's downward walk and exhaustion's strict quarantine (2026-10-24)
 
 ## Bugs - [open]/[fixed] + repro (max 10)
 
@@ -117,4 +116,5 @@ over with a structured summary. Design: `docs/superpowers/specs/2026-10-18-model
 
 ## Improvement ideas (max 10, newest at bottom)
 
-- Open issues: https://github.com/malkavian-librarian/opencode-model-relay/issues (v1.2 stats #7; CI #45, deps #55; owner-gated: release #5, TUI #19, fixtures #18; v2 port #56 shipped in `9706629`)
+- Open issues: https://github.com/malkavian-librarian/opencode-model-relay/issues
+  (v1.2 stats #7; CI #45, deps #55; owner-gated: release #5, TUI #19, fixtures #18; v2 port #56 shipped in `9706629`)

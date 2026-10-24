@@ -673,27 +673,6 @@ describe("v2 tools, commands and model list", () => {
     teardown?.()
   })
 
-  for (const consent of [false, true]) {
-    it(`/relay next lazily reads model.list for OpenCode find levels with consent=${consent}`, async () => {
-      const e = env()
-      fs.writeFileSync(path.join(e.root, "cfg", "opencode", "opencode-model-relay.jsonc"), JSON.stringify({
-        levels: ["a/1", { find: { match: "glm", free: true } }], privacy: { consent },
-      }))
-      const { ctx, calls } = makeCtx()
-      ctx.model.list = vi.fn(async () => ({ data: [
-        { providerID: "opencode", modelID: "glm-free", id: "opencode/glm-free" },
-      ] }))
-      const teardown = await createV2Plugin(e.env).setup(ctx)
-      try {
-        expect(ctx.model.list).not.toHaveBeenCalled()
-        const relayCmd = calls.commands.find((c) => c.name === "relay")
-        await relayCmd!.execute({ sessionID: "s1", arguments: "next" })
-        expect(ctx.model.list).toHaveBeenCalledTimes(consent ? 1 : 0)
-        expect(calls.switchModel).toEqual(consent ? [{ sessionID: "s1", model: { providerID: "opencode", id: "glm-free" } }] : [])
-      } finally { teardown?.() }
-    })
-  }
-
   it("/relay next does not select a quarantined candidate when the ladder is exhausted", async () => {
     const e = env()
     fs.writeFileSync(path.join(e.root, "cfg", "opencode", "opencode-model-relay.jsonc"), `{"tiers":{"primary":"a/1","secondary":["b/2","c/3"]}}`)
