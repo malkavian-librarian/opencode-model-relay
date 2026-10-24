@@ -9,6 +9,7 @@ import { StateStore } from "../src/state"
 import { createNarrator } from "../src/narrator"
 import { RELAY_MARKER } from "../src/defaults"
 import type { OcMessage } from "../src/types"
+import { listProviderModels } from "../src/server"
 
 const err429 = { name: "APIError", data: { statusCode: 429, isRetryable: true, message: "", responseBody: "slow", responseHeaders: {} } }
 const msgs = (model = { providerID: "a", modelID: "1" }, id = "a1"): OcMessage[] => [
@@ -443,6 +444,24 @@ describe("Controller.onSessionError", () => {
         await c.onSessionError("s1", err429)
         expect(calls).toHaveLength(1)
       })
+    }
+  })
+})
+
+describe("OpenCode provider discovery", () => {
+  it("skips a hung provider list within its bounded timeout", async () => {
+    vi.useFakeTimers()
+    try {
+      let rejectProviders!: (error: Error) => void
+      const client: any = { config: { providers: vi.fn(() => new Promise((_, reject) => { rejectProviders = reject })) } }
+      const result = listProviderModels(client, 1_000)
+      await vi.advanceTimersByTimeAsync(1_000)
+      await expect(result).resolves.toEqual([])
+      rejectProviders(new Error("provider request stalled"))
+      await Promise.resolve()
+      expect(client.config.providers).toHaveBeenCalledOnce()
+    } finally {
+      vi.useRealTimers()
     }
   })
 })
