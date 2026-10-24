@@ -121,7 +121,7 @@ export function walkFromTop(i: {
   return pick === undefined ? { action: "exhausted", reason: "no_candidates" } : { action: "switch", to: pick }
 }
 
-const RETRY_AFTER_TEXT = /retry-after[:\s]+(\d+(?:\.\d+)?)/i
+const RETRY_AFTER_TEXT = /retry-after[:\s]+(\d+(?:\.\d+)?)(?![\d.a-z])/i
 const ISO_TIMESTAMP = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?/
 const RESETS_AT = /resets?\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i
 const HOURS_PER_DAY = 24

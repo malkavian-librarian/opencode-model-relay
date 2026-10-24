@@ -146,6 +146,16 @@ describe("reset cooldowns (#64)", () => {
     const iso = new Date(2026, 9, 23, 12, 30, 0).toISOString()
     expect(parseResetCooldown(`quota until ${iso}`, now)).toBe(new Date(2026, 9, 23, 12, 30, 0).getTime())
     expect(parseResetCooldown("retry-after: 30", now)).toBe(now + 30_000)
+    expect(parseResetCooldown("retry-after: 2.5", now)).toBe(now + 2_500)
+  })
+  it.each(["5m", "2h", "30s"]) ("rejects unit-suffixed retry-after %s", (delay) => {
+    expect(parseResetCooldown(`retry-after: ${delay}`, now)).toBeUndefined()
+  })
+  it.each(["5m", "2h", "30s"]) ("uses exponential backoff for unit-suffixed retry-after %s", (delay) => {
+    const h: Record<string, ModelHealth> = { "a/1": { failures: 1 } }
+    const text = `retry-after: ${delay}`
+    recordFailure(h, "a/1", { kind: "rate_limit", retryable: true, permanent: false, switchable: true }, 1000, 60000, text)
+    expect(h["a/1"]?.cooldownUntil).toBe(121000)
   })
   it.each(["25:00", "24:00", "17:75", "12:60pm", "0am", "00pm", "13pm"])("rejects invalid reset time %s and keeps exponential backoff", (time) => {
     const text = `usage limit resets at ${time}`
