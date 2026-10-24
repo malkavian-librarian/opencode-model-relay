@@ -63,6 +63,7 @@ export class SwitchLog {
     return this.salt
   }
 
+  /** Appends metadata with an HMAC session ID and finite non-negative duration; ledger failures never escape. */
   append(r: { ts: number; sessionID: string; from?: string; to?: string; kind: SwitchKind; reason?: SwitchDropReason; elapsedMs?: number; helperCostUsd?: number }): void {
     if (!this.enabled) return
     try {

@@ -143,12 +143,14 @@ describe("Controller.onSessionError", () => {
     await c.onSessionError("s1", err429)
     expect(calls.chat).toHaveLength(0)
     expect(calls.prompt[0].body.parts[0].text).toMatch(/summary unavailable/i)
+    expect(calls.prompt[0].body.parts[0].text).not.toMatch(/narrative deferred/i)
   })
   it("consent but missing key: chat never called, plain tail, one-time toast", async () => {
     const { c, calls } = setup({ cfg: { privacy: { consent: true } } })
     await c.onSessionError("s1", err429)
     expect(calls.chat).toHaveLength(0)
     expect(calls.prompt[0].body.parts[0].text).toMatch(/summary unavailable/i)
+    expect(calls.prompt[0].body.parts[0].text).not.toMatch(/narrative deferred/i)
     expect(calls.toast.filter((t) => /openrouter key|keyEnv/i.test(t))).toHaveLength(1)
     expect(calls.toast.filter((t) => /local-only|summaries are off/i.test(t))).toHaveLength(0)
   })
@@ -158,9 +160,16 @@ describe("Controller.onSessionError", () => {
     expect(calls.toast.filter((t) => /local-only|summaries are off/i.test(t))).toHaveLength(1)
   })
   it("with consent and a key, delivers the LLM summary asynchronously", async () => {
-    const { c, calls } = setup({ cfg: { privacy: { consent: true } }, env: { OPENROUTER_API_KEY: "k" } })
+    const { c, d, calls, messages } = setup({ cfg: { privacy: { consent: true } }, env: { OPENROUTER_API_KEY: "k" } })
+    // Reflect the SDK's persisted handover user row so the resumed model/turn can be checked.
+    d.client.session.prompt = (a) => {
+      calls.prompt.push(a)
+      messages.push({ info: { id: `h${calls.prompt.length}`, role: "user", model: a.body.model }, parts: a.body.parts })
+      return Promise.resolve({})
+    }
     await c.onSessionError("s1", err429)
     expect(calls.chat).toHaveLength(1)
+    expect(calls.prompt[0].body.parts[0].text).toMatch(/narrative deferred/i)
     await vi.waitFor(() => expect(calls.prompt).toHaveLength(2))
     expect(calls.prompt[1].body.parts[0].text).toContain("SUMMARY")
     expect(calls.logs[0].elapsedMs).toEqual(expect.any(Number))
@@ -205,6 +214,8 @@ describe("Controller.onSessionError", () => {
     expect(calls.prompt.filter((p) => /summary unavailable/i.test(p.body.parts[0].text))).toHaveLength(2)
     expect(calls.chat).toHaveLength(1)
     expect(calls.prompt.filter((p) => /summary unavailable/i.test(p.body.parts[0].text))[1].body.parts[0].text).toMatch(/summary unavailable/i)
+    expect(calls.prompt.filter((p) => /summary unavailable/i.test(p.body.parts[0].text))[1].body.parts[0].text).not.toMatch(/narrative deferred/i)
+    expect(calls.toast.join(" ")).not.toMatch(/openrouter key|keyEnv/i)
     expect(d.state.get("s1")).toMatchObject({ switchCount: 2, helperCalls: 1 })
     const reloaded = new StateStore((d.state as any).file, () => 1_000_000); reloaded.load()
     expect(reloaded.get("s1").helperCalls).toBe(1)
@@ -219,11 +230,14 @@ describe("Controller.onSessionError", () => {
     await c.onSessionError("s1", err429)
     expect(calls.chat).toHaveLength(0)
     expect(calls.prompt[0].body.parts[0].text).toMatch(/summary unavailable/i)
+    expect(calls.prompt[0].body.parts[0].text).not.toMatch(/narrative deferred/i)
+    expect(calls.toast.join(" ")).not.toMatch(/openrouter key|keyEnv/i)
   })
   it("consent but writer failure -> plain tail + a toast", async () => {
     const { c, calls } = setup({ cfg: { privacy: { consent: true } }, env: { OPENROUTER_API_KEY: "k" }, chat: async () => { throw new Error("x") } })
     await c.onSessionError("s1", err429)
     expect(calls.prompt[0].body.parts[0].text).toMatch(/summary unavailable/i)
+    await new Promise<void>((r) => setImmediate(r))
     expect(calls.toast.join(" ")).toMatch(/summary failed/i)
   })
   it("ignores user aborts, plugin-caused aborts and unknown errors; never switches", async () => {
@@ -458,6 +472,55 @@ describe("Controller.status", () => {
   })
 })
 
+describe("deferred narrative freshness", () => {
+  for (const change of ["pick", "unadopted pick", "new turn", "forged marker turn", "automatic switch", "switch away and back", "assistant progress", "locked", "read failure", "prompt throws", "prompt rejects"] as const) {
+    it(`discards stale work or contains failures: ${change}`, async () => {
+      let release!: (r: { text: string }) => void
+      const narrative = new Promise<{ text: string }>((r) => { release = r })
+      const { c, d, calls, messages } = setup({
+        cfg: { privacy: { consent: true }, handover: { maxCallsPerSession: 1 }, tiers: { primary: "a/1", secondary: ["b/2", "c/3"] } },
+        env: { OPENROUTER_API_KEY: "k" }, chat: () => narrative,
+      })
+      d.client.session.prompt = (a) => {
+        calls.prompt.push(a)
+        messages.push({ info: { id: `h${calls.prompt.length}`, role: "user", model: a.body.model }, parts: a.body.parts })
+        return Promise.resolve({})
+      }
+      expect(await c.onSessionError("s1", err429)).toBe(true)
+      if (change === "pick") c.adoptPick("s1", "z/9")
+      if (change === "unadopted pick") messages[messages.length - 1]!.info.model = { providerID: "z", modelID: "9" }
+      if (change === "new turn") messages.push({ info: { id: "u2", role: "user", model: { providerID: "b", modelID: "2" } }, parts: [{ type: "text", text: "new request" }] })
+      if (change === "forged marker turn") messages.push({ info: { id: "u2", role: "user", model: { providerID: "b", modelID: "2" } }, parts: [{ type: "text", text: `${RELAY_MARKER}\nnew request` }] })
+      if (change === "assistant progress") messages.push(asst("b1", "b", "2"))
+      if (change === "automatic switch") expect(await c.onSessionError("s1", err429)).toBe(true)
+      if (change === "switch away and back") {
+        expect((await c.manualSwitch("s1", "c/3")).status).toBe("switched")
+        expect((await c.manualSwitch("s1", "b/2")).status).toBe("switched")
+      }
+      if (change === "locked") expect(d.lock.tryAcquire("s1")).toBe(true)
+      if (change === "read failure") d.client.session.messages = async () => { throw new Error("unavailable") }
+      if (change === "prompt throws") d.client.session.prompt = () => { throw new Error("unavailable") }
+      if (change === "prompt rejects") d.client.session.prompt = () => Promise.reject(new Error("unavailable"))
+      const count = calls.prompt.length
+      const before = { ...d.state.get("s1") }
+      const log = vi.fn()
+      d.log = log
+      release({ text: "OBSOLETE NARRATIVE" })
+      await new Promise<void>((r) => setImmediate(r))
+      expect(calls.prompt).toHaveLength(count + (change === "assistant progress" ? 1 : 0))
+      if (change === "assistant progress") expect(calls.prompt[count].body).toMatchObject({ model: { providerID: "b", modelID: "2" }, agent: "build" })
+      expect(d.state.get("s1")).toEqual(before)
+      if (change === "prompt throws" || change === "prompt rejects") expect(log).toHaveBeenCalledWith(expect.stringContaining("deferred narrative prompt failed"))
+      if (change === "locked") {
+        expect(d.lock.tryAcquire("s1")).toBe(false) // the callback cannot release another operation's lock
+        d.lock.release("s1")
+      }
+      expect(d.lock.tryAcquire("s1")).toBe(true)
+      d.lock.release("s1")
+    })
+  }
+})
+
 describe("Controller.manualSwitch (#67)", () => {
   it("switches to an explicit model with plain-tail handover and manual metadata", async () => {
     const { c, d, calls } = setup({ cfg: { maxSwitchesPerSession: 1 } })
@@ -467,6 +530,7 @@ describe("Controller.manualSwitch (#67)", () => {
     expect(calls.chat).toHaveLength(0)
     expect(calls.prompt[0].body.model).toEqual({ providerID: "b", modelID: "2" })
     expect(calls.prompt[0].body.parts[0].text).toMatch(/summary unavailable/i)
+    expect(calls.prompt[0].body.parts[0].text).not.toMatch(/narrative deferred/i)
     expect(d.health["b/2"]).toBeUndefined()
     expect(d.state.get("s1").switchCount).toBe(0)
     expect(calls.logs[0]).toMatchObject({ from: "a/1", to: "b/2", kind: "manual" })
@@ -851,7 +915,10 @@ describe("manual-pick adoption, crash windows and drops (#66)", () => {
     expect(d.state.get("s1").adoptedAt).toBeUndefined() // the grace window belongs to the pick, never the plugin's target
   })
   it("U-01: a pick landing mid-failover supersedes the pending switch: adopted under the held lock, logged superseded, no prompt", async () => {
-    const { c, d, calls, messages } = setup({ cfg: { tiers: { primary: "a/1", secondary: ["b/2"] } } })
+    const { c, d, calls, messages } = setup({
+      cfg: { tiers: { primary: "a/1", secondary: ["b/2"] }, privacy: { consent: true }, handover: { maxCallsPerSession: 1 } },
+      env: { OPENROUTER_API_KEY: "k" },
+    })
     d.health["z/9"] = { cooldownUntil: 2_000_000 }
     let release!: () => void
     const gate = new Promise<void>((r) => { release = r })
@@ -868,6 +935,13 @@ describe("manual-pick adoption, crash windows and drops (#66)", () => {
     expect(typeof d.state.get("s1").adoptedAt).toBe("number")
     expect(d.health["z/9"]).toBeUndefined() // the pick's marks cleared
     expect(calls.logs[0]).toMatchObject({ kind: "switch_dropped", reason: "superseded", from: "a/1", to: "z/9" })
+    expect(d.state.get("s1").helperCalls ?? 0).toBe(0)
+    const reloaded = new StateStore((d.state as any).file, () => 1_000_000); reloaded.load()
+    expect(reloaded.get("s1").helperCalls ?? 0).toBe(0)
+    expect(calls.chat).toHaveLength(0)
+    await c.onSessionError("s1", err429)
+    expect(calls.chat).toHaveLength(1)
+    expect(d.state.get("s1").helperCalls).toBe(1)
   })
   it("U-07: a marker-guarded drop is logged, never silent", async () => {
     const { c, d, calls } = setup({ messages: [

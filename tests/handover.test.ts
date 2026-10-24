@@ -144,7 +144,12 @@ describe("buildHandover", () => {
     const h = buildHandover({ cfg, ex, from: "a/1", to: "b/2", reason: "quota", summary: null })
     expect(h).toContain("ASSISTANT: working")
     expect(h).toMatch(/summary unavailable/i)
+    expect(h).not.toMatch(/narrative deferred/i)
+  })
+  it("labels the plain tail as deferred only when a narrative is scheduled", () => {
+    const h = buildHandover({ cfg, ex, from: "a/1", to: "b/2", reason: "quota", summary: null, narrativeDeferred: true })
     expect(h).toMatch(/narrative deferred/i)
+    expect(h).toContain("ASSISTANT: working")
   })
 })
 describe("final review fixes", () => {

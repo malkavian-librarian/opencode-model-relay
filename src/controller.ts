@@ -249,19 +249,15 @@ export class Controller {
 
       const ex = extractFromMessages(msgs, d.cfg.handover)
       const key = d.env[d.cfg.openrouter.keyEnv]
-      let summary: string | null = null
-      let helperCalls = rec.helperCalls ?? 0
+      const helperCalls = rec.helperCalls ?? 0
       const narrativeDeferred = d.cfg.privacy.consent && !!key && helperCalls < d.cfg.handover.maxCallsPerSession
-      if (narrativeDeferred) {
-        // Reserve the attempt before resume; the writer is deliberately off the critical path.
-        helperCalls++
-      } else if (!this.warnedConsent) {
+      if ((!d.cfg.privacy.consent || !key) && !this.warnedConsent) {
         // no consent, or consent without a key: nothing is sent anywhere; tell the user once
         this.warnedConsent = true
         await this.toast(d.cfg.privacy.consent ? "no_key" : "no_consent")
       }
 
-      const text = buildHandover({ cfg: d.cfg, ex, from: current, to, reason: c.kind, summary })
+      const text = buildHandover({ cfg: d.cfg, ex, from: current, to, reason: c.kind, summary: null, narrativeDeferred })
       const agent = [...msgs].reverse().find((m) => m.info.role === "user")?.info.agent
       // AC-04: the plugin-set model and the crash-window intent are persisted BEFORE switchModel; a
       // reload discards the intent and the next context hook re-syncs to whatever the session runs.
@@ -288,6 +284,11 @@ export class Controller {
         d.switchLog.append({ ts: d.now(), sessionID, from: current, to: supersededBy, kind: "switch_dropped", reason: "superseded", elapsedMs: Math.max(0, d.now() - started) })
         return false
       }
+      if (narrativeDeferred) {
+        // Only an enacted switch spends an attempt; persist it under the lock before the writer starts.
+        d.state.set(sessionID, { ...d.state.get(sessionID), helperCalls: helperCalls + 1, updated: d.now() })
+        d.state.save()
+      }
       this.storm.set(sessionID, now) // AC-05: retry events for the old turn are consumed from here
       if (this.storm.size >= MAX_SESSION_ENTRIES) this.storm.clear() // bound the in-memory map
       d.switchLog.append({
@@ -296,16 +297,32 @@ export class Controller {
       await this.toast("switch_done", { from: current, to, reason: c.kind })
       if (narrativeDeferred && key) {
         void (async () => {
+          // User rows identify turns; assistant rows may grow while the resumed turn runs.
+          const resumed = await this.fetchMessages(sessionID)
+          const turnID = [...resumed].reverse().find((m) => m.info.role === "user")?.info.id
           const w = await writeNarrative({ chat: d.chat, cfg: d.cfg, key }, ex)
           if (!w) { await this.toast("handover_failed", {}, "warning"); return }
-          const deferred = buildHandover({ cfg: d.cfg, ex, from: current, to, reason: c.kind, summary: w.summary })
+          if (!d.lock.tryAcquire(sessionID)) return
           try {
+            const latest = await this.fetchMessages(sessionID)
+            const fresh = d.state.get(sessionID)
+            const lastUser = [...latest].reverse().find((m) => m.info.role === "user")
+            const info = latest[latest.length - 1]?.info
+            const model = info?.role === "assistant" ? (info.providerID && info.modelID ? `${info.providerID}/${info.modelID}` : undefined)
+              : info?.model ? modelKey(info.model) : undefined
+            // The intent identity also rejects a switch away and back to the same model. No await
+            // may separate these checks from dispatch; the lock covers all state reads and the prompt.
+            if (!turnID || lastUser?.info.id !== turnID || model !== to || fresh.pluginPinned !== to ||
+              fresh.pendingHandover !== next.pendingHandover || fresh.adoptedAt !== undefined) return
+            const deferred = buildHandover({ cfg: d.cfg, ex, from: current, to, reason: c.kind, summary: w.summary })
             Promise.resolve(d.client.session.prompt({
               path: { id: sessionID },
               body: { model: parseModel(to), ...(agent ? { agent } : {}), parts: [{ type: "text", text: deferred }] },
             })).catch((e: unknown) => { try { d.log(`deferred narrative prompt failed: ${e instanceof Error ? e.message : String(e)}`) } catch { /* ignore */ } })
           } catch (e) {
             try { d.log(`deferred narrative prompt failed: ${e instanceof Error ? e.message : String(e)}`) } catch { /* ignore */ }
+          } finally {
+            d.lock.release(sessionID)
           }
         })().catch(() => { /* narrative is best effort and never affects the resumed session */ })
       }

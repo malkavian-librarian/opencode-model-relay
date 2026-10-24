@@ -106,18 +106,9 @@ over with a structured summary. Design: `docs/superpowers/specs/2026-10-18-model
 
 ## Gotchas (max 15, newest at bottom)
 
-- PowerShell `Set-Content -Encoding utf8` writes a BOM -> write files with the editor Write tool or `[System.IO.File]::WriteAllText(path, text, (New-Object System.Text.UTF8Encoding($false)))` (2026-10-18)
-- `String.replace` with a string replacement interprets `$&` and `$1` in the replacement -> pass a replacer function `() => value` (2026-10-18)
-- `session.prompt` resolves only when the whole model turn ends in v1 -> fire it without `await` and attach `.catch` (2026-10-18)
-- `redact()` is roughly linear but must only see bounded input -> truncate first (`maxToolChars`, `maxTranscriptChars` 60000 cap), then redact (2026-10-18)
-- zod 3 nested `.default({})` applies inner defaults but zod 4 changes this -> keep zod `^3` (2026-10-18)
-- PowerShell 5.1 mangles multiline strings passed to `gh issue create --body $var` -> pipe `$body | gh issue create --body-file -` with `$OutputEncoding` set to UTF8 without BOM (2026-10-18)
-- Dependency majors that need code or Node-floor changes (zod 4, vitest 5) -> ignore the major in .github/dependabot.yml with a reason, do not merge them (2026-10-18)
-- Judge test failures that look like "the judge is blocked" are usually off-by-one idle expectations: messages are pushed BEFORE the idle, and a turn with assistant text is healthy (heuristics skip it) -> assert in push -> idle -> expect order, and diff against a passing replica test when tallying gates by hand (2026-10-19)
-- SessionLock dedup TTL (30 s) is only a cheap pre-filter, never an authorization boundary -> any once-only rule that guards a side effect (judge per-turn) must also be persisted on the state record (2026-10-19)
-- OpenCode v2 loads both `~/.config/opencode/plugins/*.js` and `opencode.jsonc` `"plugins"` separately, and `ctx.options`/`ctx.location` can come from an untrusted project tree -> never load from both sources at once, never read relay config/paths from `ctx.options` or `ctx.location`, and map v2 `{providerID, id}` <-> `{providerID, modelID}` (#56) (2026-10-22)
-- OpenCode 2's plugin loader silences `console`/`fs` writes during build time (module eval, `server()`, `setup()` body) -> spike/probe logs only persist from hook callbacks or tool `execute` at runtime (docs/spike-v2.md) (2026-10-22)
-- Optional handover narratives awaited before abort delayed failover -> reserve the helper attempt and dispatch the redacted plain tail before the async writer (2026-10-24)
+- Older guidance: [graduated development gotchas](docs/process.md#graduated-development-gotchas).
+- Optional handover narratives awaited before abort delayed failover -> dispatch the redacted plain tail, then reserve an enacted switch's helper attempt before the async writer (2026-10-24)
+- Superseded switches spent helper attempts and late narratives could restart stale turns -> reserve after enactment and lock/check the resumed model, turn and intent before dispatch; label only scheduled narratives deferred (2026-10-24)
 
 ## Bugs - [open]/[fixed] + repro (max 10)
 
