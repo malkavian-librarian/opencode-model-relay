@@ -147,7 +147,7 @@ export class Controller {
           target = candidates.find((m) => {
             const at = this.d.state.get(sessionID).quarantine?.[m]
             return at === undefined || started - at >= QUARANTINE_MS
-          }) ?? candidates[0]
+          })
         }
         if (target === undefined || target === current) return { status: "bottom", from: current }
 

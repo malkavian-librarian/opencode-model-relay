@@ -38,6 +38,8 @@ Chain locally in PowerShell: `npm run typecheck; if ($?) { npm test }; if ($?) {
 - Seed state timestamps and cooldowns relative to `Date.now()`. Values near 1970
   (`updated: 1`, `cooldownUntil: 4_000_000`) expire during `StateStore.load()` and
   its health sweep, so the intended fixture state disappears before assertions.
+- Persisted session fixtures must include a finite `switchCount`; otherwise the
+  state sanitizer drops the whole record, including quarantine entries.
 - Context adoption must resolve session eligibility before clearing shared health;
   test child sessions and failed lookups as well as successful top-level adoption.
 - Removing a runtime config key must preserve valid sibling settings on upgrade;

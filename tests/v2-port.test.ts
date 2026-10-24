@@ -672,6 +672,19 @@ describe("v2 tools, commands and model list", () => {
     expect(calls.synthetic.map((x) => x.text).join(" ")).toMatch(/no healthy model|bottom|relay status/i)
     teardown?.()
   })
+
+  it("/relay next does not select a quarantined candidate when the ladder is exhausted", async () => {
+    const e = env()
+    fs.writeFileSync(path.join(e.root, "cfg", "opencode", "opencode-model-relay.jsonc"), `{"tiers":{"primary":"a/1","secondary":["b/2","c/3"]}}`)
+    seed(e.stateFile, { switchCount: 0, quarantine: { "b/2": NOW, "c/3": NOW } })
+    const { ctx, calls } = makeCtx()
+    const teardown = await createV2Plugin(e.env).setup(ctx)
+    const relayCmd = calls.commands.find((c) => c.name === "relay")
+    await relayCmd!.execute({ sessionID: "s1", arguments: "next" })
+    expect(calls.switchModel).toEqual([])
+    expect(calls.synthetic.map((x) => x.text).join(" ")).toMatch(/bottom|relay status/i)
+    teardown?.()
+  })
 })
 
 describe("v1 suppression while the v2 layer is active", () => {
