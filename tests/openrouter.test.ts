@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest"
+import { describe, it, expect, vi } from "vitest"
 import { fetchOpenRouterModels, orChat } from "../src/openrouter"
 
 const ok = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } })
@@ -30,6 +30,39 @@ describe("fetchOpenRouterModels", () => {
     const fetchImpl = (async () => { called = true; return ok({ data: [] }) }) as typeof fetch
     await expect(fetchOpenRouterModels({ baseUrl: "https://evil.example/api/v1", fetchImpl })).rejects.toThrow(/host/)
     expect(called).toBe(false)
+  })
+
+  it("rejects an HTTP catalog URL before sending a request", async () => {
+    const fetchImpl = vi.fn(async () => ok({ data: [] }))
+    await expect(fetchOpenRouterModels({ baseUrl: "http://openrouter.ai/api/v1", fetchImpl })).rejects.toThrow(/https/)
+    expect(fetchImpl).not.toHaveBeenCalled()
+  })
+
+  it("rejects catalog redirects without following them", async () => {
+    const fetchImpl = vi.fn(async () => new Response(null, { status: 302, headers: { location: "https://evil.example" } }))
+    await expect(fetchOpenRouterModels({ baseUrl: "https://openrouter.ai/api/v1", fetchImpl })).rejects.toThrow(/302/)
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
+    expect(fetchImpl.mock.calls[0]).toEqual([expect.any(String), expect.objectContaining({ redirect: "manual" })])
+  })
+
+  it("times out and aborts catalog requests even when fetch ignores cancellation", async () => {
+    vi.useFakeTimers()
+    let signal: AbortSignal | null | undefined
+    const fetchImpl: typeof fetch = async (_url, init) => {
+      signal = init?.signal
+      return new Promise<Response>(() => {})
+    }
+    try {
+      const result = expect(fetchOpenRouterModels({ baseUrl: "https://openrouter.ai/api/v1", fetchImpl, timeoutMs: 20 })).rejects.toThrow(/timed out/)
+      await vi.advanceTimersByTimeAsync(20)
+      await result
+      expect(signal?.aborted).toBe(true)
+    } finally { vi.useRealTimers() }
+  })
+
+  it("rejects an oversized catalog body without a content-length header", async () => {
+    const fetchImpl = async () => new Response("a".repeat(2_097_153), { status: 200 })
+    await expect(fetchOpenRouterModels({ baseUrl: "https://openrouter.ai/api/v1", fetchImpl })).rejects.toThrow(/too large/)
   })
 })
 

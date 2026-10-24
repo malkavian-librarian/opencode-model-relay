@@ -521,6 +521,66 @@ describe("deferred narrative freshness", () => {
   }
 })
 
+describe("Controller find discovery (#69)", () => {
+  const entry = { find: { match: "glm", free: true, via: "openrouter" } }
+  const catalog = [{ id: "org/glm:free", pricing: { prompt: "0" } }]
+
+  for (const flow of ["failover", "next", "exhaustion"] as const) {
+    for (const consent of [false, true]) {
+      it(`${flow} resolves find levels only with consent=${consent}`, async () => {
+        const { c, d, calls } = setup({ cfg: { levels: ["a/1", entry], privacy: { consent }, maxSwitchesPerSession: 1 } })
+        const fetchCatalog = vi.fn(async () => catalog)
+        Object.assign(d, { fetchCatalog })
+        if (flow === "exhaustion") d.state.set("s1", { switchCount: 1, updated: 1_000_000 })
+        if (flow === "next") expect((await c.manualSwitch("s1")).status).toBe(consent ? "switched" : "bottom")
+        else expect(await c.onSessionError("s1", err429)).toBe(consent)
+        expect(fetchCatalog).toHaveBeenCalledTimes(consent ? 1 : 0)
+        expect(calls.prompt).toHaveLength(consent ? 1 : 0)
+        if (consent) {
+          expect(calls.prompt[0].body.model).toEqual({ providerID: "openrouter", modelID: "org/glm:free" })
+          const restored = new StateStore((d.state as any).file, () => 1_000_000); restored.load()
+          expect(restored.getFindCache(JSON.stringify(entry), 1_000_000)).toBe("openrouter/org/glm:free")
+        }
+      })
+    }
+  }
+
+  it.each([undefined, "openrouter/org/glm:free", "openrouter/org/glm-other:free"])("next keeps the current discovered level's position with cache=%s", async (cached) => {
+    const { c, d, calls } = setup({
+      cfg: { levels: ["a/1", entry, "b/2"], privacy: { consent: true } },
+      messages: msgs({ providerID: "openrouter", modelID: "org/glm:free" }),
+    })
+    if (cached) d.state.setFindCache(JSON.stringify(entry), cached, 1_000_000)
+    const fetchCatalog = vi.fn(async () => catalog)
+    Object.assign(d, { fetchCatalog })
+    expect(await c.manualSwitch("s1")).toMatchObject({ status: "switched", to: "b/2" })
+    expect(fetchCatalog).not.toHaveBeenCalled()
+    expect(calls.prompt[0].body.model).toEqual({ providerID: "b", modelID: "2" })
+    expect(d.state.get("s1").switchCount).toBe(0)
+  })
+
+  it("invalidates a failed discovered model even when a higher static level wins", async () => {
+    const { c, d } = setup({
+      cfg: { levels: ["b/2", entry], privacy: { consent: true } },
+      messages: msgs({ providerID: "openrouter", modelID: "org/glm:free" }),
+    })
+    d.state.setFindCache(JSON.stringify(entry), "openrouter/org/glm:free", 1_000_000)
+    expect(await c.onSessionError("s1", err429)).toBe(true)
+    expect(d.state.getFindCache(JSON.stringify(entry), 1_000_000)).toBeUndefined()
+  })
+
+  for (const flow of ["next", "exhaustion"] as const) {
+    it(`${flow} does not fall back to a quarantined discovery`, async () => {
+      const { c, d, calls } = setup({ cfg: { levels: ["a/1", entry], privacy: { consent: true }, maxSwitchesPerSession: 1 } })
+      Object.assign(d, { fetchCatalog: async () => catalog })
+      d.state.set("s1", { switchCount: 1, updated: 1_000_000, quarantine: { "openrouter/org/glm:free": 1_000_000 } })
+      if (flow === "next") expect((await c.manualSwitch("s1")).status).toBe("bottom")
+      else expect(await c.onSessionError("s1", err429)).toBe(false)
+      expect(calls.prompt).toHaveLength(0)
+    })
+  }
+})
+
 describe("Controller.manualSwitch (#67)", () => {
   it("switches to an explicit model with plain-tail handover and manual metadata", async () => {
     const { c, d, calls } = setup({ cfg: { maxSwitchesPerSession: 1 } })

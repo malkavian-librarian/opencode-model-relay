@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest"
+import { describe, it, expect, vi } from "vitest"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
@@ -157,6 +157,25 @@ describe("find levels (#69)", () => {
       return [{ id: "fake-org/glm-5.2:free", pricing: { prompt: "0" } }]
     }})).resolves.toEqual(sw("openrouter/fake-org/glm-5.2:free"))
     expect(calls).toBe(1)
+  })
+
+  it("rejects overlong catalog ids before running the configured regex", async () => {
+    const id = `glm-${"a".repeat(129)}`
+    const test = vi.spyOn(RegExp.prototype, "test")
+    try {
+      await expect(resolveFindLevel(entry, {
+        ...base, consent: true, fetchCatalog: async () => [{ id, pricing: { prompt: "0" } }],
+      })).resolves.toBeUndefined()
+      expect(test).not.toHaveBeenCalledWith(id)
+    } finally { test.mockRestore() }
+  })
+
+  it("stops before discovering lower levels once a healthy static level wins", async () => {
+    const fetchCatalog = vi.fn(async () => [])
+    await expect(walkFromTopAsync({
+      ...base, ladder: ["b/2", entry], consent: true, fetchCatalog,
+    })).resolves.toEqual(sw("b/2"))
+    expect(fetchCatalog).not.toHaveBeenCalled()
   })
 
   it("chooses the first healthy free catalog candidate and skips unhealthy ones", async () => {

@@ -7,7 +7,7 @@ import { StateStore } from "./state"
 import { SessionLock } from "./session-lock"
 import { SwitchLog } from "./switchlog"
 import { createNarrator } from "./narrator"
-import { orChat } from "./openrouter"
+import { fetchOpenRouterModels, orChat } from "./openrouter"
 import { modelKey, parseModel, type ClientLike } from "./types"
 import { isV2Active } from "./v2"
 
@@ -57,6 +57,8 @@ export function createRelay(env: Env, client: ClientLike): RelayParts {
   const controller = new Controller({
     client, cfg, lock: new SessionLock(), state, health: state.health, narrate,
     switchLog: new SwitchLog(ledgerDir, cfg.ledger.enabled), env, now: Date.now, chat: orChat, log,
+    fetchCatalog: () => fetchOpenRouterModels({ baseUrl: cfg.openrouter.baseUrl, allowCustomBaseUrl: cfg.openrouter.allowCustomBaseUrl }),
+    openCodeModels: () => listProviderModels(client),
   })
   return { controller, state, warnings, narrate }
 }

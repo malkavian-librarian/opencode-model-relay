@@ -83,9 +83,10 @@ export type LevelEntry = RelayConfig["levels"][number]
 export interface FindResolutionInput {
   current: string; health: Record<string, ModelHealth>; tried?: readonly string[]
   quarantine?: Readonly<Record<string, number>>; now: number; consent: boolean
-  openCodeModels?: readonly string[]; fetchCatalog?: () => Promise<OpenRouterCatalogModel[]>
+  openCodeModels?: readonly string[] | (() => Promise<readonly string[]>); fetchCatalog?: () => Promise<OpenRouterCatalogModel[]>
   cache?: Pick<StateStore, "getFindCache" | "setFindCache" | "invalidateFindCache">
   failed?: string
+  allowQuarantined?: boolean
 }
 
 const DISCOVERED_ID = /^[A-Za-z0-9._:-]+(?:\/[A-Za-z0-9._:-]+)*$/
@@ -106,18 +107,19 @@ export async function resolveFindLevel(entry: Exclude<LevelEntry, string>, i: Fi
     const at = i.quarantine?.[m]
     return at !== undefined && i.now - at < QUARANTINE_MS
   }
-  const usable = (m: string): boolean => m !== i.current && !i.tried?.includes(m) && isHealthy(i.health[m], i.now)
-  if (cached && usable(cached)) return cached
+  const usable = (m: string): boolean => m !== i.current && !i.tried?.includes(m) && isHealthy(i.health[m], i.now) && (i.allowQuarantined !== false || !quarantined(m))
+  if (cached && usable(cached) && !quarantined(cached)) return cached
   if (cached) i.cache?.invalidateFindCache(key)
   let candidates: string[] = []
   try {
     const re = new RegExp(entry.find.match)
     if (entry.find.via === "openrouter") {
       const rows = i.fetchCatalog ? await i.fetchCatalog() : []
-      candidates = rows.filter((m) => typeof m.id === "string" && (!entry.find.free || m.pricing?.prompt === "0") && re.test(m.id) && isValidDiscoveredModelId(m.id))
+      candidates = rows.filter((m) => isValidDiscoveredModelId(m.id) && (!entry.find.free || m.pricing?.prompt === "0") && re.test(m.id))
         .map((m) => `openrouter/${m.id}`)
     } else {
-      candidates = (i.openCodeModels ?? []).filter((m) => isValidDiscoveredModelId(m) && (!entry.find.free || m.endsWith("-free")) && re.test(m))
+      const models = typeof i.openCodeModels === "function" ? await i.openCodeModels() : i.openCodeModels ?? []
+      candidates = models.filter((m) => isValidDiscoveredModelId(m) && (!entry.find.free || m.endsWith("-free")) && re.test(m))
     }
   } catch { return undefined }
   const healthy = candidates.filter(usable)
@@ -130,22 +132,23 @@ export async function resolveFindLevel(entry: Exclude<LevelEntry, string>, i: Fi
 export async function walkFromTopAsync(i: {
   ladder: readonly LevelEntry[]; current: string; health: Record<string, ModelHealth>
   tried?: readonly string[]; quarantine?: Readonly<Record<string, number>>; now: number
-  switchCount: number; maxSwitches: number; consent: boolean; openCodeModels?: readonly string[]
+  switchCount: number; maxSwitches: number; consent: boolean; openCodeModels?: FindResolutionInput["openCodeModels"]
   fetchCatalog?: () => Promise<OpenRouterCatalogModel[]>; cache?: FindResolutionInput["cache"]
+  allowQuarantined?: boolean
 }): Promise<Decision> {
   if (i.switchCount >= i.maxSwitches) return { action: "exhausted", reason: "switch_cap" }
-  const candidates: string[] = []
-  for (const level of i.ladder) {
-    const model = typeof level === "string" ? level : await resolveFindLevel(level, i)
-    if (model === undefined || model === i.current || i.tried?.includes(model) || !isHealthy(i.health[model], i.now)) continue
-    candidates.push(model)
-  }
+  let fallback: string | undefined
   const quarantined = (m: string): boolean => {
     const at = i.quarantine?.[m]
     return at !== undefined && i.now - at < QUARANTINE_MS
   }
-  const pick = candidates.find((m) => !quarantined(m)) ?? candidates[0]
-  return pick === undefined ? { action: "exhausted", reason: "no_candidates" } : { action: "switch", to: pick }
+  for (const level of i.ladder) {
+    const model = typeof level === "string" ? level : await resolveFindLevel(level, i)
+    if (model === undefined || model === i.current || i.tried?.includes(model) || !isHealthy(i.health[model], i.now)) continue
+    if (!quarantined(model)) return { action: "switch", to: model }
+    if (i.allowQuarantined !== false) fallback ??= model
+  }
+  return fallback === undefined ? { action: "exhausted", reason: "no_candidates" } : { action: "switch", to: fallback }
 }
 
 /** Ordered, deduped ladder (first occurrence wins); find entries are carried unresolved — the discovery child (#69) resolves them. */
