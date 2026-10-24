@@ -31,7 +31,7 @@ Delivery is staged (section 12-13); everything above remains the target design.
 
 ## 4. Concepts
 
-The levels redesign adopts the dispositions in [the plan's section 6](../plans/2026-10-23-model-relay-levels-redesign.md#6-adversarial-panel---round-1-2026-10-23); the shipped issues take precedence if the plan and implementation differ.
+The levels redesign adopts the dispositions in [the plan's section 6](../plans/2026-10-23-model-relay-levels-redesign.md#6-adversarial-panel--round-1-2026-10-23); the shipped issues take precedence if the plan and implementation differ.
 
 - **Level:** an ordered `levels` entry, either a `providerID/modelID` string or a `{ find: { match, free?, via? } }` matcher. The ladder is capped at 32 entries and deduplicated, keeping the first occurrence. A legacy `tiers` object is accepted only as a compatibility input and migrates to levels in `primary`, `secondary`, `tertiary` order; explicit `levels` wins when both are present.
 - **Failure kinds** (classifier output `{kind, retryable, retryAfterMs, permanent}`) are `rate_limit`, `quota`, `auth`, `free_tier_403`, `server_5xx`, `timeout`, `model_not_found`, `overflow`, `user_abort`, `unknown`, and `quality`. Overflow, user abort and unknown are not automatic switch triggers.
