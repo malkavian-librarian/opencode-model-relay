@@ -83,7 +83,7 @@ File: `~/.config/opencode/opencode-model-relay.jsonc` (JSONC, max 64 KB). It is 
 | `handover.messageTemplate` | string | built-in template | Placeholders: `{{from}} {{to}} {{reason}} {{summary}} {{toolCalls}} {{files}} {{todo}} {{lastRequest}}`. |
 | `handover.maxToolChars` | positive integer | `1500` | Per tool output cap before truncation. |
 | `handover.maxTranscriptChars` | positive integer | `60000` | Transcript cap (internally limited to 60000). |
-| `handover.maxCallsPerSession` | integer >= 0 | `3` | Helper-model calls per session; after that the plain tail is used. |
+| `handover.maxCallsPerSession` | integer >= 0 | `3` | Helper-model calls per session; after that the plain tail is used. Plain-tail resume is the default critical path; optional narratives run asynchronously after resume. |
 | `judge.enabled` | boolean | `false` | Opt-in quality judge: after a finished turn, if the local heuristics find the turn suspicious, a judge model decides whether to switch to a healthier chain model. Never applies to the primary tier or its own handover turns. Two consecutive `switch: true` verdicts are required for a switch (no cooldown recorded for it). |
 | `judge.model` | string | `"google/gemini-2.5-flash-lite"` | OpenRouter model that judges. Keep it cheap: it runs after idle turns. |
 | `judge.prompt` | string | built-in prompt | System prompt for the judge; must answer strict JSON `{switch, reason, confidence}`. |
@@ -104,6 +104,7 @@ File: `~/.config/opencode/opencode-model-relay.jsonc` (JSONC, max 64 KB). It is 
 - Opt in with `"privacy.consent": true` and an OpenRouter key in the environment variable named by `openrouter.keyEnv`. Without both, no network call is made: the handover uses the plain transcript tail and the judge does not run. You get a one-time toast saying so.
 - Every helper request sends `provider.data_collection: "deny"`. With `privacy.zdr: true` it also requests zero-data-retention routing.
 - Everything sent passes through a redaction step first (private keys, common API token formats, bearer tokens, `KEY=value` lines, auth and cookie headers, URL credentials, secret-looking query parameters and CLI flags). Output of tools that touched sensitive paths (`.env`, SSH keys, `.pem`, `.npmrc`, `.netrc`, `credentials`, `secrets.json` and similar) is dropped. Redaction is pattern-based and best effort, not a guarantee.
+- Failover resumes on the plain-tail handover without waiting for a narrative: the hard latency budget is 6 seconds (5-second abort race plus the 300 ms handoff delay), with a typical budget of 2 seconds when abort completes promptly. If `privacy.consent` is false, or the configured `openrouter.keyEnv` is missing, no narrative call is made.
 - The helper request goes only to the configured base URL over `https`, with redirects not followed. The key is never written to config, logs, the switch log or error messages.
 - Transcripts and tool output are treated as untrusted data. The handover message says it is a model-generated summary, not user instructions.
 - Stored locally under `~/.local/share/opencode-model-relay` (or `$XDG_DATA_HOME/opencode-model-relay`):

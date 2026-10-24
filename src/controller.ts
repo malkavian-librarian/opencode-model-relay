@@ -159,7 +159,7 @@ export class Controller {
         this.d.state.save()
         const superseded = await this.enactSwitch(sessionID, current, { to: parseModel(target), handoverText: text })
         if (superseded !== undefined) return { status: "unavailable", from: current, to: superseded }
-        this.d.switchLog.append({ ts: started, sessionID, from: current, to: target, kind: "manual" })
+        this.d.switchLog.append({ ts: started, sessionID, from: current, to: target, kind: "manual", elapsedMs: Math.max(0, this.d.now() - started) })
         return { status: "switched", from: current, to: target, elapsedMs: Math.max(0, this.d.now() - started) }
       } finally {
         this.d.lock.release(sessionID)
@@ -179,6 +179,7 @@ export class Controller {
    */
   private async handle(sessionID: string, c: Classified, from?: ModelRef, resetText?: string): Promise<boolean> {
     const d = this.d
+    const started = d.now()
     // A plugin-caused abort is consumed here; an unmarked abort is the user pressing Esc. Neither switches.
     if (c.kind === "user_abort") { d.lock.consumePluginAbort(sessionID); return false }
     if (!c.switchable) return false
@@ -210,7 +211,7 @@ export class Controller {
       // Marker guard (#56, AC-03): marker text is untrusted; a marker newest while the session is not
       // on the plugin-set model is a stale error, and the drop is logged, never silent (AC-06).
       if (hasRelayMarker(newest.parts) && rec.pluginPinned !== current) {
-        d.switchLog.append({ ts: now, sessionID, from: current, kind: "switch_dropped", reason: "marker_guard" })
+        d.switchLog.append({ ts: now, sessionID, from: current, kind: "switch_dropped", reason: "marker_guard", elapsedMs: Math.max(0, d.now() - started) })
         return false
       }
 
@@ -249,15 +250,11 @@ export class Controller {
       const ex = extractFromMessages(msgs, d.cfg.handover)
       const key = d.env[d.cfg.openrouter.keyEnv]
       let summary: string | null = null
-      let helperCost: number | undefined
       let helperCalls = rec.helperCalls ?? 0
-      if (d.cfg.privacy.consent && key) {
-        // Per-session cap: once reached, use the plain tail silently (no toast).
-        if (helperCalls < d.cfg.handover.maxCallsPerSession) {
-          helperCalls++ // count the attempt even if it fails
-          const w = await writeNarrative({ chat: d.chat, cfg: d.cfg, key }, ex)
-          if (w) { summary = w.summary; helperCost = w.costUsd } else await this.toast("handover_failed", {}, "warning")
-        }
+      const narrativeDeferred = d.cfg.privacy.consent && !!key && helperCalls < d.cfg.handover.maxCallsPerSession
+      if (narrativeDeferred) {
+        // Reserve the attempt before resume; the writer is deliberately off the critical path.
+        helperCalls++
       } else if (!this.warnedConsent) {
         // no consent, or consent without a key: nothing is sent anywhere; tell the user once
         this.warnedConsent = true
@@ -288,16 +285,30 @@ export class Controller {
         d.state.set(sessionID, adopted)
         delete d.health[supersededBy] // the owner chose it: cooldown, blacklist and failure count all clear, once
         d.state.save()
-        d.switchLog.append({ ts: d.now(), sessionID, from: current, to: supersededBy, kind: "switch_dropped", reason: "superseded" })
+        d.switchLog.append({ ts: d.now(), sessionID, from: current, to: supersededBy, kind: "switch_dropped", reason: "superseded", elapsedMs: Math.max(0, d.now() - started) })
         return false
       }
       this.storm.set(sessionID, now) // AC-05: retry events for the old turn are consumed from here
       if (this.storm.size >= MAX_SESSION_ENTRIES) this.storm.clear() // bound the in-memory map
       d.switchLog.append({
-        ts: now, sessionID, from: current, to, kind: c.kind,
-        ...(helperCost !== undefined ? { helperCostUsd: helperCost } : {}),
+        ts: now, sessionID, from: current, to, kind: c.kind, elapsedMs: Math.max(0, d.now() - started),
       })
       await this.toast("switch_done", { from: current, to, reason: c.kind })
+      if (narrativeDeferred && key) {
+        void (async () => {
+          const w = await writeNarrative({ chat: d.chat, cfg: d.cfg, key }, ex)
+          if (!w) { await this.toast("handover_failed", {}, "warning"); return }
+          const deferred = buildHandover({ cfg: d.cfg, ex, from: current, to, reason: c.kind, summary: w.summary })
+          try {
+            Promise.resolve(d.client.session.prompt({
+              path: { id: sessionID },
+              body: { model: parseModel(to), ...(agent ? { agent } : {}), parts: [{ type: "text", text: deferred }] },
+            })).catch((e: unknown) => { try { d.log(`deferred narrative prompt failed: ${e instanceof Error ? e.message : String(e)}`) } catch { /* ignore */ } })
+          } catch (e) {
+            try { d.log(`deferred narrative prompt failed: ${e instanceof Error ? e.message : String(e)}`) } catch { /* ignore */ }
+          }
+        })().catch(() => { /* narrative is best effort and never affects the resumed session */ })
+      }
       return true
     } finally {
       d.lock.release(sessionID)

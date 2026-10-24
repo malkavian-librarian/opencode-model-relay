@@ -144,6 +144,7 @@ describe("buildHandover", () => {
     const h = buildHandover({ cfg, ex, from: "a/1", to: "b/2", reason: "quota", summary: null })
     expect(h).toContain("ASSISTANT: working")
     expect(h).toMatch(/summary unavailable/i)
+    expect(h).toMatch(/narrative deferred/i)
   })
 })
 describe("final review fixes", () => {

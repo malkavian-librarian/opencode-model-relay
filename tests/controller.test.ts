@@ -110,7 +110,7 @@ describe("Controller.onSessionError", () => {
       for (const h of Object.values(d.health)) h.cooldownUntil = 0
       await c.onSessionError("s1", err429)
     }
-    expect(calls.prompt.map((p) => p.body.model)).toEqual([{ providerID: "b", modelID: "2" }, { providerID: "c", modelID: "3" }])
+    expect(calls.prompt.filter((p) => /summary unavailable/i.test(p.body.parts[0].text)).map((p) => p.body.model)).toEqual([{ providerID: "b", modelID: "2" }, { providerID: "c", modelID: "3" }])
     expect(d.state.get("s1")).toMatchObject({ switchCount: 2, helperCalls: 1, pluginPinned: "c/3" })
     expect(calls.chat).toHaveLength(1)
     expect(calls.logs).toHaveLength(2)
@@ -135,6 +135,7 @@ describe("Controller.onSessionError", () => {
     expect(text).toContain("UNKNOWN")
     expect(d.state.get("s1")).toMatchObject({ pluginPinned: "b/2", switchCount: 1 })
     expect(calls.logs[0]).toMatchObject({ sessionID: "s1", from: "a/1", to: "b/2", kind: "rate_limit" })
+    expect(calls.logs[0].elapsedMs).toEqual(expect.any(Number))
     expect(calls.toast.join(" ")).toContain("b/2")
   })
   it("sends nothing to OpenRouter without consent, and uses the plain tail", async () => {
@@ -156,12 +157,44 @@ describe("Controller.onSessionError", () => {
     await c.onSessionError("s1", err429)
     expect(calls.toast.filter((t) => /local-only|summaries are off/i.test(t))).toHaveLength(1)
   })
-  it("with consent and a key, uses the LLM summary and records helper cost", async () => {
+  it("with consent and a key, delivers the LLM summary asynchronously", async () => {
     const { c, calls } = setup({ cfg: { privacy: { consent: true } }, env: { OPENROUTER_API_KEY: "k" } })
     await c.onSessionError("s1", err429)
     expect(calls.chat).toHaveLength(1)
-    expect(calls.prompt[0].body.parts[0].text).toContain("SUMMARY")
-    expect(calls.logs[0].helperCostUsd).toBe(0.01)
+    await vi.waitFor(() => expect(calls.prompt).toHaveLength(2))
+    expect(calls.prompt[1].body.parts[0].text).toContain("SUMMARY")
+    expect(calls.logs[0].elapsedMs).toEqual(expect.any(Number))
+  })
+  it("does not wait for a consented narrative before resuming", async () => {
+    let release!: () => void
+    const narrative = new Promise<{ text: string; costUsd: number }>((resolve) => { release = () => resolve({ text: "SUMMARY", costUsd: 0.01 }) })
+    const { c, calls } = setup({
+      cfg: { privacy: { consent: true } }, env: { OPENROUTER_API_KEY: "k" },
+      chat: async () => narrative,
+    })
+
+    const switched = c.onSessionError("s1", err429)
+    await vi.waitFor(() => expect(calls.prompt).toHaveLength(1))
+    expect(calls.prompt.filter((p) => /summary unavailable/i.test(p.body.parts[0].text))).toHaveLength(1)
+    release()
+    await expect(switched).resolves.toBe(true)
+  })
+  it("fires the plain-tail prompt within the hard abort budget", async () => {
+    vi.useFakeTimers()
+    try {
+      const { c, d, calls } = setup()
+      d.switchOpts = { abortTimeoutMs: 5000, abortDelayMs: 300 }
+      ;(d.client.session as any).abort = async (a: any) => {
+        calls.abort.push(a)
+        return new Promise<void>(() => {})
+      }
+      const switched = c.onSessionError("s1", err429)
+      await vi.advanceTimersByTimeAsync(5300)
+      expect(calls.prompt).toHaveLength(1)
+      await expect(switched).resolves.toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
   })
   it("maxCallsPerSession caps helper calls across switches and persists across reload", async () => {
     const cfg = { privacy: { consent: true }, handover: { maxCallsPerSession: 1 }, tiers: { primary: "a/1", secondary: ["b/2", "c/3"] } }
@@ -169,9 +202,9 @@ describe("Controller.onSessionError", () => {
     await c.onSessionError("s1", err429)
     messages.push(asst("b1", "b", "2"))
     await c.onSessionError("s1", err429)
-    expect(calls.prompt).toHaveLength(2)
+    expect(calls.prompt.filter((p) => /summary unavailable/i.test(p.body.parts[0].text))).toHaveLength(2)
     expect(calls.chat).toHaveLength(1)
-    expect(calls.prompt[1].body.parts[0].text).toMatch(/summary unavailable/i)
+    expect(calls.prompt.filter((p) => /summary unavailable/i.test(p.body.parts[0].text))[1].body.parts[0].text).toMatch(/summary unavailable/i)
     expect(d.state.get("s1")).toMatchObject({ switchCount: 2, helperCalls: 1 })
     const reloaded = new StateStore((d.state as any).file, () => 1_000_000); reloaded.load()
     expect(reloaded.get("s1").helperCalls).toBe(1)
@@ -233,7 +266,7 @@ describe("Controller.onSessionError", () => {
     const { c, calls } = setup()
     await Promise.all([c.onSessionError("s1", err429), c.onSessionError("s1", err429)])
     await c.onSessionError("s1", err429)
-    expect(calls.prompt).toHaveLength(1)
+    expect(calls.prompt.filter((p) => /summary unavailable/i.test(p.body.parts[0].text))).toHaveLength(1)
   })
   it("drops errors that arrive while a switch is in progress, then chains A->B->C on a new failure", async () => {
     const { c, d, calls, messages } = setup({ cfg: { tiers: { primary: "a/1", secondary: ["b/2", "c/3"] } } })
@@ -437,6 +470,7 @@ describe("Controller.manualSwitch (#67)", () => {
     expect(d.health["b/2"]).toBeUndefined()
     expect(d.state.get("s1").switchCount).toBe(0)
     expect(calls.logs[0]).toMatchObject({ from: "a/1", to: "b/2", kind: "manual" })
+    expect(calls.logs[0].elapsedMs).toEqual(expect.any(Number))
   })
 
   it("next walks to the next healthy ladder model and ignores the automatic cap", async () => {
@@ -562,9 +596,9 @@ describe("Controller quality judge (#26)", () => {
     await c.onSessionIdle("s1")
     expect(judgeCalls).toHaveLength(2)
     expect(calls.abort).toHaveLength(1)
-    expect(calls.prompt).toHaveLength(1)
+    expect(calls.prompt.filter((p) => /summary unavailable/i.test(p.body.parts[0].text))).toHaveLength(1)
     // chain-sticky switch path: the next healthy model in the chain is a/1 (nothing ruled it out)
-    expect(calls.prompt[0].body.model).toEqual({ providerID: "a", modelID: "1" })
+    expect(calls.prompt.filter((p) => /summary unavailable/i.test(p.body.parts[0].text))[0].body.model).toEqual({ providerID: "a", modelID: "1" })
     expect(calls.logs[0]).toMatchObject({ from: "b/2", to: "a/1", kind: "quality" })
     expect(d.state.get("s1")).toMatchObject({ switchCount: 1, pluginPinned: "a/1", judgeCalls: 2 })
     expect(d.state.judgeDaily).toMatchObject({ calls: 2, costUsd: 0.02 })

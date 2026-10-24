@@ -125,7 +125,7 @@ export function buildHandover(a: { cfg: RelayConfig; ex: Extracted; from: string
   const text = renderHandover(a.cfg.handover.messageTemplate, {
     from: a.from, to: a.to, reason: a.reason,
     // Both the LLM summary and the raw tail are untrusted: fence them as data the content cannot close.
-    summary: `<handover-data>\n${defang(a.summary ?? `(summary unavailable; recent transcript follows)\n${tail}`)}\n</handover-data>`,
+    summary: `<handover-data>\n${defang(a.summary ?? `(summary unavailable; narrative deferred; recent transcript follows)\n${tail}`)}\n</handover-data>`,
     toolCalls: defang(calls),
     files: defang(a.ex.filesTouched.map((f) => `- ${f}`).join("\n") || "- (none)"),
     todo: defang(a.ex.todo.map((t) => `- ${t}`).join("\n") || "- (none)"),

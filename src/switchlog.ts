@@ -63,7 +63,7 @@ export class SwitchLog {
     return this.salt
   }
 
-  append(r: { ts: number; sessionID: string; from?: string; to?: string; kind: SwitchKind; reason?: SwitchDropReason; helperCostUsd?: number }): void {
+  append(r: { ts: number; sessionID: string; from?: string; to?: string; kind: SwitchKind; reason?: SwitchDropReason; elapsedMs?: number; helperCostUsd?: number }): void {
     if (!this.enabled) return
     try {
       const session = createHmac("sha256", this.getSalt()).update(r.sessionID).digest("hex").slice(0, 16)
@@ -72,6 +72,7 @@ export class SwitchLog {
         ...(r.from !== undefined ? { from: clean(r.from, 120) } : {}),
         ...(r.to !== undefined ? { to: clean(r.to, 120) } : {}),
         ...(r.reason !== undefined ? { reason: r.reason } : {}),
+        elapsedMs: typeof r.elapsedMs === "number" && Number.isFinite(r.elapsedMs) && r.elapsedMs >= 0 ? r.elapsedMs : 0,
         ...(r.helperCostUsd !== undefined ? { helperCostUsd: r.helperCostUsd } : {}),
       }
       fs.mkdirSync(this.dir, { recursive: true, mode: 0o700 })
