@@ -21,7 +21,8 @@
     "@opencode-ai/plugin": "*"
   },
   "overrides": {
-    "toml": "5.0.1"
+    "toml": "5.0.1",
+    "esbuild": "0.28.1"
   },
   "devDependencies": {
     "@opencode-ai/plugin": "1.19.0",
