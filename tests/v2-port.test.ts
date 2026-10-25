@@ -136,7 +136,7 @@ describe("v2 activation rules", () => {
     const teardown = await createV2Plugin(e.env).setup(ctx)
     expect(typeof teardown).toBe("function")
     expect(calls.hookOrder.sort()).toEqual(["context", "prompt", "retry"])
-    expect(calls.tools.map((t) => t.name)).toEqual(["relay_status", "relay_init"])
+    expect(calls.tools.map((t) => t.name)).toEqual(["relay_status", "relay_init", "relay_stats", "relay_purge"])
     expect(calls.commands.map((c) => c.name)).toEqual(["relay", "relay-init"])
   })
   it("ignores untrusted ctx.options and ctx.location; the layer still activates", async () => {
@@ -640,6 +640,41 @@ describe("v2 tools, commands and model list", () => {
     expect(out.content).toContain("Created")
     expect(out.content).toContain("- a/1")
     expect(out.content).toContain("- b/2")
+    teardown?.()
+  })
+
+  it("relay_stats and /relay stats render the per-model table from the metadata-only ledger", async () => {
+    const e = env()
+    const ledgerDir = path.join(e.root, "data", "opencode-model-relay")
+    const { ctx, calls } = makeCtx()
+    const teardown = await createV2Plugin(e.env).setup(ctx)
+    const statsTool = calls.tools.find((t) => t.name === "relay_stats")
+    // An empty ledger still renders the table header, never throws.
+    expect((await statsTool!.execute(undefined, {})).content).toContain("model | turns")
+    fs.writeFileSync(
+      path.join(ledgerDir, `events-${process.pid}.jsonl`),
+      `${JSON.stringify({ ts: Date.now() - 1000, session: "0123456789abcdef", event: "turn", model: "a/1", tier: 1 })}\n`,
+    )
+    expect((await statsTool!.execute(undefined, {})).content).toContain("a/1")
+    const relayCmd = calls.commands.find((c) => c.name === "relay")
+    await relayCmd!.execute({ sessionID: "s1", prompt: { text: "stats" }, delivery: "steer" })
+    await until(() => calls.synthetic.some((x) => x.text.includes("a/1")))
+    teardown?.()
+  })
+  it("relay_purge and /relay purge delete only the event files, never other data", async () => {
+    const e = env()
+    const ledgerDir = path.join(e.root, "data", "opencode-model-relay")
+    fs.writeFileSync(path.join(ledgerDir, `events-${process.pid}.jsonl`), "\n")
+    fs.writeFileSync(path.join(ledgerDir, "keep.txt"), "x")
+    const { ctx, calls } = makeCtx()
+    const teardown = await createV2Plugin(e.env).setup(ctx)
+    const purgeTool = calls.tools.find((t) => t.name === "relay_purge")
+    expect((await purgeTool!.execute(undefined, {})).content).toContain("Purged 1 ledger file(s).")
+    expect(fs.readdirSync(ledgerDir)).not.toContain(`events-${process.pid}.jsonl`)
+    expect(fs.readdirSync(ledgerDir)).toContain("keep.txt")
+    const relayCmd = calls.commands.find((c) => c.name === "relay")
+    await relayCmd!.execute({ sessionID: "s1", prompt: { text: "purge" }, delivery: "steer" })
+    await until(() => calls.synthetic.some((x) => x.text.includes("Purged")))
     teardown?.()
   })
 

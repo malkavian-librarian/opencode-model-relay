@@ -6,6 +6,8 @@ import { configFile, confineToDir, dataDir, loadConfig } from "./config"
 import { StateStore } from "./state"
 import { SessionLock } from "./session-lock"
 import { SwitchLog } from "./switchlog"
+import { EventLog } from "./ledger"
+import { buildStats, writeStats } from "./stats"
 import { createNarrator } from "./narrator"
 import { fetchOpenRouterModels, orChat } from "./openrouter"
 import { modelKey, parseModel, type ClientLike } from "./types"
@@ -49,6 +51,8 @@ export interface RelayParts {
   /** Config-fallback warnings from loading; both layers surface these once (narrated). */
   warnings: string[]
   narrate: ReturnType<typeof createNarrator>
+  ledger: EventLog
+  ledgerDir: string
 }
 
 /** Shared bootstrap of the relay controller for both the v1 server() layer and the v2 setup() layer (#56). */
@@ -65,13 +69,17 @@ export function createRelay(env: Env, client: ClientLike): RelayParts {
   }
   const log = (_m: string) => { /* no file logging; keep silent to avoid leaking content */ }
   const narrate = createNarrator(cfg.narrator)
+  const ledger = new EventLog(ledgerDir, cfg.ledger.enabled)
   const controller = new Controller({
     client, cfg, lock: new SessionLock(), state, health: state.health, narrate,
     switchLog: new SwitchLog(ledgerDir, cfg.ledger.enabled), env, now: Date.now, chat: orChat, log,
+    ledger: { append: (f) => ledger.append(f) },
     fetchCatalog: () => fetchOpenRouterModels({ baseUrl: cfg.openrouter.baseUrl, allowCustomBaseUrl: cfg.openrouter.allowCustomBaseUrl }),
     openCodeModels: () => listProviderModels(client),
   })
-  return { controller, state, warnings, narrate }
+  // Startup rebuild (#7): stats.json is derived from the metadata-only ledger; best effort, never throws.
+  try { writeStats(buildStats(ledger.read(), Date.now()), ledgerDir) } catch { /* stats are best effort */ }
+  return { controller, state, warnings, narrate, ledger, ledgerDir }
 }
 
 /** Hooks that do nothing; returned when setup fails so OpenCode keeps working untouched. */
