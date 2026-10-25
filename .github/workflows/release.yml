@@ -10,6 +10,8 @@ permissions:
   id-token: write
 jobs:
   publish:
+    # Restricts workflow_dispatch to main per #45; tag pushes stay the only real publish path (see "Release (owner-only)" in docs/process.md).
+    if: github.event_name == 'push' || github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
