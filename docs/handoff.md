@@ -15,12 +15,18 @@ GitHub issue comments hold the detailed notes; this file indexes the latest stat
 
 ## Entries (newest first)
 
-### 2026-10-24 - #71 levels redesign docs sweep in review (opencode)
+### 2026-10-25 - #82 docs refresh in flight; #72 deployed, #70 remediation pending (opencode)
 
-- Status: PR [#88](https://github.com/malkavian-librarian/opencode-model-relay/pull/88) is open; the #71 issue remains open and its Relay board card is **In review**. The docs sweep targets merged #63–#70/#79 behavior.
-- AGENTS.md stays at 121 lines by replacement. Graduation proposal for the PR description: move the oldest active handover-latency gotcha to `docs/process.md#graduated-development-gotchas`, making room for the bootstrap/levels gotcha; direct-call rules now include the consent-gated public catalog. The cap guard forbids appends, not replacements.
-- Next: obtain scoped QA re-review of the current pushed head and confirm current-head CI/CodeRabbit results; #72 remains owner-gated after #71.
-- Blockers: QA re-review and current-head checks; the documentation repair is already pushed in PR #88. No source, tests or other worktrees touched.
+- Status: #72 done - merged build `90dffbb` installed at `~/.config/opencode/plugins/opencode-model-relay.js` (SHA-256 `7A97945B0A4DB8E98E08B9AFA4F4A18B8821D3B629A1709384B42F64D841E1A9`, `.disabled` absent, exclusive loading, manual hop + revert ledgered): [#72 evidence](https://github.com/malkavian-librarian/opencode-model-relay/issues/72#issuecomment-6389726018).
+- First real production auto-failover: `openai/gpt-5.6-sol` quota -> `openai/gpt-6.1-sol` -> `opencode-go/glm-5.3`, ~350-390 ms, local-only plain-tail handover, `switch_dropped reason=superseded` storm-guard rows: [#62 evidence](https://github.com/malkavian-librarian/opencode-model-relay/issues/62#issuecomment-6390018875).
+- #70 reopened (two Important findings in `src/switchlog.ts`, remediation pending); #73 reopened, blocked by #70.
+- Next: land #82 (docs refresh); then #70 remediation.
+- Blockers: none for #82 (docs-only).
+
+### 2026-10-24 - #71 levels redesign docs sweep - closed (opencode)
+
+- Status: [PR #88](https://github.com/malkavian-librarian/opencode-model-relay/pull/88) merged as `e7a3be8`; #71 closed and Done on the board. The sweep aligned README/spec/SECURITY/CHANGELOG/AGENTS with merged #63–#70/#79 behavior; AGENTS.md stayed at 121 lines by replacement.
+- Next: none for #71; the epic continued via #72 deployment (Done) and #82 docs refresh.
 
 ### 2026-10-24 - #66 controller rewiring merged - closed (opencode)
 

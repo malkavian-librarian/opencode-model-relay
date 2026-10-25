@@ -48,15 +48,17 @@ write an annotated default (consent off, never overwrites), or write by hand:
 
 ```jsonc
 {
-  "tiers": {
-    "primary": "openai/gpt-6.1-sol",                 // replace with your normal model
-    "secondary": ["opencode/deepseek-v4.1-flash-free"] // verify availability first
-  },
-  // "mode": "chain-sticky",                           // or chain-recover / escalate
+  "levels": [
+    "openai/gpt-6.1-sol",                              // replace with your normal model
+    "opencode/deepseek-v4.1-flash-free"                // verify availability first
+  ],
   // "privacy": { "consent": false },                  // true  => redacted transcript may go to OpenRouter
   // "judge": { "enabled": false }                     // true  => opt-in quality judge (also needs consent)
 }
 ```
+
+The deprecated `tiers` shape (`primary`, then `secondary` and `tertiary`) still auto-migrates
+to `levels` with a warning; the legacy `mode` key is ignored with a deprecation warning.
 
 Direct helper egress needs BOTH `"privacy.consent": true` and the key in an environment variable
 (default name `OPENROUTER_API_KEY`; set with `$env:OPENROUTER_API_KEY = "..."` per
@@ -74,15 +76,17 @@ in `opencode-model-relay.jsonc`, not as extra top-level keys in `opencode.jsonc`
    Only the first `/` separates provider and model; for example,
    `openrouter/z-ai/glm-5.3` uses provider `openrouter`. Being listed is not proof
    that credentials, credits or model capacity are currently usable.
-2. Start OpenCode, select a working model, and run `/relay` (one model turn).
-   The report lists `chain`, `mode`, `sticky`, `switches`, `recoveries`, `consent`
-   and `key`. `sticky: none` means no relay pin, not that no model is selected.
-   `/relay` asks the model to call `relay_status`, so it can fail on a broken model.
+2. Start OpenCode, select a working model, and run `/relay`. The report lists the
+   `chain`, the per-level `ladder` with health, `pluginPinned`/`pinned`, `adoptedAt`,
+   `switches`, `consent`, `key` (presence only), manual/auto counts and the last ten
+   ledger rows. `pinned: none` means no relay pin, not that no model is selected.
+   On OpenCode 2 `/relay` is a native zero-turn command; on 1.x it asks the model to
+   call `relay_status`, so it can fail on a broken model.
 3. Run the healthy-turn and basic-failover scenarios below in a fresh session.
 4. Check the local ledger after a switch:
    `%USERPROFILE%\.local\share\opencode-model-relay\`
    - `switches.jsonl` - one row per switch (metadata only, HMAC'd session id)
-   - `state.json` - sticky model, counters, model health
+   - `state.json` - pinned model, counters, model health
    - `salt` - the per-install HMAC salt
    Files are created as needed; an untouched install need not have all three yet.
    `XDG_DATA_HOME` changes the base to `$XDG_DATA_HOME/opencode-model-relay`.
@@ -104,19 +108,16 @@ The complete field reference is in [README configuration](../README.md#configura
 ### Start with a free-only failover chain
 
 Use this for reproducing the GLM failure without automatically reaching a paid
-fallback. Select GLM in OpenCode too: `tiers.primary` ranks the chain; it does not
+fallback. Select GLM in OpenCode too: `levels[0]` ranks the ladder; it does not
 change OpenCode's selected/default model.
 
 ```jsonc
 {
-  "mode": "chain-sticky",
-  "tiers": {
-    "primary": "opencode/glm-5.3-flash-free",
-    "secondary": [
-      "opencode/deepseek-v4.1-flash-free",
-      "opencode/beam-free"
-    ]
-  },
+  "levels": [
+    "opencode/glm-5.3-flash-free",
+    "opencode/deepseek-v4.1-flash-free",
+    "opencode/beam-free"
+  ],
   "privacy": { "consent": false },
   "judge": { "enabled": false },
   "maxSwitchesPerSession": 2,
@@ -128,26 +129,16 @@ Free models can share an outage or account limit. Successful fallback is possibl
 only if at least one eligible candidate actually works. A two-switch cap permits
 GLM -> DeepSeek -> Beam, then stops further switching in that session.
 
-### Choose the switching mode
+### How the ladder is walked
 
-For `primary: A`, `secondary: [B1, B2]`, `tertiary: [C]` (replace letters with real ids):
+Failover scans `levels` from the top for the first healthy, untried candidate; it
+does not simply advance one index. With GPT as a healthy `levels[0]`, manually
+selecting GLM and making it fail can switch back to GPT before DeepSeek. For a
+GLM -> DeepSeek test, use the free-only config above.
 
-| Setting | Failure path | On later user messages |
-|---|---|---|
-| `"mode": "chain-sticky"` | A -> B1 -> B2 -> C when earlier candidates remain unhealthy or already tried in that turn. | Keep the fallback; no automatic return. |
-| `"mode": "chain-recover"` | Same failure selection as sticky. | Return to the highest-ranked healthy model above the sticky fallback. |
-| `"mode": "escalate"` | A -> B1 -> C; B2 is a sibling, so it is skipped. | Keep the fallback; no automatic return. |
-
-Flat-chain modes scan from the start for the first healthy, untried candidate;
-they do not simply advance one index. With GPT as an explicit healthy primary,
-manually selecting GLM and making it fail can switch back to GPT before DeepSeek.
-For a GLM -> DeepSeek test, use the free-only config above. Omitting `tiers.primary`
-instead puts the currently failing model first when constructing a flat chain.
-
-Use `chain-recover` for temporary rate limits, not for forcing a return after quota
-or auth failures. Recovery is evaluated on a new user message, not a background
-timer. It does not increase `switches`, but increases `recoveries`; recovery stops
-one switch before the switch cap and has its own count bounded by that cap.
+The choice stays put for the session: there is no automatic return to a
+higher-ranked model on later user messages. A cooldown only makes a model
+eligible again for the next failover walk.
 
 ### Tune timing, limits and visibility
 
@@ -155,7 +146,7 @@ These are top-level config fields/fragments:
 
 | Setting | How to use it during testing |
 |---|---|
-| `"cooldownMs": 10000` | Shorten the base transient cooldown from 60000 ms for a recovery experiment. Repeated failures double it, up to one hour; a supplied `Retry-After` takes precedence. |
+| `"cooldownMs": 10000` | Shorten the base transient cooldown from 60000 ms to test cooldown expiry. Repeated failures double it, up to one hour; a supplied `Retry-After` takes precedence. |
 | `"maxSwitchesPerSession": 2` | Bound a short experiment. Default is 6; the cap counts switches, not models, retries or money. |
 | `"narrator": { "verbosity": "chatty", "tone": "plain" }` | Make relay events visible. `normal` is the everyday default; `quiet` hides normal switch/recovery messages; `off` hides all narration. |
 | `"ledger": { "enabled": true }` | Keep metadata evidence in `switches.jsonl`. Setting it false disables the switch log, not persisted state. |
@@ -212,8 +203,9 @@ After ordinary failover works, merge this fragment (also needs consent and the k
 }
 ```
 
-The judge checks only finished, token-producing turns on configured secondary or
-tertiary models. It skips primary, unlisted models and relay handover turns. Local
+The judge checks only finished, token-producing turns. It skips the current model
+when it equals the first entry returned by `buildLadder`, and skips relay handover
+turns. Unlisted models are not excluded by this gate. Local
 signals are three identical tool calls, three consecutive tool errors, or an
 assistant turn with neither text nor a successful tool. A weak answer alone is
 not a trigger. Two consecutive `switch: true` judgments are needed to switch;
@@ -233,7 +225,7 @@ are outside it. Use provider-side budgets too when testing paid helpers.
 1. Save your normal config before an experiment. Use a disposable project with
    harmless files and a new top-level session for each independent scenario.
 2. Change one variable, restart OpenCode, and confirm `/relay` using a working model.
-3. Note the OpenCode version, model ids, mode, consent, caps and starting counters.
+3. Note the OpenCode version, model ids, consent, caps and starting counters.
 4. Run a small task: ask it to read a sample file and report a unique marker plus
    the next step. After fallback, check that the marker and task intent survive.
 5. Compare assistant-message model metadata, the handover, counters and new log
@@ -249,8 +241,7 @@ are outside it. Use provider-side budgets too when testing paid helpers.
 | Basic GLM fallback | Use the free-only config, select GLM, and send a short prompt while its failure is reproducible. | Recognized failure causes a handover to the first healthy untried fallback; counter/log row increases and fallback answers. If GLM works, only the healthy path was tested. |
 | Sticky continuation | After successful fallback, send another real user prompt. | The answering model remains the sticky fallback without another switch. |
 | Explicit model choice | After fallback, select a different model that is neither the sticky model nor the original model. | The old pin clears; counters are retained. Selecting the original model can be interpreted as stale TUI state, so is not a reliable pin-reset test. |
-| Recovery after transient error | Use `chain-recover`, allow a real rate-limit/timeout cooldown to expire, then send a new prompt. | A healthy higher-ranked model takes over; `recoveries` increases, `switches` does not; log kind is `recover`. Not applicable to a permanent auth failure. |
-| Tier escalation | Configure A / [B1, B2] / [C] and `escalate`; reproduce failures on A then B1. | C is next, not B2. Prefer stubbed events for repeatability. |
+| Ladder scan | Configure `levels` [A, B1, B2, C]; reproduce failures on A then B1. | B2 is next, not C: the walk scans from the top for the first healthy untried candidate. Prefer stubbed events for repeatability. |
 | Exhaustion / cap | Set cap to 1, trigger a fallback, then a recognized failure on that fallback. Separately try an unhealthy/exhausted chain. | Cap/exhaustion warning; no extra switch or infinite handover loop. The plugin leaves the current model selected. |
 | User cancellation | Start a long harmless response and press Esc. | No relay switch or new switch-log row. Test the real keypress, not just an API abort. |
 | Restart persistence | After fallback, quit and restart, reopen the same session and inspect status. | Sticky state and session counts survive; health still affects candidate selection. |
@@ -258,7 +249,7 @@ are outside it. Use provider-side budgets too when testing paid helpers.
 | Summary success/failure | With consent/key and one summary call allowed, trigger fallback; repeat in a fresh session with an invalid helper slug. | Success includes a generated summary (optional cost metadata); helper failure still produces a plain-tail handover and continuation. |
 | Judge healthy path | Enable judge; finish an ordinary secondary-model turn with useful text and no suspicious tool activity. | No judge call or quality switch; inspect persisted judge counters, not just `/relay`. |
 | Judge suspicious path | In a disposable task, ask for three identical harmless reads or reproduce repeated tool errors on a secondary model. Repeat on a later eligible turn after the interval. | Heuristics may allow judging; two affirmative verdicts can cause a `quality` switch. Prompting cannot guarantee a verdict. Use controller tests for deterministic coverage. |
-| Invalid config | Back up config, temporarily add an unknown key or invalid mode, then restart. | Warning and whole-config fallback to defaults, not a partial merge; OpenCode stays usable. Restore promptly. |
+| Invalid config | Back up config, temporarily add an unknown key, then restart. | Warning and whole-config fallback to defaults, not a partial merge; OpenCode stays usable. Restore promptly. |
 | Subagent isolation | Run a task that creates a child session; reproduce a failure there if feasible. | Relay does not switch the child session; its `parentID` excludes it. |
 
 ### Reproducing failures without guesswork
@@ -273,7 +264,7 @@ are outside it. Use provider-side budgets too when testing paid helpers.
   your everyday provider credentials. This proves permanent-failure handling,
   not transient cooldown recovery.
 - **Missing model:** a bogus provider/model can be rejected before any usable
-  session event. Also, changing `tiers.primary` alone does not select that model.
+  session event. Also, changing `levels[0]` alone does not select that model.
   Treat missing-model injection as exploratory, not a guaranteed failover recipe;
   keep a known-working destination when testing continuation.
 - **Deterministic checks:** use the existing suites for timing, repeated events,
@@ -289,9 +280,8 @@ are outside it. Use provider-side budgets too when testing paid helpers.
 
 ### Best practices and troubleshooting
 
-- Keep chains short and intentional. In flat modes, tertiary is just later in
-  the list; in `escalate`, it is a strictly higher tier. Do not add paid models
-  unless you intend automatic paid continuation. Switch caps are not cost caps.
+- Keep ladders short and intentional. Do not add paid models unless you intend
+  automatic paid continuation. Switch caps are not cost caps.
 - Use one OpenCode instance for stateful experiments. Stop all instances before
   backing up/resetting relay data; running instances can overwrite your changes.
   There is no reset command. For a completely clean experiment, move the relay
@@ -311,8 +301,9 @@ are outside it. Use provider-side budgets too when testing paid helpers.
   or an unrecognized error. Context overflow, Esc/user abort and unknown failures
   intentionally do not switch. Real free-tier error wording may not match yet.
 - If the TUI still names the old model, inspect the assistant model metadata and
-  sticky/log evidence. Selector synchronization and visible toasts need manual
-  verification; `/relay` itself can create an additional model turn.
+  pinned/log evidence. Selector synchronization and visible toasts need manual
+  verification; `/relay` itself can cost an additional model turn on OpenCode 1.x
+  (it is zero-turn on 2.x).
 - If `key: missing`, launch from the environment where you set the variable and
   check `openrouter.keyEnv`. `key: set` does not guarantee helper authentication.
 - Use fake secret-shaped markers in disposable fixtures to inspect redaction,

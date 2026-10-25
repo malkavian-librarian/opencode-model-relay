@@ -123,21 +123,22 @@ Publishing is an owner action; agents never publish or push tags.
 | `docs/superpowers/plans/2026-10-18-v1.0-failover-handover.md` | v1.0 implementation plan. |
 | `docs/superpowers/plans/2026-10-23-model-relay-levels-redesign.md` | Epic #62 levels redesign plan and child issue map. |
 
-## Epic #62 child status (2026-10-24 live)
+## Epic #62 child status (2026-10-25 live)
 
 | Child | Scope | Status | Next |
 |-------|-------|--------|------|
-| #63 | config schema + tiers migration + relay-init template | ✅ Merged (PR #74) | — |
-| #64 | strategy: walkFromTop, quarantine, reset-aware cooldowns | ✅ Merged (PR #78) | — |
-| #65 | v2 probe: switchModel persistence, retry-veto, synthetic targeting, pick-vs-resolution | ✅ Merged (PR #75) | — |
-| #66 | rewiring: adoption under lock, pin-machinery deletion, crash windows, `switch_dropped` | ✅ Merged (PR #80) | — |
-| #67 | /relay model + /relay next fast-path commands | ✅ Merged (PR #84) | — |
-| #68 | fast failover: plain-tail default, async narrative, latency budget | ✅ Merged | — |
-| #69 | find levels: free-model discovery, health-aware resolution, consent gate | ✅ Merged | — |
-| #70 | observability: verbose switch-log + /relay status ladder view | ✅ Merged | — |
-| #71 | docs sweep: README/spec/SECURITY/CHANGELOG/AGENTS | 🔎 In review (PR #88 open) | QA re-review; then #72 |
-| #72 | deploy & enable plugin on owner machine (re-enable `.disabled`) | ⏳ Pending (`needs-owner`) | #73 |
-| #73 | wrap-up: commit all, delete merged branches, worktree audit, push | ⏳ Pending | — |
+| #63 | config schema + tiers migration + relay-init template | ✅ Done (PR #74) | — |
+| #64 | strategy: walkFromTop, quarantine, reset-aware cooldowns | ✅ Done (PR #78) | — |
+| #65 | v2 probe: switchModel persistence, retry-veto, synthetic targeting, pick-vs-resolution | ✅ Done (PR #75) | — |
+| #66 | rewiring: adoption under lock, pin-machinery deletion, crash windows, `switch_dropped` | ✅ Done (PR #80) | — |
+| #67 | /relay model + /relay next fast-path commands | ✅ Done (PR #84) | — |
+| #68 | fast failover: plain-tail default, async narrative, latency budget | ✅ Done (PR #85) | — |
+| #69 | find levels: free-model discovery, health-aware resolution, consent gate | ✅ Done (PR #86) | — |
+| #70 | observability: verbose switch-log + /relay status ladder view | 🔁 Backlog (reopened: two Important QA findings in `src/switchlog.ts`, remediation pending) | #70 remediation |
+| #71 | docs sweep: README/spec/SECURITY/CHANGELOG/AGENTS | ✅ Done (PR #88, `e7a3be8`) | — |
+| #72 | deploy & enable plugin on owner machine (`.disabled` artifact removed, exclusive loading) | ✅ Done (build `90dffbb`, live-verified) | — |
+| #73 | wrap-up: commit all, delete merged branches, worktree audit, push | 🔁 Backlog (reopened: blocked by #70; cleanup done and evidenced) | #70 |
+| #89 | v2 fix: /relay command text from `CommandInvocation.prompt` | ✅ Done (PR #90, `90dffbb`) | — |
 
 ## Graduated development gotchas
 

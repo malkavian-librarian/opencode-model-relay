@@ -157,7 +157,7 @@ isolated failover E2E remain tracked in [#18](https://github.com/malkavian-libra
 
 Historical roadmap from 2026-10-18, retained to explain the release decisions in
 section 13. The levels redesign supersedes the tier-era milestones; the current
-epic status is in [docs/process.md](../../process.md#epic-62-child-status-2026-10-24-live).
+epic status is in [docs/process.md](../../process.md#epic-62-child-status-2026-10-25-live).
 
 0. **Spike (gate; findings written to `docs/spike.md`):** (a) `/relay` via `config.command` + `command.execute.before` runs with no model turn; (b) `chat.message` model rewrite is honoured; (c) real error payload shapes; (d) `session.prompt({model})` mid-session behaviour and non-await resume; (e) compaction/summarise with a target model for the oversize route.
 1. Repo scaffold, CI, README skeleton (written early to expose config confusion), LICENSE (MIT), SECURITY.md, CHANGELOG, `config`/`classifier`/`strategy`/`session-lock`/`redact` with tests.

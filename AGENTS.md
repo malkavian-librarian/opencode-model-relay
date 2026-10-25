@@ -1,7 +1,7 @@
 # AGENTS.md - opencode-model-relay agent instructions
 
-> Canonical agent file. Scope: entire repo. Hard cap 150 lines; details live
-> in `docs/`. Reference files, do not paste their contents.
+> Canonical agent file. Scope: entire repo. Operational cap: 120 lines; absolute
+> ceiling: 150 lines. Details live in `docs/`; reference files, do not paste contents.
 
 This repo is a TypeScript OpenCode plugin: when the current model fails it
 classifies the failure, switches to the next model in a chain and hands the work
@@ -25,8 +25,7 @@ over with a structured summary. Design: `docs/superpowers/specs/2026-10-18-model
 
 ## YAGNI - build only what is asked
 
-- Run OpenCode's `ponytail` plugin (lazy senior-dev mode) on every coding task
-  and review; it enforces these rules and keeps development cheap.
+- Run OpenCode's `ponytail` plugin (lazy senior-dev mode) on every coding task and review; it enforces these rules and keeps development cheap.
 - No new files, helpers, wrappers or abstractions without 2+ current call sites
   or an explicit request. First use: inline. Second identical use: duplicate.
   Third: extract.
@@ -100,8 +99,8 @@ over with a structured summary. Design: `docs/superpowers/specs/2026-10-18-model
   `## Improvement ideas`. Any deferred bug or leftover also gets a GitHub issue.
 - **Interruption handoff:** before pausing or running out of context, comment
   progress on the issue and add an entry to `docs/handoff.md` (newest first).
-- **Cap guard:** if this file passes 120 lines, do not append; propose what to
-  graduate to `docs/` or drop.
+- **Cap guard:** count with `(Get-Content AGENTS.md).Count`, never `Measure-Object -Line` (it drops blank lines). If it passes 120
+  lines, do not append; propose what to graduate to `docs/` or drop.
 - **Suggest, do not gold-plate:** stop after the diff unless asked for more.
 
 ## Gotchas (max 15, newest at bottom)
