@@ -16,6 +16,7 @@ import type { createNarrator, NarrationEvent } from "./narrator"
 import type { SwitchLog, SwitchLogRow } from "./switchlog"
 import type { orChat } from "./openrouter"
 import { buildHandover, extractFromMessages, writeNarrative } from "./handover"
+import type { EventInput } from "./ledger"
 
 // In-memory bounds for the per-session maps (judge streaks, retry-storm tokens): one entry per
 // session, emptied on restart (fail safe) and cleared wholesale when the bound is hit.
@@ -38,6 +39,7 @@ export interface Deps {
   health: Record<string, ModelHealth>
   narrate: ReturnType<typeof createNarrator>
   switchLog: { append: SwitchLog["append"]; recent?: (limit?: number) => SwitchLogRow[] }
+  ledger?: { append: (fields: EventInput) => boolean }
   env: Record<string, string | undefined>
   now: () => number
   chat: typeof orChat
@@ -116,6 +118,17 @@ export class Controller {
     }
   }
 
+  /** Metadata-only ledger append (best effort, #7): never throws and never changes session behavior. */
+  private led(fields: EventInput): void {
+    try { this.d.ledger?.append(fields) } catch { /* hooks never throw */ }
+  }
+
+  /** Ladder position of a model (1-based), or undefined when the model is not a resolved ladder level. */
+  private tierOf(model: string): number | undefined {
+    const i = buildLadder(this.d.cfg).indexOf(model)
+    return i >= 0 ? i + 1 : undefined
+  }
+
   /** Owner escape hatch: the same abort/switchModel seam as failover, but plain-tail and cap-exempt. */
   async manualSwitch(sessionID: string, requested?: string): Promise<ManualSwitchResult> {
     const started = this.d.now()
@@ -162,6 +175,7 @@ export class Controller {
         const superseded = await this.enactSwitch(sessionID, current, { to: parseModel(target), handoverText: text })
         if (superseded !== undefined) return { status: "unavailable", from: current, to: superseded }
         this.d.switchLog.append({ ts: started, sessionID, from: current, to: target, kind: "manual", elapsedMs: Math.max(0, this.d.now() - started) })
+        this.led({ ts: started, sessionID, event: "switch", sw: { kind: "manual", from: current, to: target } })
         return { status: "switched", from: current, to: target, elapsedMs: Math.max(0, this.d.now() - started) }
       } finally {
         this.d.lock.release(sessionID)
@@ -191,6 +205,7 @@ export class Controller {
     if (!d.lock.tryAcquire(sessionID)) {
       // AC-06: the incident's silent drop class becomes diagnosable (metadata only, rule 8).
       d.switchLog.append({ ts: d.now(), sessionID, ...(from ? { from: modelKey(from) } : {}), kind: "switch_dropped", reason: "lock_held", elapsedMs: Math.max(0, d.now() - started) })
+      this.led({ ts: d.now(), sessionID, event: "switch", sw: { kind: "switch_dropped", reason: "lock_held", ...(from ? { from: modelKey(from) } : {}) } })
       return false
     }
     try {
@@ -209,11 +224,14 @@ export class Controller {
       // Explicit attribution must agree with the current turn, never poison a newer model.
       if (from && modelKey(from) !== current) return false
       const now = d.now()
+      // Failure marks feed the stats ledger (#7); a judge-triggered switch is not a failure (its judge event covers it).
+      if (c.kind !== "quality") this.led({ ts: now, sessionID, event: "failure", errorKind: c.kind, model: current, tier: this.tierOf(current) })
       let rec = { ...d.state.get(sessionID) } // session records are merged, never whole-record overwritten (AC-01)
       // Marker guard (#56, AC-03): marker text is untrusted; a marker newest while the session is not
       // on the plugin-set model is a stale error, and the drop is logged, never silent (AC-06).
       if (hasRelayMarker(newest.parts) && rec.pluginPinned !== current) {
         d.switchLog.append({ ts: now, sessionID, from: current, kind: "switch_dropped", reason: "marker_guard", elapsedMs: Math.max(0, d.now() - started) })
+        this.led({ ts: now, sessionID, event: "switch", sw: { kind: "switch_dropped", reason: "marker_guard", from: current } })
         return false
       }
 
@@ -290,6 +308,7 @@ export class Controller {
         delete d.health[supersededBy] // the owner chose it: cooldown, blacklist and failure count all clear, once
         d.state.save()
         d.switchLog.append({ ts: d.now(), sessionID, from: current, to: supersededBy, kind: "switch_dropped", reason: "superseded", elapsedMs: Math.max(0, d.now() - started) })
+        this.led({ ts: d.now(), sessionID, event: "switch", sw: { kind: "switch_dropped", reason: "superseded", from: current, to: supersededBy } })
         return false
       }
       if (narrativeDeferred) {
@@ -302,6 +321,7 @@ export class Controller {
       d.switchLog.append({
         ts: now, sessionID, from: current, to, kind: c.kind, elapsedMs: Math.max(0, d.now() - started),
       })
+      this.led({ ts: now, sessionID, event: "switch", sw: { kind: c.kind, from: current, to } })
       await this.toast("switch_done", { from: current, to, reason: c.kind })
       if (narrativeDeferred && key) {
         void (async () => {
@@ -414,6 +434,17 @@ export class Controller {
       const newest = [...msgs].reverse().find((m) => m.info.role === "assistant" && m.info.providerID && m.info.modelID)
       if (!newest) return
       const model = `${newest.info.providerID}/${newest.info.modelID}`
+      // Turn metadata is defensive: only fields the host actually provides survive the zod schema (rule 8).
+      const src = newest.info as typeof newest.info & { tokens?: { input?: unknown; output?: unknown }; time?: { running?: unknown } }
+      const int = (v: unknown): number | undefined => (typeof v === "number" && Number.isInteger(v) && v >= 0 ? v : undefined)
+      const ms = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : undefined)
+      const tin = int(src.tokens?.input); const tout = int(src.tokens?.output)
+      const lat = ms(src.time?.running)
+      this.led({
+        ts: this.d.now(), sessionID, event: "turn", model, tier: this.tierOf(model),
+        ...(tin !== undefined && tout !== undefined ? { tokens: { input: tin, output: tout } } : {}),
+        ...(lat !== undefined ? { latencyMs: lat } : {}),
+      })
       this.storm.delete(sessionID) // the turn is over: the retry storm is spent
       const rec = this.d.state.get(sessionID)
       if (this.d.health[model] !== undefined) {
@@ -548,6 +579,8 @@ export class Controller {
       const verdict = parseVerdict(r.text)
       // Invalid JSON / timeout / error => no switch (the verdict object itself carries the decision only).
       if (!verdict) return
+      // Only valid verdicts are ledgered: an errored judge call is not a "stay" (it changed nothing).
+      this.led({ ts: d.now(), sessionID, event: "judge", verdict: verdict.switch ? "switch" : "stay", tier: this.tierOf(current), model: current, helperCostUsd: cost > 0 ? cost : undefined })
 
       const streak = verdict.switch ? (this.judgeStreak.get(sessionID) ?? 0) + 1 : 0
       if (streak <= 0) { this.judgeStreak.delete(sessionID); return }

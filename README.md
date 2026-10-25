@@ -110,8 +110,7 @@ cached model (with its cache age), then shows each level's health. Health is eit
 `healthy`, a remaining cooldown, or a `blacklisted-until` timestamp. The dashboard
 also shows `pluginPinned`, the most recent `adoptedAt`, the switch count, key presence
 (`set` or `missing`, never the key), the consent state, the last ten ledger rows, and
-separate manual and automatic counts for those rows. The counts do not implement
-analytics; aggregation and `stats.json` remain tracked by [issue #7](https://github.com/malkavian-librarian/opencode-model-relay/issues/7).
+separate manual and automatic counts for those rows.
 
 Each `switches.jsonl` row is metadata-only and uses these fields:
 
@@ -141,6 +140,42 @@ gap was therefore visible as a failure with no corresponding failover row; a fut
 lock-held, marker-guard, or superseded attempt is represented explicitly as
 `switch_dropped` with its reason and elapsed time.
 
+## Reading the event ledger and stats
+
+Besides `switches.jsonl`, the relay writes a per-turn event ledger on OpenCode v2 to
+`events-<pid>.jsonl` in the same data directory: same `ledger.enabled` switch, same
+`salt` file as the switch log, so session ids hash identically. When the active
+file's first row belongs to an older UTC month, it is rotated to
+`events-<pid>-<YYYYMM>.jsonl` on the next append. Reads validate every row with the
+same zod schema the writer used and skip corrupt lines.
+
+Each event row is metadata-only and uses these fields:
+
+| Field | Meaning |
+|---|---|
+| `ts` / `session` | As in the switch log. |
+| `event` | `turn` (a completed turn), `failure` (a recorded failure mark), `judge` (a quality-judge verdict), or `switch` (an enacted or dropped switch). |
+| `model` / `tier` | The affected `provider/model` and its 1-based ladder position, when known. |
+| `latencyMs`, `tokens`, `cost` | Optional turn measurements; only fields the host actually provides are recorded. |
+| `errorKind` | For `failure` rows: the failure-kind enum. |
+| `verdict` | For `judge` rows: `switch` or `stay`. Only valid verdicts are recorded; an errored judge call is not a `stay`. |
+| `switch` | For `switch` rows: `kind`, plus `reason` for `switch_dropped` and `from`/`to` when known. |
+| `helperCostUsd` | Optional judge-call cost. |
+
+`/relay stats` (OpenCode v2; also the `relay_stats` tool) prints a per-model table
+over the rolling 30-day window: turns, failures by kind, the share of tier-2/3
+judge verdicts that said `switch`, how often the model was switched away from,
+survival (the share of turns followed by another turn on the same model in the same
+session within 30 minutes or 5 turns with no effective switch in between; turns
+with no observable outcome are censored and excluded), median latency, token and
+cost totals, and helper overhead. A schema-versioned `stats.json` (v1) is derived
+from the ledger on startup with an atomic write; a missing or corrupt file is
+ignored and rebuilt.
+
+`/relay purge` (or the `relay_purge` tool) deletes every `events-*.jsonl` file
+inside the ledger directory and nothing else: `stats.json` is rebuilt empty on the
+next start, while `state.json`, config and `switches.jsonl` are untouched.
+
 ## Compared to opencode-auto-fallback
 
 An honest comparison; pick what fits your setup.
@@ -163,7 +198,7 @@ This table reflects the author's reading of both projects; check their READMEs f
 ## Roadmap
 
 - ~~OpenCode v2 plugin API port~~ (`@opencode/plugin` avoided: the bundle self-defines the plugin object; native zero-turn `/relay` via `ctx.session.synthetic`, `ctx.session.hook("retry")` + `switchModel`): done, #56.
-- v1.2: per-model 30-day performance ledger and `/relay stats` (#7).
+- v1.2: per-model 30-day performance ledger and `/relay stats` (#7) — shipped (event ledger, `stats.json`, `/relay stats`, `/relay purge`).
 
 ## Known limits
 
