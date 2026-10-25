@@ -1,7 +1,7 @@
 # AGENTS.md - opencode-model-relay agent instructions
 
-> Canonical agent file. Scope: entire repo. Hard cap 150 lines; details live
-> in `docs/`. Reference files, do not paste their contents.
+> Canonical agent file. Scope: entire repo. Operational cap: 120 lines; absolute
+> ceiling: 150 lines. Details live in `docs/`; reference files, do not paste contents.
 
 This repo is a TypeScript OpenCode plugin: when the current model fails it
 classifies the failure, switches to the next model in a chain and hands the work

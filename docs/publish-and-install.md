@@ -203,8 +203,9 @@ After ordinary failover works, merge this fragment (also needs consent and the k
 }
 ```
 
-The judge checks only finished, token-producing turns on configured models below
-level 1. It skips the level-1 model, unlisted models and relay handover turns. Local
+The judge checks only finished, token-producing turns. It skips the current model
+when it equals the first entry returned by `buildLadder`, and skips relay handover
+turns. Unlisted models are not excluded by this gate. Local
 signals are three identical tool calls, three consecutive tool errors, or an
 assistant turn with neither text nor a successful tool. A weak answer alone is
 not a trigger. Two consecutive `switch: true` judgments are needed to switch;
