@@ -136,10 +136,11 @@ with `{sessionID, agent, model: {providerID, id}, error: {type, message, status?
 decision}`. Permanent exhaustion is eligible at attempt 1; transient failures only at
 attempt 2. The callback awaits the controller's takeover result and vetoes native retry
 only on takeover; child-session/lock/dedup/cap/exhaustion/invalid-input/internal-error
-gates leave the native decision unchanged. The switcher reports a handover attempt,
-not successful continuation: V2 `session.prompt()` returns an admitted inbox user item,
-not a completed model turn, and the shared v1 switcher dispatches prompts without awaiting
-them. Admission failures after dispatch do not retroactively change the retry decision.
+gates leave the native decision unchanged. The controller's enacted switch (`enactSwitch`)
+reports a handover attempt, not successful continuation: V2 `session.prompt()` returns an
+admitted inbox user item, not a completed model turn, and the controller's switch enactment
+dispatches prompts without awaiting them. Admission failures after dispatch do not
+retroactively change the retry decision.
 
 Validation for #59 uses synthetic v1/v2 fixtures, not captured incident status or
 attribution. Status/chain smoke only demonstrates loading/configuration, not failover,
@@ -149,7 +150,7 @@ isolated failover E2E remain tracked in [#18](https://github.com/malkavian-libra
 ## 11. Testing
 
 - Unit (pure): classifier (real captured payloads incl. 403 FreeTierError, 429 with retry-after, quota, overflow, user abort), strategy (levels walk, exhaustion, tried-model rule), config + path confinement, redact (secret corpus), narrator pools, switch-log validation. Full ledger rollups/survival/UTC buckets remain planned with #7.
-- Component with fakes: judge, handover (schema validation, injection fixtures), switcher (abort races, subagent gate, dedup), lock.
+- Component with fakes: judge, handover, the controller switch enactment (abort races, subagent gate, dedup — see tests/controller.test.ts), lock.
 - Recorded-event replay harness: real OpenCode event sequences replayed against the plugin; CI pinned to the plugin API version; compatibility matrix stated in the README.
 - Manual end-to-end in live OpenCode with a deliberately failing primary.
 

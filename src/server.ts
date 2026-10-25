@@ -145,7 +145,6 @@ export function createServer(env: Env): (input: any, options?: unknown) => Promi
           try {
             if (isV2Active()) return // the v2 layer owns pinning here (prompt hook + switchModel, #56)
             if (!i?.sessionID || !i.model) return
-            // Pin / clear / chain-recover decisions live in the controller (it owns model health and the switch log).
             const to = controller.onChatMessage(i.sessionID, modelKey(i.model), out?.parts)
             if (to) out.message.model = parseModel(to)
           } catch { /* ignore */ }
