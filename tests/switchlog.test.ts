@@ -100,4 +100,43 @@ describe("SwitchLog", () => {
     expect(Math.max(...read.mock.calls.map((call) => (call as any[])[3] as number))).toBeLessThanOrEqual(64 * 1024)
     read.mockRestore()
   })
+  it("replaces an over-bound model ref so the newest row stays visible", () => {
+    const d = dir(); const l = new SwitchLog(d, true)
+    l.append(rec(1))
+    l.append({ ts: 2, sessionID: "s", from: "a/" + "x".repeat(70 * 1024), to: "b/2", kind: "quota" })
+    const recent = l.recent(10)
+    expect(recent.map((r) => r.ts)).toEqual([1, 2])
+    expect(recent[1]!.from).toBe("unknown/" + "x".repeat(112))
+    expect(recent[1]!.from!.length).toBe(120)
+  })
+  it("rejects appends the shared row schema invalidates (negative ts)", () => {
+    const d = dir()
+    new SwitchLog(d, true).append({ ...rec(1), ts: -5 })
+    expect(fs.existsSync(path.join(d, "switches.jsonl"))).toBe(false)
+  })
+  it("skips persisted rows the shared schema invalidates without hiding valid ones", () => {
+    const valid = (ts: number) => JSON.stringify({ ts, session: "0123456789abcdef", from: "a/1", to: "b/2", kind: "quota", elapsedMs: 5 })
+    const bad: [string, string][] = [
+      ["bad kind", JSON.stringify({ ts: 2, session: "0123456789abcdef", kind: "bogus", elapsedMs: 5 })],
+      ["dropped without reason", JSON.stringify({ ts: 2, session: "0123456789abcdef", kind: "switch_dropped", elapsedMs: 5 })],
+      ["non-dropped with reason", JSON.stringify({ ts: 2, session: "0123456789abcdef", kind: "quota", reason: "lock_held", elapsedMs: 5 })],
+      ["bad session", JSON.stringify({ ts: 2, session: "not-hex", kind: "quota", elapsedMs: 5 })],
+      ["negative ts", JSON.stringify({ ts: -2, session: "0123456789abcdef", kind: "quota", elapsedMs: 5 })],
+      ["negative elapsedMs", JSON.stringify({ ts: 2, session: "0123456789abcdef", kind: "quota", elapsedMs: -5 })],
+      ["infinite ts", '{"ts":1e999,"session":"0123456789abcdef","kind":"quota","elapsedMs":5}'],
+      ["oversized model ref", JSON.stringify({ ts: 2, session: "0123456789abcdef", from: "a/" + "x".repeat(500), kind: "quota", elapsedMs: 5 })],
+    ]
+    for (const [name, line] of bad) {
+      const d = dir()
+      fs.writeFileSync(path.join(d, "switches.jsonl"), [valid(1), line, valid(3)].join("\n") + "\n")
+      expect(new SwitchLog(d, true).recent(10).map((r) => r.ts), name).toEqual([1, 3])
+    }
+  })
+  it("skips a partial oversized row at the tail-window start without hiding newer rows", () => {
+    const d = dir()
+    fs.writeFileSync(path.join(d, "switches.jsonl"), JSON.stringify({ ts: 1, session: "0123456789abcdef", from: "a/" + "x".repeat(70 * 1024), kind: "quota", elapsedMs: 5 }) + "\n")
+    const l = new SwitchLog(d, true)
+    l.append(rec(2)); l.append(rec(3))
+    expect(l.recent(10).map((r) => r.ts)).toEqual([2, 3])
+  })
 })
