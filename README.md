@@ -1,12 +1,12 @@
 # opencode-model-relay
 
-> Status: v1.0.0 published to npm as opencode-model-relay.
+> Status: v1.0.0 tagged but not yet on npm (publish owner-gated, [#5](https://github.com/malkavian-librarian/opencode-model-relay/issues/5)); build and copy locally per the Quick start.
 
 An [OpenCode](https://opencode.ai) plugin that keeps a session going when the current model fails: it classifies the failure, moves to the next model in your chain, hands the work over with a structured summary, and resumes.
 
 ## Quick start
 
-1. Add the plugin to `opencode.json` once it is published: `{ "plugin": ["opencode-model-relay"] }`. Until then, build it (`npm ci; npm run build`) and copy `dist/index.js` into `~/.config/opencode/plugins/` (or `<project>/.opencode/plugins/`); the build is self-contained (zod and jsonc-parser are bundled, no `node_modules` needed). Step-by-step: [docs/publish-and-install.md](docs/publish-and-install.md).
+1. Add the plugin to `opencode.json` once it is published: `"plugin": ["opencode-model-relay"]` on OpenCode 1.x, `"plugins": ["opencode-model-relay"]` on OpenCode 2. Until then, build it (`npm ci; npm run build`) and copy `dist/index.js` into `~/.config/opencode/plugins/` (or `<project>/.opencode/plugins/`); the build is self-contained (zod and jsonc-parser are bundled, no `node_modules` needed). Step-by-step: [docs/publish-and-install.md](docs/publish-and-install.md).
 2. Create `~/.config/opencode/opencode-model-relay.jsonc`:
 
 ```jsonc
