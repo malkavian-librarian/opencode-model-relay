@@ -215,7 +215,9 @@ directory and clears `switches.jsonl`, touching nothing else, then rebuilds
 `salt` are untouched. If that
 snapshot write fails, the purge still reports its file count plus a fixed
 sanitized warning (`Warning: the stats snapshot could not be refreshed.`) and
-leaves the previous `stats.json` as it was. Stats and purge command/tool
+leaves the previous `stats.json` as it was. If the switch log cannot be cleared,
+both purge surfaces append `Warning: the switch log could not be cleared.`;
+event purging and snapshot refresh still proceed. Stats and purge command/tool
 surfaces are V2-only: v1 keeps its `relay_status` / `relay_init` surfaces and
 the shared startup snapshot behavior.
 

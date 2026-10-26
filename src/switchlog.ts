@@ -165,7 +165,12 @@ export class SwitchLog {
   }
 }
 
-/** Both /relay purge surfaces (relay_purge tool and /relay purge command) clear the switch log; never throws. */
-export function clearSwitchLog(dir: string): void {
-  try { fs.rmSync(path.join(dir, "switches.jsonl"), { force: true }) } catch { /* absent or FS refused */ }
+export const SWITCH_LOG_CLEAR_WARNING = "Warning: the switch log could not be cleared."
+
+/** Both purge surfaces clear the switch log; returns true if removed or already absent, false on failure. Never throws. */
+export function clearSwitchLog(dir: string): boolean {
+  try {
+    fs.rmSync(path.join(dir, "switches.jsonl"), { force: true })
+    return true
+  } catch { return false }
 }

@@ -957,6 +957,37 @@ describe("v2 stats and purge surfaces (#103)", () => {
     } finally { teardown?.() }
   })
 
+  it("a failed switch-log removal warns sanitized on both purge surfaces while event purge and stats refresh continue", async () => {
+    const e = env()
+    const ledgerDir = path.join(e.root, "data", "opencode-model-relay")
+    const switchFile = path.join(ledgerDir, "switches.jsonl")
+    const sentinel = '{"kind":"sentinel"}\n'
+    const l = new EventLog(ledgerDir, true)
+    l.append({ ts: Date.now() - 1000, sessionID: "s", event: "turn", model: "a/1" })
+    fs.writeFileSync(switchFile, sentinel)
+    const { ctx, calls } = makeCtx()
+    const teardown = await createV2Plugin(e.env).setup(ctx)
+    const rm = fs.rmSync
+    const spy = vi.spyOn(fs, "rmSync").mockImplementation((file, options) => {
+      if (file === switchFile) throw new Error("E_PERM secret /C:/users/path")
+      return rm(file, options)
+    })
+    try {
+      const warning = "Warning: the switch log could not be cleared."
+      const purgeTool = calls.tools.find((t) => t.name === "relay_purge")!
+      expect((await purgeTool.execute(undefined, {})).content).toBe(`Purged 1 ledger file(s). ${warning}`)
+      expect(fs.readFileSync(switchFile, "utf8")).toBe(sentinel)
+      const relayCmd = calls.commands.find((c) => c.name === "relay")!
+      await relayCmd.execute({ sessionID: "s1", prompt: { text: "purge" }, delivery: "steer" })
+      await until(() => calls.synthetic.some((x) => x.text.includes("Purged")))
+      expect(calls.synthetic.at(-1)?.text).toBe(`Purged 0 ledger file(s). ${warning}`)
+      expect(fs.readFileSync(switchFile, "utf8")).toBe(sentinel)
+      expect(JSON.parse(fs.readFileSync(path.join(ledgerDir, "stats.json"), "utf8")).models).toEqual({})
+      expect(calls.switchModel).toEqual([])
+      expect(calls.prompt).toEqual([])
+    } finally { spy.mockRestore(); teardown?.() }
+  })
+
   it("a failed stats snapshot write during purge warns sanitized on both surfaces and switches nothing", async () => {
     const e = env()
     const ledgerDir = path.join(e.root, "data", "opencode-model-relay")
