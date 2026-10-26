@@ -25,7 +25,7 @@
     "esbuild": "0.28.1"
   },
   "devDependencies": {
-    "@opencode-ai/plugin": "1.19.0",
+    "@opencode-ai/plugin": "1.19.3",
     "@types/node": "^22.0.0",
     "jsonc-parser": "^3.3.1",
     "tsup": "^8.3.0",
