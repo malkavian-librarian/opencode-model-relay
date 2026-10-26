@@ -12,6 +12,10 @@ Record of `@coderabbitai` exchanges, so agents do not repeat past mistakes.
 
 ## Entries (newest first)
 
+### 2026-10-26 - PR #116 (issue #104)
+
+- Minor, `src/switchlog.ts`/`src/v2.ts`: purge surfaces silently ignored a failed switch-log clear (`clearSwitchLog` swallowed the error); report the fixed sanitized warning `Warning: the switch log could not be cleared.` on both surfaces while event purge and the stats refresh proceed -> fixed by owner-ticked CodeRabbit autofix `34367f2` (boolean `clearSwitchLog`, `SWITCH_LOG_CLEAR_WARNING`, a both-surface v2-port test, README wording); all four touched files (`src/switchlog.ts`, `src/v2.ts` purge wiring, `tests/v2-port.test.ts`, `README.md`) are inside #104's Files owned, so no scope exception; Engineer re-ran all gates on the adopted head: typecheck clean, 593/593 tests, build and pack pass (shasum `8c7a6d34`).
+
 ### 2026-10-26 - PR #113 (issue #103), repair round 2
 
 - Major, `src/stats.ts`: confirmed repeated numeric day bounds; use shared minimum/maximum constants in advertised schema, Zod validation and command parser, preserving the 1–30-day contract -> fixed by CodeRabbit autofix `4965a32` (owner-ticked checkbox); Engineer re-ran all gates on the adopted head: typecheck clean, 587/587 tests, build and pack pass.
