@@ -799,6 +799,216 @@ describe("v2 tools, commands and model list", () => {
   })
 })
 
+describe("v2 stats and purge surfaces (#103)", () => {
+  const STATS_USAGE = "Usage: /relay stats [--days N] [--kinds]"
+  const WARNING = "Warning: the stats snapshot could not be refreshed."
+  const DAY = 864e5
+
+  it("relay_purge rebuilds stats.json immediately; other data survives; a zero-file repeat refreshes too", async () => {
+    const e = env()
+    const ledgerDir = path.join(e.root, "data", "opencode-model-relay")
+    const statsFile = path.join(ledgerDir, "stats.json")
+    seed(e.stateFile, { switchCount: 1 })
+    const l = new EventLog(ledgerDir, true)
+    const t0 = Date.now()
+    expect(l.append({ ts: t0 - 1000, sessionID: "s1", event: "turn", model: "a/1" })).toBe(true)
+    fs.writeFileSync(path.join(ledgerDir, "switches.jsonl"), '{"kind":"sentinel"}\n')
+    fs.writeFileSync(path.join(ledgerDir, "keep.txt"), "x")
+    const { ctx, calls } = makeCtx()
+    const teardown = await createV2Plugin(e.env).setup(ctx)
+    try {
+      expect(Object.keys(JSON.parse(fs.readFileSync(statsFile, "utf8")).models)).toEqual(["a/1"]) // nonempty snapshot established at startup
+      const before = {
+        state: fs.readFileSync(e.stateFile, "utf8"),
+        salt: fs.readFileSync(path.join(ledgerDir, "salt"), "utf8"),
+        sw: fs.readFileSync(path.join(ledgerDir, "switches.jsonl"), "utf8"),
+        cfg: fs.readFileSync(path.join(e.root, "cfg", "opencode", "opencode-model-relay.jsonc"), "utf8"),
+        keep: fs.readFileSync(path.join(ledgerDir, "keep.txt"), "utf8"),
+      }
+      const purgeTool = calls.tools.find((t) => t.name === "relay_purge")!
+      expect((await purgeTool.execute(undefined, {})).content).toBe("Purged 1 ledger file(s).")
+      const snap = JSON.parse(fs.readFileSync(statsFile, "utf8"))
+      expect(snap).toEqual({ version: 1, generatedAt: expect.any(Number), models: {} })
+      expect(snap.generatedAt).toBeGreaterThanOrEqual(t0)
+      expect(fs.readFileSync(e.stateFile, "utf8")).toBe(before.state)
+      expect(fs.readFileSync(path.join(ledgerDir, "salt"), "utf8")).toBe(before.salt)
+      expect(fs.readFileSync(path.join(ledgerDir, "switches.jsonl"), "utf8")).toBe(before.sw)
+      expect(fs.readFileSync(path.join(e.root, "cfg", "opencode", "opencode-model-relay.jsonc"), "utf8")).toBe(before.cfg)
+      expect(fs.readFileSync(path.join(ledgerDir, "keep.txt"), "utf8")).toBe(before.keep)
+      expect((await purgeTool.execute(undefined, {})).content).toBe("Purged 0 ledger file(s).") // zero-file repeat still refreshes
+      expect(JSON.parse(fs.readFileSync(statsFile, "utf8")).models).toEqual({})
+    } finally { teardown?.() }
+  })
+
+  it("/relay purge also rebuilds the snapshot immediately (command surface, after reseeding)", async () => {
+    const e = env()
+    const ledgerDir = path.join(e.root, "data", "opencode-model-relay")
+    const l = new EventLog(ledgerDir, true)
+    l.append({ ts: Date.now() - 1000, sessionID: "s1", event: "turn", model: "a/1" })
+    const { ctx, calls } = makeCtx()
+    const teardown = await createV2Plugin(e.env).setup(ctx)
+    try {
+      const relayCmd = calls.commands.find((c) => c.name === "relay")!
+      await relayCmd.execute({ sessionID: "s1", prompt: { text: "purge" }, delivery: "steer" })
+      await until(() => calls.synthetic.some((x) => x.text.includes("Purged")))
+      expect(calls.synthetic.at(-1)?.text).toBe("Purged 1 ledger file(s).")
+      expect(JSON.parse(fs.readFileSync(path.join(ledgerDir, "stats.json"), "utf8")).models).toEqual({})
+    } finally { teardown?.() }
+  })
+
+  it("stats --kinds --days 1 (command) and { days: 1, kinds: true } (tool) produce identical exact-window tables", async () => {
+    const e = env()
+    const ledgerDir = path.join(e.root, "data", "opencode-model-relay")
+    const l = new EventLog(ledgerDir, true)
+    const now = Date.now()
+    l.append({ ts: now - 6000, sessionID: "s", event: "turn", model: "b/2", latencyMs: 50 })
+    l.append({ ts: now - 5000, sessionID: "s", event: "failure", model: "a/1", errorKind: "timeout" })
+    l.append({ ts: now - 4000, sessionID: "s", event: "failure", model: "a/1", errorKind: "quota" })
+    l.append({ ts: now - 3000, sessionID: "s", event: "failure", model: "a/1", errorKind: "quota" })
+    l.append({ ts: now - 2000, sessionID: "s", event: "turn", model: "a/1", latencyMs: 300 })
+    l.append({ ts: now - 1000, sessionID: "s", event: "turn", model: "a/1", latencyMs: 100 })
+    // outside the 1-day window: same UTC day as the cutoff edge, 40 days old, future
+    l.append({ ts: now - DAY - 1, sessionID: "s", event: "turn", model: "a/1", latencyMs: 9999 })
+    l.append({ ts: now - 40 * DAY, sessionID: "s", event: "turn", model: "a/1", latencyMs: 7 })
+    l.append({ ts: now + 60_000, sessionID: "s", event: "turn", model: "a/1", latencyMs: 8 })
+    const { ctx, calls } = makeCtx()
+    const teardown = await createV2Plugin(e.env).setup(ctx)
+    try {
+      const statsTool = calls.tools.find((t) => t.name === "relay_stats")!
+      const toolText = (await statsTool.execute({ days: 1, kinds: true }, {})).content
+      const relayCmd = calls.commands.find((c) => c.name === "relay")!
+      await relayCmd.execute({ sessionID: "s1", prompt: { text: "stats --kinds --days 1" }, delivery: "steer" })
+      expect(calls.synthetic.at(-1)?.text).toBe(toolText)
+      expect(toolText).toContain("a/1 | 2 | 3 | – | 0 | 100% | 200ms | 0/0 | $0.00 | $0.00")
+      expect(toolText).toContain("a/1 failure kinds: quota 2, timeout 1") // lexicographic, sums to the fails column
+      expect(toolText).toContain("b/2 | 1 | 0 | – | 0 | – | 50ms | 0/0 | $0.00 | $0.00")
+      expect(toolText).toContain("b/2 failure kinds: none")
+    } finally { teardown?.() }
+  })
+
+  it("median latency is the median of all samples in the window, not a median of daily medians", async () => {
+    const e = env()
+    const ledgerDir = path.join(e.root, "data", "opencode-model-relay")
+    const l = new EventLog(ledgerDir, true)
+    const now = Date.now()
+    for (const [ts, latencyMs] of [[now - 2 * DAY, 1000], [now - DAY, 10], [now - DAY, 20], [now - DAY, 30]] as const)
+      l.append({ ts, sessionID: "s", event: "turn", model: "a/1", latencyMs })
+    const { ctx, calls } = makeCtx()
+    const teardown = await createV2Plugin(e.env).setup(ctx)
+    try {
+      const statsTool = calls.tools.find((t) => t.name === "relay_stats")!
+      const text = (await statsTool.execute(undefined, {})).content
+      expect(text).toContain("a/1 | 4 | 0 | – | 0 | 100% | 25ms | 0/0 | $0.00 | $0.00")
+    } finally { teardown?.() }
+  })
+
+  it("invalid stats requests return the usage line on both surfaces and touch nothing", async () => {
+    const e = env()
+    const ledgerDir = path.join(e.root, "data", "opencode-model-relay")
+    const statsFile = path.join(ledgerDir, "stats.json")
+    const l = new EventLog(ledgerDir, true)
+    l.append({ ts: Date.now() - 1000, sessionID: "s", event: "turn", model: "a/1" })
+    const { ctx, calls } = makeCtx()
+    const teardown = await createV2Plugin(e.env).setup(ctx)
+    try {
+      const beforeStats = fs.readFileSync(statsFile, "utf8")
+      const statsTool = calls.tools.find((t) => t.name === "relay_stats")!
+      for (const bad of [{ days: 0 }, { days: 31 }, { days: 1.5 }, { days: "7" }, { days: null }, { kinds: "yes" }, { days: 1, extra: 2 }, [], null, "x", 7])
+        expect((await statsTool.execute(bad, {})).content).toBe(STATS_USAGE)
+      const relayCmd = calls.commands.find((c) => c.name === "relay")!
+      const synthBefore = calls.synthetic.length
+      for (const text of [
+        "stats --days", "stats --days 0", "stats --days 31", "stats --days -1", "stats --days 1.5", "stats --days 1e1",
+        "stats --days abc", "stats --days=7", "stats --days 1 --days 2", "stats --kinds --kinds", "stats --kinds 7",
+        "stats --week 3", "stats foo", "stats 7",
+      ]) await relayCmd.execute({ sessionID: "s1", prompt: { text }, delivery: "steer" })
+      const replies = calls.synthetic.slice(synthBefore)
+      expect(replies).toHaveLength(14)
+      expect(replies.every((x) => x.text === STATS_USAGE)).toBe(true)
+      // invalid input never falls through to status, deletes or writes data, or switches
+      expect(fs.readFileSync(statsFile, "utf8")).toBe(beforeStats)
+      expect(fs.readdirSync(ledgerDir)).toContain(`events-${process.pid}.jsonl`)
+      expect(calls.switchModel).toEqual([])
+      expect(calls.prompt).toEqual([])
+    } finally { teardown?.() }
+  })
+
+  it("relay_stats advertises optional days/kinds with bounds; relay_purge stays argument-free", async () => {
+    const e = env()
+    const { ctx, calls } = makeCtx()
+    const teardown = await createV2Plugin(e.env).setup(ctx)
+    try {
+      const statsTool = calls.tools.find((t) => t.name === "relay_stats")!
+      expect(statsTool.input).toMatchObject({
+        type: "object",
+        properties: { days: { type: "integer", minimum: 1, maximum: 30 }, kinds: { type: "boolean" } },
+        additionalProperties: false,
+      })
+      expect(statsTool.description).toContain("days")
+      const purgeTool = calls.tools.find((t) => t.name === "relay_purge")!
+      expect(purgeTool.input).toEqual({ type: "object", properties: {}, additionalProperties: false })
+      expect(purgeTool.description).toContain("immediately")
+    } finally { teardown?.() }
+  })
+
+  it("a failed stats snapshot write during purge warns sanitized on both surfaces and switches nothing", async () => {
+    const e = env()
+    const ledgerDir = path.join(e.root, "data", "opencode-model-relay")
+    const statsFile = path.join(ledgerDir, "stats.json")
+    const l = new EventLog(ledgerDir, true)
+    l.append({ ts: Date.now() - 1000, sessionID: "s", event: "turn", model: "a/1" })
+    const { ctx, calls } = makeCtx()
+    const teardown = await createV2Plugin(e.env).setup(ctx)
+    try {
+      const before = fs.readFileSync(statsFile, "utf8")
+      const spy = vi.spyOn(fs, "renameSync").mockImplementation(() => { throw new Error("E_PERM secret /C:/users/path") })
+      try {
+        const purgeTool = calls.tools.find((t) => t.name === "relay_purge")!
+        expect((await purgeTool.execute(undefined, {})).content).toBe(`Purged 1 ledger file(s). ${WARNING}`)
+        const relayCmd = calls.commands.find((c) => c.name === "relay")!
+        await relayCmd.execute({ sessionID: "s1", prompt: { text: "purge" }, delivery: "steer" })
+        await until(() => calls.synthetic.some((x) => x.text.includes("Purged")))
+        expect(calls.synthetic.at(-1)?.text).toBe(`Purged 0 ledger file(s). ${WARNING}`)
+      } finally { spy.mockRestore() }
+      expect(fs.readFileSync(statsFile, "utf8")).toBe(before) // prior valid destination preserved
+      expect(calls.switchModel).toEqual([])
+      expect(calls.prompt).toEqual([])
+    } finally { teardown?.() }
+  })
+
+  it("defaults and both flag orders agree across surfaces; legacy arguments and a missing session stay contained", async () => {
+    const e = env()
+    const ledgerDir = path.join(e.root, "data", "opencode-model-relay")
+    const l = new EventLog(ledgerDir, true)
+    const now = Date.now()
+    l.append({ ts: now - 2000, sessionID: "s", event: "failure", model: "a/1", errorKind: "quota" })
+    l.append({ ts: now - 1000, sessionID: "s", event: "turn", model: "a/1", latencyMs: 100 })
+    const { ctx, calls } = makeCtx()
+    const teardown = await createV2Plugin(e.env).setup(ctx)
+    try {
+      const statsTool = calls.tools.find((t) => t.name === "relay_stats")!
+      const bare = (await statsTool.execute(undefined, {})).content
+      expect(bare).toContain("a/1 | 1 | 1 | – | 0 | – | 100ms | 0/0 | $0.00 | $0.00")
+      expect((await statsTool.execute({}, {})).content).toBe(bare) // {} keeps defaults
+      expect((await statsTool.execute({ days: 30 }, {})).content).toBe(bare) // explicit default window
+      const relayCmd = calls.commands.find((c) => c.name === "relay")!
+      await relayCmd.execute({ sessionID: "s1", prompt: { text: "stats" }, delivery: "steer" })
+      expect(calls.synthetic.at(-1)?.text).toBe(bare) // bare command = defaults
+      await relayCmd.execute({ sessionID: "s1", prompt: { text: "stats --days 30" }, delivery: "steer" })
+      expect(calls.synthetic.at(-1)?.text).toBe(bare)
+      const withKinds = (await statsTool.execute({ kinds: true }, {})).content
+      expect(withKinds).toContain("a/1 failure kinds: quota 1")
+      await relayCmd.execute({ sessionID: "s1", prompt: { text: "stats --days 30 --kinds" }, delivery: "steer" })
+      expect(calls.synthetic.at(-1)?.text).toBe(withKinds)
+      await relayCmd.execute({ sessionID: "s1", prompt: { text: "stats --kinds --days 30" }, delivery: "steer" })
+      expect(calls.synthetic.at(-1)?.text).toBe(withKinds) // both flag orders
+      await relayCmd.execute({ sessionID: "s1", arguments: "stats --days 30" }) // legacy arguments fallback
+      expect(calls.synthetic.at(-1)?.text).toBe(bare)
+      await expect(relayCmd.execute({ prompt: { text: "stats --days 1" } })).resolves.toBeTruthy() // no session
+    } finally { teardown?.() }
+  })
+})
+
 describe("v1 suppression while the v2 layer is active", () => {
   it("server() hooks no-op for failure events once setup() activated the v2 layer (#56)", async () => {
     const e = env()

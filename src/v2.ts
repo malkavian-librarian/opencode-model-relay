@@ -4,7 +4,7 @@ import { classify } from "./classifier"
 import { INIT_TOOL_DESCRIPTION, RELAY_TOOL_DESCRIPTION, createRelay, listProviderModels } from "./server"
 import { initConfig } from "./init"
 import { configFile, dataDir } from "./config"
-import { buildStats, renderStatsTable } from "./stats"
+import { STATS_TOOL_INPUT, STATS_USAGE, parseStatsOptions, parseStatsToolInput, purgeAndRefreshStats, statsText } from "./stats"
 import type { EventLog } from "./ledger"
 import { modelKey, parseModel, type ClientLike, type ModelRef, type OcMessage } from "./types"
 import type { Controller } from "./controller"
@@ -41,6 +41,7 @@ interface Core {
   narrate: ReturnType<typeof createNarrator>
   warned: boolean
   ledger: EventLog
+  ledgerDir: string
 }
 
 // One relay shared by every setup() in the process: the second setup only rebinds which ctx
@@ -96,7 +97,7 @@ function coreFor(env: Env): Core {
   parts.controller.validatePersistedPins()
   const core: Core = {
     key, controller: parts.controller, state: parts.state,
-    warnings: parts.warnings, narrate: parts.narrate, ledger: parts.ledger, warned: false,
+    warnings: parts.warnings, narrate: parts.narrate, ledger: parts.ledger, ledgerDir: parts.ledgerDir, warned: false,
   }
   CORE.current = core
   return core
@@ -398,12 +399,7 @@ async function emitSynthetic(ctx: V2Ctx, sessionID: string, text: string): Promi
   try { await Promise.resolve(ctx.session?.synthetic?.({ sessionID, text })) } catch { /* feedback is best effort */ }
 }
 
-/** The /relay stats view for v2 (and the relay_stats tool): derived fresh from the metadata-only ledger. */
-function relayStatsText(ledger: EventLog): string {
-  try { return renderStatsTable(buildStats(ledger.read(), Date.now())) } catch { return "Relay stats unavailable (ledger unreadable)." }
-}
-
-function registerTools(env: Env, ctx: V2Ctx, controller: Controller, adapter: ClientLike, ledger: EventLog): Promise<unknown> {
+function registerTools(env: Env, ctx: V2Ctx, controller: Controller, adapter: ClientLike, ledger: EventLog, ledgerDir: string): Promise<unknown> {
   const emptyInput = { type: "object", properties: {}, additionalProperties: false }
   try {
     return Promise.resolve(ctx.tool!.transform((editor) => {
@@ -425,21 +421,24 @@ function registerTools(env: Env, ctx: V2Ctx, controller: Controller, adapter: Cl
       })
       editor.add({
         name: "relay_stats",
-        description: "Show per-model relay usage statistics (turns, failures, judge rejections, survival, cost) for the last 30 days from the metadata-only ledger.",
-        input: emptyInput,
-        execute: async () => ({ content: relayStatsText(ledger) }),
+        description: "Show per-model relay usage statistics (turns, failures by kind, judge rejections, survival, median latency, cost) from the metadata-only ledger over the last 1-30 days (default 30). Optional: days (integer 1-30), kinds (per-model failure-kind breakdown).",
+        input: STATS_TOOL_INPUT,
+        execute: async (input: unknown) => {
+          const query = parseStatsToolInput(input)
+          return { content: query ? statsText(ledger, query) : STATS_USAGE }
+        },
       })
       editor.add({
         name: "relay_purge",
-        description: "Delete all relay ledger event files (metadata-only usage data; stats.json is rebuilt on the next start). This cannot be undone.",
+        description: "Delete all relay ledger event files (metadata-only usage data; the stats.json snapshot is rebuilt immediately from what remains). This cannot be undone.",
         input: emptyInput,
-        execute: async () => ({ content: `Purged ${ledger.purge()} ledger file(s).` }),
+        execute: async () => ({ content: purgeAndRefreshStats(ledger, ledgerDir) }),
       })
     }))
   } catch (e) { return Promise.resolve(e) }
 }
 
-function registerCommands(env: Env, ctx: V2Ctx, controller: Controller, adapter: ClientLike, ledger: EventLog): Promise<unknown> {
+function registerCommands(env: Env, ctx: V2Ctx, controller: Controller, adapter: ClientLike, ledger: EventLog, ledgerDir: string): Promise<unknown> {
   try {
     return Promise.resolve(ctx.command!.transform((editor) => {
       editor.add({
@@ -449,12 +448,14 @@ function registerCommands(env: Env, ctx: V2Ctx, controller: Controller, adapter:
           try {
             const sessionID = sidInput(input)
             const args = commandArgs(input)
-            if (sessionID && args === "stats") {
-              await emitSynthetic(ctx, sessionID, relayStatsText(ledger))
+            // `stats` alone or with options (whitespace-separated); `status` must not match.
+            if (sessionID && /^stats(?:$|\s)/.test(args)) {
+              const query = parseStatsOptions(args.slice(5))
+              await emitSynthetic(ctx, sessionID, query ? statsText(ledger, query) : STATS_USAGE)
               return input ?? {}
             }
             if (sessionID && args === "purge") {
-              await emitSynthetic(ctx, sessionID, `Purged ${ledger.purge()} ledger file(s).`)
+              await emitSynthetic(ctx, sessionID, purgeAndRefreshStats(ledger, ledgerDir))
               return input ?? {}
             }
             if (sessionID && (args === "next" || args === "model" || args.startsWith("model "))) {
@@ -523,8 +524,8 @@ export function createV2Plugin(env: Env): { id: string; setup: (ctx: V2Ctx) => P
         // AC-04: hooks/tools/commands are registered BEFORE the layer stands the v1 hooks down
         // (moduleActive), so no activation window exists where neither layer handles events.
         await registerSessionHooks(ctx, core)
-        await registerTools(env, ctx, core.controller, adapter, core.ledger)
-        await registerCommands(env, ctx, core.controller, adapter, core.ledger)
+        await registerTools(env, ctx, core.controller, adapter, core.ledger, core.ledgerDir)
+        await registerCommands(env, ctx, core.controller, adapter, core.ledger, core.ledgerDir)
         moduleActive = true // from here the v1 server() hooks stand down; a partial v2 setup must not double-run v1
         return () => {
           try { stopLoop() } catch { /* ignore */ }
