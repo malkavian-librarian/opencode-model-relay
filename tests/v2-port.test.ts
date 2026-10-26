@@ -6,6 +6,7 @@ import { createV2Plugin } from "../src/v2"
 import { createServer } from "../src/server"
 import { RELAY_MARKER } from "../src/defaults"
 import plugin from "../src/index"
+import { EventLog } from "../src/ledger"
 
 // Non-trivial waits (event loop dispatch, save-to-disk) poll on a condition; everything is
 // synchronous otherwise so tests are deterministic.
@@ -643,6 +644,47 @@ describe("v2 tools, commands and model list", () => {
     teardown?.()
   })
 
+  it("preserves official V2 assistant USD cost through idle and both stats surfaces", async () => {
+    const e = env()
+    const ledgerDir = path.join(e.root, "data", "opencode-model-relay")
+    // Schema-derived, not captured: V2 OpenAPI Session.Message.Assistant.cost -> Money.USD (number),
+    // https://opencode.ai/v2/openapi.json, checked 2026-10-26 for target CLI v2.1.4.
+    const { ctx, calls } = makeCtx({ messages: [user("u1", "work"), { ...asst("a1", "a", "1", "done"), cost: 0.20 }] })
+    const teardown = await createV2Plugin(e.env).setup(ctx)
+    try {
+      ctx.__emit(idleEvent())
+      const ledger = new EventLog(ledgerDir, true)
+      await until(() => ledger.read().some((r) => r.event === "turn"))
+      const tool = calls.tools.find((t) => t.name === "relay_stats")
+      const row = (text: string) => text.split("\n").find((line) => line.startsWith("a/1 |"))
+      expect(row((await tool.execute(undefined, {})).content)).toMatch(/\| \$0\.20 \| \$0\.00$/)
+      expect(ledger.read().find((r) => r.event === "turn")).toMatchObject({ model: "a/1", cost: 0.20 })
+      ledger.append({ ts: Date.now(), sessionID: "s1", event: "judge", model: "a/1", verdict: "stay", helperCostUsd: 0.02 })
+      ledger.append({ ts: Date.now(), sessionID: "s1", event: "narrative", model: "a/1", helperCostUsd: 0.03 })
+      expect(row((await tool.execute(undefined, {})).content)).toMatch(/\| \$0\.20 \| \$0\.05$/)
+      await calls.commands.find((c) => c.name === "relay").execute({ sessionID: "s1", prompt: { text: "stats" }, delivery: "steer" })
+      expect(row(calls.synthetic.at(-1).text)).toMatch(/\| \$0\.20 \| \$0\.05$/)
+    } finally { teardown?.() }
+  })
+  it.each([0, undefined, null, "0.2", -1, NaN, Infinity, -Infinity])("V2 records turns with known-cost-only metadata: %s", async (cost) => {
+    const e = env()
+    const { ctx } = makeCtx({ messages: [
+      { ...user("u1", "work"), cost: 99 },
+      { ...asst("a1", "a", "1", "done"), cost },
+      ...["synthetic", "idle", "compaction"].map((type) => ({ id: type, type, cost: 99, model: { providerID: "z", id: "9" } })),
+    ] })
+    const teardown = await createV2Plugin(e.env).setup(ctx)
+    try {
+      const ledger = new EventLog(path.join(e.root, "data", "opencode-model-relay"), true)
+      ctx.__emit(idleEvent())
+      await until(() => ledger.read().length > 0)
+      const rows = ledger.read()
+      expect(rows).toHaveLength(1)
+      expect(rows[0]).toMatchObject({ event: "turn", model: "a/1" })
+      if (cost === 0) expect(rows[0]!.cost).toBe(0)
+      else expect(rows[0]).not.toHaveProperty("cost")
+    } finally { teardown?.() }
+  })
   it("relay_stats and /relay stats render the per-model table from the metadata-only ledger", async () => {
     const e = env()
     const ledgerDir = path.join(e.root, "data", "opencode-model-relay")

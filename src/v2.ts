@@ -131,6 +131,7 @@ function toOcMessage(row: unknown, sessionModel: { providerID: string; modelID: 
         id,
         role: "assistant",
         ...(model ?? {}),
+        ...(typeof v.cost === "number" && Number.isFinite(v.cost) && v.cost >= 0 ? { cost: v.cost } : {}),
         ...(typeof v.agent === "string" ? { agent: v.agent } : {}),
         ...(tokens && typeof tokens.output === "number" && Number.isFinite(tokens.output) ? { tokens: { output: tokens.output } } : {}),
       } as OcMessage["info"],

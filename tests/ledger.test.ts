@@ -21,6 +21,37 @@ beforeEach(() => { tmpDirs.length = 0; pidCount = 0 })
 afterEach(() => { for (const d of tmpDirs) fs.rmSync(d, { recursive: true, force: true }) })
 
 describe("EventLog", () => {
+  it("round-trips narrative costs including zero, strips unknown text and preserves HMAC identity", () => {
+    const d = dir(); const l = new EventLog(d, true, nextPid())
+    for (const helperCostUsd of [0, 0.03]) expect(l.append({ ...base, event: "narrative", model: "prov/a", tier: 1, helperCostUsd, text: "must not persist" } as never)).toBe(true)
+    const rows = l.read(30, 2)
+    expect(rows.map((r) => r.helperCostUsd).sort()).toEqual([0, 0.03])
+    expect(rows[0]!.session).toMatch(/^[0-9a-f]{16}$/)
+    expect(rows[1]!.session).toBe(rows[0]!.session)
+    expect(Object.keys(rows[0]!).sort()).toEqual(["event", "helperCostUsd", "model", "session", "tier", "ts"])
+  })
+  it("rejects malformed narrative metadata on both append and read", () => {
+    const d = dir(); const l = new EventLog(d, true, nextPid())
+    const valid = { ...base, event: "narrative", model: "prov/a", helperCostUsd: 0.03 }
+    const bad = [
+      { model: undefined }, { helperCostUsd: undefined }, { model: "bad model" }, { model: "p/" + "x".repeat(119) },
+      ...[null, "0.03", -1, NaN, Infinity, -Infinity].map((helperCostUsd) => ({ helperCostUsd })),
+      { sw: { kind: "manual" } }, { verdict: "stay" }, { errorKind: "quota" },
+    ]
+    for (const override of bad) {
+      const row = { ...valid, ...override }
+      expect(l.append(row as never)).toBe(false)
+      fs.appendFileSync(path.join(d, "events-4243.jsonl"), JSON.stringify({ ...row, session: "0123456789abcdef" }) + "\n")
+    }
+    expect(l.read(30, 2)).toEqual([])
+  })
+  it("keeps historical event kinds readable with and without optional costs and retains refinements", () => {
+    const l = new EventLog(dir(), true, nextPid())
+    const old = [{ event: "turn" }, { event: "failure", errorKind: "quota" }, { event: "judge", verdict: "stay" }, { event: "switch", sw: { kind: "manual" } }]
+    for (const row of old) for (const costs of [{}, { cost: 0.2, helperCostUsd: 0.02 }]) expect(l.append({ ...base, ...row, ...costs } as never)).toBe(true)
+    expect(l.read(30, 2)).toHaveLength(8)
+    for (const event of ["failure", "judge", "switch"]) expect(l.append({ ...base, event } as never)).toBe(false)
+  })
   it("appends a metadata-only row with an HMAC session and 0600 mode", () => {
     const d = dir(); const l = new EventLog(d, true, nextPid())
     l.append({ ...base, event: "turn", model: "prov/a" })

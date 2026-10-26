@@ -144,6 +144,8 @@ Publishing is an owner action; agents never publish or push tags.
 
 Older guidance moved from `AGENTS.md` to keep its cap; these rules still apply.
 
+- Superseded switches spent helper attempts and late narratives could restart stale turns -> reserve after enactment and lock/check the resumed model, turn and intent before dispatch; label only scheduled narratives deferred (2026-10-24)
+
 - PowerShell `Set-Content -Encoding utf8` writes a BOM -> write files with the editor Write tool or `[System.IO.File]::WriteAllText(path, text, (New-Object System.Text.UTF8Encoding($false)))` (2026-10-18)
 - `String.replace` with a string replacement interprets `$&` and `$1` in the replacement -> pass a replacer function `() => value` (2026-10-18)
 - `session.prompt` resolves only when the whole model turn ends in v1 -> fire it without `await` and attach `.catch` (2026-10-18)

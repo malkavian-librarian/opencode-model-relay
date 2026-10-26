@@ -14,7 +14,7 @@ const SWITCH_KINDS = [
   "overflow", "user_abort", "unknown", "quality", "switch_dropped", "manual",
 ] as const
 const DROP_REASONS = ["lock_held", "marker_guard", "superseded"] as const
-const EVENT_KINDS = ["turn", "failure", "judge", "switch"] as const
+const EVENT_KINDS = ["turn", "failure", "judge", "switch", "narrative"] as const
 const MAX_MODEL_CHARS = 120
 const MODEL_REF = /^[A-Za-z0-9._:-]+(?:\/[A-Za-z0-9._:-]+)+$/
 const MAX_LINES = 20000
@@ -44,6 +44,7 @@ export const ledgerEventSchema = z.object({
 }).refine((e) => (e.event === "failure") === (e.errorKind !== undefined), { message: "failure events need an errorKind" })
   .refine((e) => (e.event === "judge") === (e.verdict !== undefined), { message: "judge events need a verdict" })
   .refine((e) => (e.event === "switch") === (e.sw !== undefined), { message: "switch events need their sw detail" })
+  .refine((e) => e.event !== "narrative" || (e.model !== undefined && e.helperCostUsd !== undefined), { message: "narrative events need model and helperCostUsd" })
 
 export type LedgerEvent = z.infer<typeof ledgerEventSchema>
 export type EventInput = Omit<LedgerEvent, "session"> & { sessionID: string }

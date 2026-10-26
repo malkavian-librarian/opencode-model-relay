@@ -154,13 +154,20 @@ Each event row is metadata-only and uses these fields:
 | Field | Meaning |
 |---|---|
 | `ts` / `session` | As in the switch log. |
-| `event` | `turn` (a completed turn), `failure` (a recorded failure mark), `judge` (a quality-judge verdict), or `switch` (an enacted or dropped switch). |
+| `event` | `turn` (a completed turn), `failure` (a recorded failure mark), `judge` (a quality-judge verdict), `switch` (an enacted or dropped switch), or `narrative` (successful deferred helper work with known cost). |
 | `model` / `tier` | The affected `provider/model` and its 1-based ladder position, when known. |
-| `latencyMs`, `tokens`, `cost` | Optional turn measurements; only fields the host actually provides are recorded. |
+| `latencyMs`, `tokens`, `cost` | Optional turn measurements; only fields the host actually provides are recorded. `cost` is the selected assistant message's finite non-negative USD spend, including explicit zero, not an estimate or sum of all assistant steps. |
 | `errorKind` | For `failure` rows: the failure-kind enum. |
 | `verdict` | For `judge` rows: `switch` or `stay`. Only valid verdicts are recorded; an errored judge call is not a `stay`. |
-| `switch` | For `switch` rows: `kind`, plus `reason` for `switch_dropped` and `from`/`to` when known. |
-| `helperCostUsd` | Optional judge-call cost. |
+| `sw` | Required for `switch` rows: `kind`, plus `reason` for `switch_dropped` and `from`/`to` when known. |
+| `helperCostUsd` | Optional judge-call cost; required finite non-negative USD cost (including zero) for `narrative` rows, which also require `model`. |
+
+Narrative spend belongs to the original switched-from model and completion-time UTC
+day, even if the result is stale or cannot be delivered. A narrative row has no
+`sw`, `verdict` or `errorKind` and adds no turn, judge, failure or switch activity.
+The immediate append-only `switches.jsonl` row is unchanged: it precedes narrative
+completion and cannot include that deferred cost. The event ledger is authoritative
+for this spend; no second switch row or historical backfill is written.
 
 `/relay stats` (OpenCode v2; also the `relay_stats` tool) prints a per-model table
 over the rolling 30-day window: turns, failures by kind, the share of tier-2/3
@@ -168,7 +175,10 @@ judge verdicts that said `switch`, how often the model was switched away from,
 survival (the share of turns followed by another turn on the same model in the same
 session within 30 minutes or 5 turns with no effective switch in between; turns
 with no observable outcome are censored and excluded), median latency, token and
-cost totals, and helper overhead. A schema-versioned `stats.json` (v1) is derived
+known turn USD cost totals (`cost$`), and known judge plus narrative overhead
+(`helper$`). These are not a complete provider invoice: absent/invalid costs are
+not estimated, and failed/null narrative results may have unknown spend.
+A schema-versioned `stats.json` (v1) is derived
 from the ledger on startup with an atomic write; a missing or corrupt file is
 ignored and rebuilt.
 
