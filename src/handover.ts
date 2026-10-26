@@ -3,6 +3,7 @@ import type { RelayConfig } from "./config"
 import type { orChat } from "./openrouter"
 import { RELAY_MARKER } from "./defaults"
 import { isSensitivePath, redact, truncate } from "./redact"
+import { z } from "zod"
 
 export interface Extracted {
   lastUserText: string
@@ -12,12 +13,42 @@ export interface Extracted {
   transcript: string
 }
 
-const EDIT_TOOLS = new Set(["edit", "write", "patch", "multiedit", "apply_patch"])
 const MAX_LAST_REQUEST = 4000
+const MAX_TOOL_NAME = 128
 export const MAX_REDACT_INPUT = 60_000
 const neutralizeTags = (s: string): string => s.replace(/<\s*(\/?)\s*transcript/gi, "<\u200b$1transcript")
 const statusOf = (s: string): "DONE" | "FAILED" | "UNKNOWN" =>
-  s === "completed" ? "DONE" : s === "error" ? "FAILED" : "UNKNOWN"
+  s === "completed" || s === "done" ? "DONE" : s === "error" || s === "failed" ? "FAILED" : "UNKNOWN"
+
+const ToolPartSchema = z.object({
+  type: z.literal("tool"),
+  name: z.string().optional(),
+  tool: z.string().optional(),
+  toolName: z.string().optional(),
+  metadata: z.record(z.unknown()).optional(),
+  state: z.object({
+    status: z.string().optional(),
+    tool: z.string().optional(),
+    input: z.unknown().optional(),
+    output: z.unknown().optional(),
+    error: z.unknown().optional(),
+    content: z.unknown().optional(),
+    metadata: z.record(z.unknown()).optional(),
+  }).passthrough().optional(),
+}).passthrough()
+
+function toolNameOf(part: unknown): string {
+  const parsed = ToolPartSchema.safeParse(part)
+  if (!parsed.success) return "unknown"
+  const t = parsed.data
+  const metadata = t.metadata
+  const stateMetadata = t.state?.metadata
+  for (const candidate of [t.name, t.toolName, metadata?.name, metadata?.toolName, metadata?.tool, stateMetadata?.name, stateMetadata?.toolName, stateMetadata?.tool, t.state?.tool, t.tool]) {
+    const valid = z.string().min(1).max(MAX_TOOL_NAME).safeParse(candidate)
+    if (valid.success) return valid.data
+  }
+  return "unknown"
+}
 
 // Convert arbitrary tool output to a bounded string without throwing (objects, circular refs, huge values).
 function outputToString(v: unknown, max: number): string {
@@ -56,23 +87,21 @@ export function extractFromMessages(msgs: OcMessage[], o: { maxToolChars: number
         const t = p as any
         const st = t.state && typeof t.state === "object" ? t.state : {}
         const input = st.input && typeof st.input === "object" ? st.input : {}
-        const name = String(t.tool ?? "unknown")
+        const name = toolNameOf(p)
         const pathVal = input.filePath ?? input.path
         const rawTarget = input.filePath ?? input.path ?? input.command
         const target: string | undefined = rawTarget ? redact(truncate(String(rawTarget), 200)) : undefined
         const status = statusOf(String(st.status))
         toolCalls.push({ name, status, ...(target ? { target } : {}) })
-        if (EDIT_TOOLS.has(name) && typeof pathVal === "string") {
-          if (!files.includes(pathVal)) files.push(pathVal)
-        }
-        if (name === "todowrite" && Array.isArray(input.todos))
+        if (typeof pathVal === "string" && !files.includes(pathVal)) files.push(pathVal)
+        if (Array.isArray(input.todos))
           todo = input.todos
             .filter((x: any) => x && typeof x === "object" && x.status !== "completed" && x.status !== "cancelled")
             .map((x: any) => `${String(x.status)}: ${String(x.content)}`)
         const sensitive = typeof pathVal === "string" && isSensitivePath(pathVal)
         const out = sensitive
           ? "[output omitted: sensitive file]"
-          : redact(truncate(outputToString(st.output ?? st.error, o.maxToolChars), o.maxToolChars))
+          : redact(truncate(outputToString(st.output ?? st.error ?? st.content, o.maxToolChars), o.maxToolChars))
         lines.push(`TOOL ${name} [${status}]${target ? " " + target.slice(0, 120) : ""}: ${out}`)
       }
     }

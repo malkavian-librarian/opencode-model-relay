@@ -1,0 +1,75 @@
+[
+  {
+    "info": {
+      "id": "msg_real_user_001",
+      "role": "user",
+      "agent": "build",
+      "model": { "providerID": "openai", "modelID": "gpt-4o-mini" }
+    },
+    "parts": [
+      { "type": "text", "text": "Update the relay handover" }
+    ]
+  },
+  {
+    "info": {
+      "id": "msg_real_assistant_001",
+      "role": "assistant",
+      "providerID": "openai",
+      "modelID": "gpt-4o-mini"
+    },
+    "parts": [
+      {
+        "type": "tool",
+        "id": "prt_real_tool_001",
+        "name": "write",
+        "state": {
+          "status": "completed",
+          "input": { "filePath": "src/handover.ts" },
+          "content": [{ "type": "text", "text": "updated" }],
+          "metadata": {}
+        },
+        "time": { "created": 1792347020000, "completed": 1792347020001 }
+      },
+      {
+        "type": "tool",
+        "id": "prt_real_tool_002",
+        "name": "bash",
+        "state": {
+          "status": "error",
+          "input": { "command": "npm test", "path": "tests/handover.test.ts" },
+          "error": "test failed",
+          "metadata": {}
+        },
+        "time": { "created": 1792347020002, "completed": 1792347020003 }
+      },
+      {
+        "type": "tool",
+        "id": "prt_real_tool_003",
+        "name": "todowrite",
+        "state": {
+          "status": "completed",
+          "input": {
+            "todos": [
+              { "content": "Add realistic fixture", "priority": "high", "status": "pending" },
+              { "content": "Old item", "priority": "low", "status": "completed" }
+            ]
+          },
+          "content": [],
+          "metadata": { "todos": [] }
+        },
+        "time": { "created": 1792347020004, "completed": 1792347020005 }
+      },
+      {
+        "type": "tool",
+        "id": "prt_real_tool_004",
+        "state": {
+          "status": "completed",
+          "input": { "path": "tests/fixtures/messages-real-tool-parts.json" },
+          "content": [],
+          "metadata": {}
+        },
+        "time": { "created": 1792347020006, "completed": 1792347020007 }
+      }
+    ]
+  }
+]
