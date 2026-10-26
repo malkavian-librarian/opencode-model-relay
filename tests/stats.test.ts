@@ -87,6 +87,14 @@ describe("stats.json write", () => {
     expect(fs.readdirSync(d).filter((f) => !f.endsWith(".jsonl") && f !== "stats.json")).toEqual([])
     expect(JSON.parse(fs.readFileSync(path.join(d, "stats.json"), "utf8"))).toEqual(s)
   })
+  it("removes the temp file when the atomic rename fails", () => {
+    const d = dir()
+    const spy = vi.spyOn(fs, "renameSync").mockImplementation(() => { throw new Error("locked") })
+    try {
+      expect(writeStats(buildStats([turn(NOW - DAY)], NOW), d)).toBe(false)
+    } finally { spy.mockRestore() }
+    expect(fs.readdirSync(d)).toEqual([])
+  })
 })
 
 describe("renderStatsTable", () => {
