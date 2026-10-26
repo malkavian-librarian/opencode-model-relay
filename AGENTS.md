@@ -104,7 +104,6 @@ over with a structured summary. Design: `docs/superpowers/specs/2026-10-18-model
 - **Suggest, do not gold-plate:** stop after the diff unless asked for more.
 
 ## Gotchas (max 15, newest at bottom)
-
 - Older guidance: [graduated development gotchas](docs/process.md#graduated-development-gotchas).
 - Real OpenCode tool parts reported unknown names and empty files/todos -> read validated `name`, collect paths/todos independently of tool name (2026-10-26)
 - Inflated failure counts from rejected/graced errors -> append at the accepted non-quality health mark after marker/dedup/grace guards, not after switch success (2026-10-26)
