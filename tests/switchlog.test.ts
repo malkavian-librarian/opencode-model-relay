@@ -161,6 +161,17 @@ describe("SwitchLog", () => {
     expect(rows(d).map((r) => r.ts)).toEqual([now - 1000, now - 500, now])
     rename.mockRestore()
   })
+  it("anchors on the oldest valid row when malformed lines lead the file", () => {
+    const now = Date.now()
+    const d = dir()
+    fs.writeFileSync(path.join(d, "switches.jsonl"), ["{malformed}", seeded(now - 1000)].join("\n") + "\n")
+    const rename = vi.spyOn(fs, "renameSync")
+    const log = new SwitchLog(d, true)
+    log.append(rec(now))
+    expect(rename).not.toHaveBeenCalled()
+    expect(log.recent(10).map((r) => r.ts)).toEqual([now - 1000, now])
+    rename.mockRestore()
+  })
   it("skips malformed lines during compaction", () => {
     const now = Date.now()
     const d = dir()

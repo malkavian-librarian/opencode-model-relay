@@ -103,8 +103,8 @@ export class SwitchLog {
     try { text = fs.readFileSync(active, "utf8") } catch { return }
     const lines = text.split("\n").filter(Boolean)
     if (lines.length === 0) return
-    // Anchor on the oldest row, like EventLog.rotateTo's first-row month gate, so appends never churn the file.
-    const anchor = parseSwitchRow(lines[0]!)
+    // Anchor on the oldest valid row, so malformed leading lines do not churn a fresh file.
+    const anchor = lines.map(parseSwitchRow).find((row): row is SwitchLogRow => row !== undefined)
     if (anchor && anchor.ts >= now - RETENTION_MS) return
     const floor = now - RETENTION_MS
     const kept = lines.filter((line) => { const row = parseSwitchRow(line); return row !== undefined && row.ts >= floor })
