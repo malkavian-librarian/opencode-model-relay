@@ -154,13 +154,19 @@ Each event row is metadata-only and uses these fields:
 | Field | Meaning |
 |---|---|
 | `ts` / `session` | As in the switch log. |
-| `event` | `turn` (a completed turn), `failure` (a recorded failure mark), `judge` (a quality-judge verdict), `switch` (an enacted or dropped switch), or `narrative` (successful deferred helper work with known cost). |
+| `event` | `turn` (a completed turn), `failure` (an accepted non-quality failure mark), `judge` (a quality-judge verdict), `switch` (an enacted or dropped switch), or `narrative` (successful deferred helper work with known cost). |
 | `model` / `tier` | The affected `provider/model` and its 1-based ladder position, when known. |
 | `latencyMs`, `tokens`, `cost` | Optional turn measurements; only fields the host actually provides are recorded. `cost` is the selected assistant message's finite non-negative USD spend, including explicit zero, not an estimate or sum of all assistant steps. |
 | `errorKind` | For `failure` rows: the failure-kind enum. |
 | `verdict` | For `judge` rows: `switch` or `stay`. Only valid verdicts are recorded; an errored judge call is not a `stay`. |
 | `sw` | Required for `switch` rows: `kind`, plus `reason` for `switch_dropped` and `from`/`to` when known. |
 | `helperCostUsd` | Optional judge-call cost; required finite non-negative USD cost (including zero) for `narrative` rows, which also require `model`. |
+
+`failure` counts accepted non-quality health marks, not every raw provider error.
+Marker-rejected and message-dedup-rejected errors, and errors whose re-marking is
+suppressed by adoption grace, add no failure row. An accepted mark counts even
+when no healthy destination exists and no switch is enacted. Existing dedup TTL
+semantics remain; historical rows are not corrected or backfilled.
 
 Narrative spend belongs to the original switched-from model and completion-time UTC
 day, even if the result is stale or cannot be delivered. A narrative row has no

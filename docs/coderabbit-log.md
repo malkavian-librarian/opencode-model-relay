@@ -12,6 +12,13 @@ Record of `@coderabbitai` exchanges, so agents do not repeat past mistakes.
 
 ## Entries (newest first)
 
+### 2026-10-26 - PR #112 (issue #106)
+
+- Informational, CodeRabbit review at `65aaf727`: SUCCESS; no actionable or inline findings. Independent QA/security and required gates PASS at that head.
+- Warning, docstring coverage (0%, target 80%): rejected by QA as non-blocking metric-only feedback on the existing test harness/helper, not a product defect; no source repair.
+- Informational, Linked Issues check: independent QA/security evidence requested; satisfied by the exact-head QA PASS comment on PR #112 (6417721559).
+- Informational, supplemental auto-fix notice: no code changes or gates run; pending-readiness note superseded by completed CodeRabbit review and independent gates.
+
 ### 2026-10-26 - PR #111 (issue #105)
 
 - Informational, CodeRabbit review at `7143e8a`: no actionable or inline findings; check SUCCESS. Independent QA/security and required gates PASS at that head.
