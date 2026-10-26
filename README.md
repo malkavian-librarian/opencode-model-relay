@@ -175,22 +175,42 @@ The immediate append-only `switches.jsonl` row is unchanged: it precedes narrati
 completion and cannot include that deferred cost. The event ledger is authoritative
 for this spend; no second switch row or historical backfill is written.
 
-`/relay stats` (OpenCode v2; also the `relay_stats` tool) prints a per-model table
-over the rolling 30-day window: turns, failures by kind, the share of tier-2/3
-judge verdicts that said `switch`, how often the model was switched away from,
-survival (the share of turns followed by another turn on the same model in the same
-session within 30 minutes or 5 turns with no effective switch in between; turns
-with no observable outcome are censored and excluded), median latency, token and
-known turn USD cost totals (`cost$`), and known judge plus narrative overhead
-(`helper$`). These are not a complete provider invoice: absent/invalid costs are
-not estimated, and failed/null narrative results may have unknown spend.
-A schema-versioned `stats.json` (v1) is derived
-from the ledger on startup with an atomic write; a missing or corrupt file is
-ignored and rebuilt.
+`/relay stats [--days N] [--kinds]` (OpenCode v2 only; the `relay_stats` tool is
+the same surface with optional `days` (integer 1-30, default 30) and `kinds`
+(boolean)) prints a per-model table over the selected rolling window: turns,
+failures, the share of tier-2/3 judge verdicts that said `switch`, how often the
+model was switched away from, survival (the share of turns followed by another
+turn on the same model in the same session within 30 minutes or 5 turns with no
+effective switch in between; turns with no observable outcome are censored and
+excluded), median latency, token and known turn USD cost totals (`cost$`), and
+known judge plus narrative overhead (`helper$`). The window is exact event
+timestamps: only events with `now - N*86400000 <= ts <= now` count, inclusive at
+both ends and never a UTC-day label. Median latency is the median of every
+retained turn sample in that window, not a median of daily medians. Invalid
+options (missing, out-of-range or non-integer `days`, unknown or duplicate
+flags, `--days=7`, a value after `--kinds`, stray tokens, or any wrong tool
+input shape) print `Usage: /relay stats [--days N] [--kinds]` and change
+nothing. `--kinds` (tool: `kinds: true`) adds one breakdown line per model with
+its nonzero failure kinds and counts in lexicographic order, `none` when
+failure-free; the counts sum to the model's `fails` column. These are not a
+complete provider invoice: absent/invalid costs are not estimated, and
+failed/null narrative results may have unknown spend.
 
-`/relay purge` (or the `relay_purge` tool) deletes every `events-*.jsonl` file
-inside the ledger directory and nothing else: `stats.json` is rebuilt empty on the
-next start, while `state.json`, config and `switches.jsonl` are untouched.
+A schema-versioned `stats.json` (v1) is derived from the ledger with an atomic
+write on startup and again immediately after a purge: a best-effort snapshot of
+the default 30-day window, not continuously current between events and never
+rewritten for a short-window query. A missing or corrupt file is ignored and
+rebuilt.
+
+`/relay purge` (or the `relay_purge` tool, which takes no arguments; both
+OpenCode v2 only) deletes every `events-*.jsonl` file inside the ledger
+directory and nothing else, then rebuilds `stats.json` from what remains right
+away, while `state.json`, config and `switches.jsonl` are untouched. If that
+snapshot write fails, the purge still reports its file count plus a fixed
+sanitized warning (`Warning: the stats snapshot could not be refreshed.`) and
+leaves the previous `stats.json` as it was. Stats and purge command/tool
+surfaces are V2-only: v1 keeps its `relay_status` / `relay_init` surfaces and
+the shared startup snapshot behavior.
 
 ## Compared to opencode-auto-fallback
 

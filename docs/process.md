@@ -144,6 +144,8 @@ Publishing is an owner action; agents never publish or push tags.
 
 Older guidance moved from `AGENTS.md` to keep its cap; these rules still apply.
 
+- Tail-window reads hid ledger rows (malformed tails, oversized valid model refs) -> bound refs to 120 chars and validate rows in one shared zod schema, scanning backward to the requested valid count then reversing (2026-10-25)
+
 - OpenCode V2 command text lives in `CommandInvocation.prompt.text` -> test official host shapes and keep legacy `arguments` fallback-only (2026-10-24)
 
 - Superseded switches spent helper attempts and late narratives could restart stale turns -> reserve after enactment and lock/check the resumed model, turn and intent before dispatch; label only scheduled narratives deferred (2026-10-24)
