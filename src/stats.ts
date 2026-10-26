@@ -188,13 +188,19 @@ export function buildStats(events: LedgerEvent[], now: number, days = DEFAULT_ST
 
 /** Atomic temp+rename write inside the ledger dir; returns false instead of throwing when the FS refuses. */
 export function writeStats(doc: StatsDoc, dir: string): boolean {
+  let tmp: string | undefined
   try {
     const validated = statsSchema.parse(doc)
-    const tmp = path.join(dir, `stats.json.tmp-${process.pid}-${Math.random().toString(36).slice(2, 8)}`)
+    tmp = path.join(dir, `stats.json.tmp-${process.pid}-${Math.random().toString(36).slice(2, 8)}`)
     fs.writeFileSync(tmp, JSON.stringify(validated), { mode: 0o600 })
     fs.renameSync(tmp, path.join(dir, "stats.json"))
     return true
-  } catch { return false }
+  } catch {
+    if (tmp) {
+      try { fs.rmSync(tmp, { force: true }) } catch { /* cleanup is best effort */ }
+    }
+    return false
+  }
 }
 
 /** The stats view for both v2 surfaces: fresh from the metadata-only ledger, one consistent now per request. */
