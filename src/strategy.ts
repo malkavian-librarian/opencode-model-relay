@@ -199,18 +199,21 @@ export function walkCircular(i: {
   ladder: readonly LevelEntry[]; current: string; health: Record<string, ModelHealth>
   quarantine?: Readonly<Record<string, number>>; now: number; switchCount: number; maxSwitches: number
   maxCircularFlows: number; circularFlows?: number
+  resolveFind?: (entry: Exclude<LevelEntry, string>) => string | undefined
 }): Decision {
   if (i.switchCount >= i.maxSwitches || (i.circularFlows ?? 0) >= i.maxCircularFlows) return { action: "exhausted", reason: "switch_cap" }
-  const levels = i.ladder.filter((entry): entry is string => typeof entry === "string")
+  const levels = i.ladder.map((entry) => typeof entry === "string" ? entry : i.resolveFind?.(entry))
   const start = levels.indexOf(i.current)
   if (start < 0 || levels.length < 2) return { action: "exhausted", reason: "no_candidates" }
   const quarantined = (model: string): boolean => {
     const at = i.quarantine?.[model]
     return at !== undefined && i.now - at < QUARANTINE_MS
   }
-  for (let offset = 1; offset < levels.length; offset++) {
-    const model = levels[(start + offset) % levels.length]!
-    if (isHealthy(i.health[model], i.now) && !quarantined(model)) return { action: "switch", to: model }
+  for (const allowQuarantined of [false, true]) {
+    for (let offset = 1; offset < levels.length; offset++) {
+      const model = levels[(start + offset) % levels.length]
+      if (model !== undefined && isHealthy(i.health[model], i.now) && (allowQuarantined || !quarantined(model))) return { action: "switch", to: model }
+    }
   }
   return { action: "exhausted", reason: "no_candidates" }
 }
@@ -270,7 +273,10 @@ const AUTO_MAX_SWITCHES = 6
  * below 6, so only an explicit 6 is affected. Any other explicit value always wins.
  */
 export function effectiveMaxSwitches(cfg: RelayConfig): number {
-  return cfg.maxSwitchesPerSession === AUTO_MAX_SWITCHES
+  const normal = cfg.maxSwitchesPerSession === AUTO_MAX_SWITCHES
     ? Math.max(AUTO_MAX_SWITCHES, cfg.levels.length + 1)
     : cfg.maxSwitchesPerSession
+  return cfg.maxCircularFlows > 0 && cfg.maxSwitchesPerSession === AUTO_MAX_SWITCHES
+    ? Math.max(normal, cfg.maxCircularFlows * Math.max(2, cfg.levels.length))
+    : normal
 }

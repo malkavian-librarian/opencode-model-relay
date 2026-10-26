@@ -151,6 +151,11 @@ describe("walkCircular (#122)", () => {
   it("skips unhealthy entries without jumping backward", () => {
     expect(w("a/1", { health: { "b/2": { permanent: true } } })).toEqual(sw("c/3"))
     expect(w("a/1", { health: { "b/2": { permanent: true }, "c/3": { cooldownUntil: 1001 } } })).toEqual(NONE)
+    expect(w("a/1", { quarantine: { "b/2": 950, "c/3": 950 } })).toEqual(sw("b/2"))
+  })
+  it("retains resolved find positions while walking", () => {
+    expect(w("b/2", { ladder: ["a/1", { find: { match: "glm" } }, "b/2", "c/3"], resolveFind: () => "x/9" })).toEqual(sw("c/3"))
+    expect(w("x/9", { ladder: ["a/1", { find: { match: "glm" } }, "b/2"], resolveFind: () => "x/9" })).toEqual(sw("b/2"))
   })
   it("stops after the configured number of completed flows", () => {
     expect(w("a/1", { circularFlows: 2 })).toEqual(sw("b/2"))
@@ -315,5 +320,9 @@ describe("effectiveMaxSwitches (#64)", () => {
   it("an explicit maxSwitchesPerSession always wins", () => {
     expect(effectiveMaxSwitches({ ...defaultConfig(), maxSwitchesPerSession: 3, levels: many(10) })).toBe(3)
     expect(effectiveMaxSwitches({ ...defaultConfig(), maxSwitchesPerSession: 9, levels: [] })).toBe(9)
+  })
+  it("scales the default switch budget for circular flows", () => {
+    expect(effectiveMaxSwitches({ ...defaultConfig(), levels: many(3), maxCircularFlows: 3 })).toBe(9)
+    expect(effectiveMaxSwitches({ ...defaultConfig(), levels: many(3), maxCircularFlows: 3, maxSwitchesPerSession: 4 })).toBe(4)
   })
 })

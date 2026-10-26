@@ -63,6 +63,7 @@ function sanitizeQuarantine(raw: unknown): Record<string, number> | undefined {
   return kept > 0 ? out : undefined
 }
 
+/** Validates bounded persisted session fields, including circular progress, without trusting the state file. */
 function sanitize(v: unknown): SessionRecord | undefined {
   if (!v || typeof v !== "object" || Array.isArray(v)) return undefined
   const r = v as Record<string, unknown>

@@ -12,6 +12,15 @@ Record of `@coderabbitai` exchanges, so agents do not repeat past mistakes.
 
 ## Entries (newest first)
 
+### 2026-10-27 - PR #123 (issue #122), repair round 1
+
+- Medium, `src/controller.ts`: circular cap handling also intercepted `no_candidates` and skipped the existing exhaustion fallback -> fixed by limiting the early stop to `switch_cap`; circular mode still avoids fallback only at its configured cap.
+- Medium, `src/controller.ts`: an owner pick superseding a pending switch retained circular progress -> fixed by clearing origin, transition and completed-flow fields with the existing rollback.
+- Medium, `src/strategy.ts`: default switch budget could stop before three configured flows -> fixed by scaling the default budget to the configured flow count while preserving explicit caps.
+- Medium, `src/strategy.ts`: filtering out unresolved find entries changed their positions -> fixed by retaining ladder slots and resolving cached find entries by position.
+- Medium, `src/strategy.ts`: all candidates in quarantine produced no circular hop -> fixed by a second pass that uses a healthy quarantined model only as last resort. Added status and strategy regressions; full local gates pass on remediation commit.
+- Warning, docstring coverage: added the persisted-session sanitizer contract docstring; remaining analyzer feedback is non-blocking if the check remains advisory.
+
 ### 2026-10-27 - PR #119 (issue #117)
 
 - Three actionable findings on the original head: prioritize the real OpenCode tool field with metadata fallbacks, document the hand-written ToolPart-shaped fixture, and record the zero-stats-cost Gotcha -> fixed in `62f66f3`; the branch was then merged forward with `origin/main` as `42a879c` after #116 landed. Fresh CI and CodeRabbit checks passed on the final head; PR merged as `fea213b`.

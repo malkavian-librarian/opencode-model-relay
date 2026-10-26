@@ -257,12 +257,12 @@ export class Controller {
       const ladder = buildLadder(d.cfg)
       const input = this.findInput(current, sessionID, now)
       const decision = d.cfg.maxCircularFlows > 0
-        ? walkCircular({ ...input, ladder, switchCount: rec.switchCount, maxSwitches: effectiveMaxSwitches(d.cfg), maxCircularFlows: d.cfg.maxCircularFlows, circularFlows: rec.circularFlows })
+        ? walkCircular({ ...input, ladder, switchCount: rec.switchCount, maxSwitches: effectiveMaxSwitches(d.cfg), maxCircularFlows: d.cfg.maxCircularFlows, circularFlows: rec.circularFlows, resolveFind: (entry) => d.state.getFindCache(JSON.stringify(entry), now) })
         : await walkFromTopAsync({ ...input, ladder, tried: triedThisTurn(msgs), switchCount: rec.switchCount, maxSwitches: effectiveMaxSwitches(d.cfg) })
       let to: string
       if (decision.action === "switch") to = decision.to
       else {
-        if (d.cfg.maxCircularFlows > 0) {
+        if (d.cfg.maxCircularFlows > 0 && decision.reason === "switch_cap") {
           await this.toast("cap_reached", {}, "warning", EXHAUSTED_HINT)
           return false
         }
@@ -316,6 +316,7 @@ export class Controller {
           ...d.state.get(sessionID), pluginPinned: supersededBy, adoptedAt: d.now(),
           switchCount: rec.switchCount, updated: d.now(),
         }
+        delete adopted.circularOrigin; delete adopted.circularTransitions; delete adopted.circularFlows
         delete adopted.pendingHandover // no switch was enacted; the intent is spent
         d.state.set(sessionID, adopted)
         delete d.health[supersededBy] // the owner chose it: cooldown, blacklist and failure count all clear, once
