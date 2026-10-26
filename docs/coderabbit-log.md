@@ -14,9 +14,13 @@ Record of `@coderabbitai` exchanges, so agents do not repeat past mistakes.
 
 ### 2026-10-26 - PR #113 (issue #103), repair round 2
 
-- Major, `src/stats.ts`: confirmed repeated numeric day bounds; use shared minimum/maximum constants in advertised schema, Zod validation and command parser, preserving the 1–30-day contract.
-- Minor, `src/ledger.ts`: confirmed a file read error discarded all readable events; skip unreadable files individually. Regression cases cover purge snapshot retention with each of three files unreadable.
-- Warning, docstring coverage: ambiguous; supplied aggregate warning is truncated and identifies no missing functions or analyzer configuration. Public stats entry points already have JSDoc; exact missing-function evidence and a provider rerun are needed to verify the reported threshold.
+- Major, `src/stats.ts`: confirmed repeated numeric day bounds; use shared minimum/maximum constants in advertised schema, Zod validation and command parser, preserving the 1–30-day contract -> fixed by CodeRabbit autofix `4965a32` (owner-ticked checkbox); Engineer re-ran all gates on the adopted head: typecheck clean, 587/587 tests, build and pack pass.
+- Minor, `src/ledger.ts`: confirmed a file read error discarded all readable events; skip unreadable files individually. Regression cases cover purge snapshot retention with each of three files unreadable -> fixed by CodeRabbit autofix `4965a32`; `src/ledger.ts` is outside #103's Files owned (read-only reference), so the adoption supersedes the #115 deferral and is flagged to QA/orchestrator for adjudication.
+- Warning, docstring coverage: ambiguous; supplied aggregate warning is truncated and identifies no missing functions or analyzer configuration. Public stats entry points already have JSDoc; exact missing-function evidence and a provider rerun are needed to verify the reported threshold -> rejected: non-blocking metric-only feedback, consistent with the PR #111/#112 dispositions.
+
+### 2026-10-26 - PR #113 (issue #103), repair round 1
+
+- Informational, CodeRabbit review at `696f83e`: 2 actionable inline comments (CHILL profile); CI `test` green at that head (runs 40341211313 and 40341415386). Engineer triage: named day-bounds constants fixed, per-file read catch deferred to #115 (ledger source read-only for #103); both then implemented in-branch by the owner-ticked CodeRabbit autofix `4965a32`, superseding the local fix and the deferral.
 
 ### 2026-10-26 - PR #112 (issue #106)
 
