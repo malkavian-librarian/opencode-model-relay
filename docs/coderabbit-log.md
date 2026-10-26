@@ -12,6 +12,10 @@ Record of `@coderabbitai` exchanges, so agents do not repeat past mistakes.
 
 ## Entries (newest first)
 
+### 2026-10-27 - PR #119 (issue #117)
+
+- Three actionable findings on the original head: prioritize the real OpenCode tool field with metadata fallbacks, document the hand-written ToolPart-shaped fixture, and record the zero-stats-cost Gotcha -> fixed in `62f66f3`; the branch was then merged forward with `origin/main` as `42a879c` after #116 landed. Fresh CI and CodeRabbit checks passed on the final head; PR merged as `fea213b`.
+
 ### 2026-10-26 - PR #116 (issue #104)
 
 - Minor, `src/switchlog.ts`/`src/v2.ts`: purge surfaces silently ignored a failed switch-log clear (`clearSwitchLog` swallowed the error); report the fixed sanitized warning `Warning: the switch log could not be cleared.` on both surfaces while event purge and the stats refresh proceed -> fixed by owner-ticked CodeRabbit autofix `34367f2` (boolean `clearSwitchLog`, `SWITCH_LOG_CLEAR_WARNING`, a both-surface v2-port test, README wording); all four touched files (`src/switchlog.ts`, `src/v2.ts` purge wiring, `tests/v2-port.test.ts`, `README.md`) are inside #104's Files owned, so no scope exception; Engineer re-ran all gates on the adopted head: typecheck clean, 593/593 tests, build and pack pass (shasum `8c7a6d34`).

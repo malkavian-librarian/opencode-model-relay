@@ -123,7 +123,7 @@ Publishing is an owner action; agents never publish or push tags.
 | `docs/superpowers/plans/2026-10-18-v1.0-failover-handover.md` | v1.0 implementation plan. |
 | `docs/superpowers/plans/2026-10-23-model-relay-levels-redesign.md` | Epic #62 levels redesign plan and child issue map. |
 
-## Epic #62 child status (2026-10-26 live)
+## Epic #62 child status (2026-10-27 live)
 
 | Child | Scope | Status | Next |
 |-------|-------|--------|------|
