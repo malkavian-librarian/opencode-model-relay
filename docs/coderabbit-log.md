@@ -12,6 +12,12 @@ Record of `@coderabbitai` exchanges, so agents do not repeat past mistakes.
 
 ## Entries (newest first)
 
+### 2026-10-26 - PR #111 (issue #105)
+
+- Informational, CodeRabbit review at `7143e8a`: no actionable or inline findings; check SUCCESS. Independent QA/security and required gates PASS at that head.
+- Warning, docstring coverage (50%, target 80%): rejected by QA as non-blocking metric-only feedback on existing private adapter code, not a correctness/security defect or deferred finding; no source repair.
+- Informational, Auto-fix pending-review ambiguity: superseded by the completed successful review; no source changes requested or made.
+
 ### 2026-10-24 - PR #85 (issue #68), repair round 1
 
 - Minor, `AGENTS.md`: graduated older guidance to `docs/process.md` to meet the 120-line cap.
