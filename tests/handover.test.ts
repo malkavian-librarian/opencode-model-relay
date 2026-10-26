@@ -3,13 +3,25 @@ import { extractFromMessages, renderHandover, writeNarrative, buildHandover } fr
 import { defaultConfig } from "../src/config"
 import { RELAY_MARKER } from "../src/defaults"
 import type { OcMessage } from "../src/types"
+import fs from "node:fs"
+import path from "node:path"
 
 const opts = { maxToolChars: 200, maxTranscriptChars: 5000 }
 const user = (id: string, text: string): OcMessage => ({ info: { id, role: "user" }, parts: [{ type: "text", text }] })
 const asst = (id: string, parts: any[]): OcMessage => ({ info: { id, role: "assistant", providerID: "a", modelID: "1" }, parts })
 const tool = (name: string, status: string, input: any, output: any = "") => ({ type: "tool", tool: name, state: { status, input, output } })
+const realToolParts = (JSON.parse(fs.readFileSync(path.join(__dirname, "fixtures", "messages-real-tool-parts.json"), "utf8")) as { messages: OcMessage[] }).messages
 
 describe("extractFromMessages", () => {
+  it("extracts names, paths, and todos from a real OpenCode tool-part shape", () => {
+    const ex = extractFromMessages(realToolParts, opts)
+    expect(ex.toolCalls.map((t) => [t.name, t.status])).toEqual([
+      ["write", "DONE"], ["bash", "FAILED"], ["todowrite", "DONE"], ["read", "DONE"],
+    ])
+    expect(ex.filesTouched).toEqual(["src/handover.ts", "tests/handover.test.ts", "tests/fixtures/messages-real-tool-parts.json"])
+    expect(ex.todo).toEqual(["pending: Add realistic fixture"])
+    expect(buildHandover({ cfg: defaultConfig(), ex, from: "a/1", to: "b/2", reason: "quota", summary: "S" })).toContain("DONE write")
+  })
   it("takes the last real user request verbatim, ignoring relay handovers and synthetic text", () => {
     const m = [
       user("u1", "first ask"),

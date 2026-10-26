@@ -1,0 +1,98 @@
+{
+  "fixtureMetadata": {
+    "source": "hand-written",
+    "openCodeVersion": "1.19.0",
+    "realSessionCapture": false
+  },
+  "messages": [
+    {
+      "info": {
+        "id": "msg_fixture_user_001",
+        "role": "user",
+        "agent": "build",
+        "model": { "providerID": "openai", "modelID": "gpt-4o-mini" }
+      },
+      "parts": [
+        { "type": "text", "text": "Update the relay handover" }
+      ]
+    },
+    {
+      "info": {
+        "id": "msg_fixture_assistant_001",
+        "role": "assistant",
+        "providerID": "openai",
+        "modelID": "gpt-4o-mini"
+      },
+      "parts": [
+        {
+          "id": "prt_fixture_tool_001",
+          "sessionID": "ses_fixture_001",
+          "messageID": "msg_fixture_assistant_001",
+          "type": "tool",
+          "callID": "call_fixture_001",
+          "tool": "write",
+          "state": {
+            "status": "completed",
+            "input": { "filePath": "src/handover.ts" },
+            "output": "updated",
+            "title": "Write src/handover.ts",
+            "metadata": {},
+            "time": { "start": 1792347020000, "end": 1792347020001 }
+          }
+        },
+        {
+          "id": "prt_fixture_tool_002",
+          "sessionID": "ses_fixture_001",
+          "messageID": "msg_fixture_assistant_001",
+          "type": "tool",
+          "callID": "call_fixture_002",
+          "tool": "bash",
+          "state": {
+            "status": "error",
+            "input": { "command": "npm test", "path": "tests/handover.test.ts" },
+            "error": "test failed",
+            "metadata": {},
+            "time": { "start": 1792347020002, "end": 1792347020003 }
+          }
+        },
+        {
+          "id": "prt_fixture_tool_003",
+          "sessionID": "ses_fixture_001",
+          "messageID": "msg_fixture_assistant_001",
+          "type": "tool",
+          "callID": "call_fixture_003",
+          "tool": "todowrite",
+          "state": {
+            "status": "completed",
+            "input": {
+              "todos": [
+                { "content": "Add realistic fixture", "priority": "high", "status": "pending" },
+                { "content": "Old item", "priority": "low", "status": "completed" }
+              ]
+            },
+            "output": "1 todos",
+            "title": "1 todos",
+            "metadata": { "todos": [] },
+            "time": { "start": 1792347020004, "end": 1792347020005 }
+          }
+        },
+        {
+          "id": "prt_fixture_tool_004",
+          "sessionID": "ses_fixture_001",
+          "messageID": "msg_fixture_assistant_001",
+          "type": "tool",
+          "callID": "call_fixture_004",
+          "tool": "read",
+          "state": {
+            "status": "completed",
+            "input": { "path": "tests/fixtures/messages-real-tool-parts.json" },
+            "output": "fixture contents",
+            "title": "Read fixture",
+            "metadata": {},
+            "time": { "start": 1792347020006, "end": 1792347020007 }
+          }
+        }
+      ]
+    }
+  ]
+}
