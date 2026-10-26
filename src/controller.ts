@@ -224,8 +224,6 @@ export class Controller {
       // Explicit attribution must agree with the current turn, never poison a newer model.
       if (from && modelKey(from) !== current) return false
       const now = d.now()
-      // Failure marks feed the stats ledger (#7); a judge-triggered switch is not a failure (its judge event covers it).
-      if (c.kind !== "quality") this.led({ ts: now, sessionID, event: "failure", errorKind: c.kind, model: current, tier: this.tierOf(current) })
       let rec = { ...d.state.get(sessionID) } // session records are merged, never whole-record overwritten (AC-01)
       // Marker guard (#56, AC-03): marker text is untrusted; a marker newest while the session is not
       // on the plugin-set model is a stale error, and the drop is logged, never silent (AC-06).
@@ -243,6 +241,8 @@ export class Controller {
         // The judge says quality, not failure: the model is not cooled down or blacklisted.
       } else if (!inGrace) {
         recordFailure(d.health, current, c, now, d.cfg.cooldownMs, resetText)
+        // Count accepted marks, not rejected/graced errors or only successfully enacted switches.
+        this.led({ ts: now, sessionID, event: "failure", errorKind: c.kind, model: current, tier: this.tierOf(current) })
         for (const [key, cached] of Object.entries(d.state.findCache)) {
           if (cached.model === current) d.state.invalidateFindCache(key)
         }

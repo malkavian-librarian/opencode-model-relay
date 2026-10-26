@@ -11,6 +11,7 @@ import { RELAY_MARKER } from "../src/defaults"
 import type { OcMessage } from "../src/types"
 import { listProviderModels } from "../src/server"
 import { SwitchLog } from "../src/switchlog"
+import type { EventInput } from "../src/ledger"
 
 const err429 = { name: "APIError", data: { statusCode: 429, isRetryable: true, message: "", responseBody: "slow", responseHeaders: {} } }
 const msgs = (model = { providerID: "a", modelID: "1" }, id = "a1"): OcMessage[] => [
@@ -21,7 +22,7 @@ const asst = (id: string, providerID: string, modelID: string): OcMessage =>
   ({ info: { id, role: "assistant", providerID, modelID }, parts: [] })
 
 function setup(o: { cfg?: object; messages?: OcMessage[]; parentID?: string; env?: Record<string, string>; chat?: any } = {}) {
-  const calls = { abort: [] as any[], prompt: [] as any[], toast: [] as string[], chat: [] as any[], logs: [] as any[] }
+  const calls = { abort: [] as any[], prompt: [] as any[], toast: [] as string[], chat: [] as any[], logs: [] as any[], events: [] as EventInput[] }
   const messages = o.messages ?? msgs()
   const client: any = {
     session: {
@@ -47,6 +48,7 @@ function setup(o: { cfg?: object; messages?: OcMessage[]; parentID?: string; env
   const d: Deps = {
     client, cfg, lock, state, health: state.health, narrate: createNarrator({ verbosity: "normal", tone: "plain" }),
     switchLog: { append: (r) => calls.logs.push(r) }, env: o.env ?? {}, now: () => 1_000_000,
+    ledger: { append: (e) => { calls.events.push(e); return true } },
     chat: o.chat ?? (async (a: any) => { calls.chat.push(a); return { text: "SUMMARY", costUsd: 0.01 } }),
     log: () => {}, switchOpts: { abortTimeoutMs: 20, abortDelayMs: 0 },
   }
@@ -54,6 +56,96 @@ function setup(o: { cfg?: object; messages?: OcMessage[]; parentID?: string; env
 }
 
 describe("Controller.onSessionError", () => {
+  it("counts an accepted failure once across sequential same-ID replay, then counts a distinct failure", async () => {
+    const { c, d, calls, messages } = setup({ cfg: { tiers: { primary: "a/1", secondary: ["b/2", "c/3"] } } })
+    expect(await c.onSessionError("s1", err429)).toBe(true)
+    expect(await c.onSessionError("s1", err429)).toBe(false)
+    expect(calls.events.filter((e) => e.event === "failure")).toEqual([
+      { ts: 1_000_000, sessionID: "s1", event: "failure", model: "a/1", tier: 1, errorKind: "rate_limit" },
+    ])
+    expect(d.health["a/1"]?.failures).toBe(1)
+    expect(calls.prompt).toHaveLength(1)
+    messages.push(asst("b1", "b", "2"))
+    expect(await c.onSessionError("s1", err429, { providerID: "b", modelID: "2" })).toBe(true)
+    expect(calls.events.filter((e) => e.event === "failure")).toHaveLength(2)
+    expect(calls.events.filter((e) => e.event === "failure")[1]).toEqual(
+      { ts: 1_000_000, sessionID: "s1", event: "failure", model: "b/2", tier: 2, errorKind: "rate_limit" },
+    )
+    expect(d.health["b/2"]?.failures).toBe(1)
+    expect(calls.prompt).toHaveLength(2)
+    expect(calls.chat).toEqual([])
+  })
+  it("does not count a marker-rejected failure but retains both drop diagnostics", async () => {
+    const { c, d, calls } = setup({ messages: [
+      { info: { id: "h1", role: "user", model: { providerID: "b", modelID: "2" } }, parts: [{ type: "text", text: `${RELAY_MARKER}\ncontinue` }] },
+    ] })
+    d.state.set("s1", { pluginPinned: "c/3", switchCount: 1, updated: 1_000_000 })
+    expect(await c.onSessionError("s1", err429)).toBe(false)
+    expect(calls.events.filter((e) => e.event === "failure")).toEqual([])
+    expect(d.health).toEqual({})
+    expect(d.state.get("s1").quarantine).toBeUndefined()
+    expect(calls.prompt).toEqual([])
+    expect(calls.logs).toEqual([expect.objectContaining({ kind: "switch_dropped", reason: "marker_guard", from: "b/2" })])
+    expect(calls.events).toEqual([{ ts: 1_000_000, sessionID: "s1", event: "switch", sw: { kind: "switch_dropped", reason: "marker_guard", from: "b/2" } }])
+  })
+  it("does not count an adopted model during grace but still switches", async () => {
+    const { c, d, calls } = setup()
+    d.state.set("s1", { pluginPinned: "a/1", adoptedAt: 970_001, switchCount: 0, updated: 1_000_000 })
+    expect(await c.onSessionError("s1", err429)).toBe(true)
+    expect(calls.events.filter((e) => e.event === "failure")).toEqual([])
+    expect(d.health["a/1"]).toBeUndefined()
+    expect(d.state.get("s1").quarantine).toBeUndefined()
+    expect(calls.prompt).toHaveLength(1)
+    expect(calls.prompt[0].body.model).toEqual({ providerID: "b", modelID: "2" })
+    expect(d.state.get("s1")).toMatchObject({ pluginPinned: "b/2", switchCount: 1 })
+    expect(d.state.get("s1").adoptedAt).toBeUndefined()
+  })
+  it.each([
+    [30_000, "a/1"],
+    [29_999, "b/2"],
+  ])("counts at elapsed %i ms with pinned %s", async (elapsed, pluginPinned) => {
+    const { c, d, calls } = setup()
+    d.state.set("s1", { pluginPinned, adoptedAt: 1_000_000 - elapsed, switchCount: 0, updated: 1_000_000 })
+    expect(await c.onSessionError("s1", err429)).toBe(true)
+    expect(calls.events.filter((e) => e.event === "failure")).toEqual([
+      { ts: 1_000_000, sessionID: "s1", event: "failure", model: "a/1", tier: 1, errorKind: "rate_limit" },
+    ])
+    expect(d.health["a/1"]?.failures).toBe(1)
+    expect(d.state.get("s1").quarantine).toEqual({ "a/1": 1_000_000 })
+    expect(d.state.get("s1")).toMatchObject({ pluginPinned: "b/2", switchCount: 1 })
+    expect(d.state.get("s1").adoptedAt).toBeUndefined()
+    expect(calls.prompt).toHaveLength(1)
+    expect(calls.prompt[0].body.model).toEqual({ providerID: "b", modelID: "2" })
+  })
+  it.each(["absent", "false", "throws"])("ledger %s cannot block marks, failover or lock release", async (ledger) => {
+    const { c, d, calls } = setup()
+    if (ledger === "absent") delete d.ledger
+    else d.ledger = { append: () => { if (ledger === "throws") throw new Error("unavailable"); return false } }
+    await expect(c.onSessionError("s1", err429)).resolves.toBe(true)
+    expect(d.health["a/1"]?.failures).toBe(1)
+    expect(d.state.get("s1").quarantine).toEqual({ "a/1": 1_000_000 })
+    expect(calls.prompt).toHaveLength(1)
+    expect(d.lock.tryAcquire("s1")).toBe(true)
+    d.lock.release("s1")
+  })
+  it("keeps provider error text out of failure metadata", async () => {
+    const { c, calls } = setup()
+    const message = "synthetic-credential-DO-NOT-LOG"
+    await c.onSessionError("s1", { ...err429, data: { ...err429.data, message } })
+    expect(calls.events.filter((e) => e.event === "failure")).toEqual([
+      { ts: 1_000_000, sessionID: "s1", event: "failure", model: "a/1", tier: 1, errorKind: "rate_limit" },
+    ])
+    expect(JSON.stringify(calls.events)).not.toContain(message)
+  })
+  it("missing messages produce no failure or health mark", async () => {
+    const { c, d, calls } = setup({ messages: [] })
+    expect(await c.onSessionError("s1", err429)).toBe(false)
+    expect(calls.events).toEqual([])
+    expect(d.health).toEqual({})
+    expect(calls.prompt).toEqual([])
+    expect(d.lock.tryAcquire("s1")).toBe(true)
+    d.lock.release("s1")
+  })
   for (const [message, kind] of [
     ["The usage limit has been reached", "quota"],
     ["Free usage limit reached. Subscribe to OpenCode Go to keep going: https://opencode.ai/go", "free_tier_403"],
@@ -86,6 +178,9 @@ describe("Controller.onSessionError", () => {
       expect(await c.onSessionError("s1", err429, from)).toBe(false)
       expect(d.state.get("s1").switchCount).toBe(stale ? 1 : 2)
       expect(d.health["a/1"]).toBeUndefined()
+      expect(calls.events.filter((e) => e.event === "failure")).toEqual(stale ? [] : [
+        { ts: 1_000_000, sessionID: "s1", event: "failure", model: "b/2", tier: 2, errorKind: "rate_limit" },
+      ])
       if (stale) {
         expect(d.health["b/2"]).toBeUndefined()
         expect(calls.logs).toEqual([])
@@ -100,6 +195,7 @@ describe("Controller.onSessionError", () => {
     expect(await c.onSessionError("s1", err429, { providerID: "b", modelID: "2" })).toBe(false)
     expect(d.health).toEqual({})
     expect(calls.prompt).toEqual([])
+    expect(calls.events).toEqual([])
   })
   it("successive failed marker handovers retain tried-model exclusion, helper cap and switch cap", async () => {
     const { c, d, calls, messages } = setup({ cfg: { maxSwitchesPerSession: 2, privacy: { consent: true }, handover: { maxCallsPerSession: 1 }, tiers: { primary: "a/1", secondary: ["b/2", "c/3", "d/4"] } }, env: { OPENROUTER_API_KEY: "k" } })
@@ -275,6 +371,7 @@ describe("Controller.onSessionError", () => {
     await c.onSessionError("s1", { name: "APIError", data: { statusCode: 418 } })
     expect(calls.prompt).toHaveLength(0)
     expect(calls.abort).toHaveLength(0)
+    expect(calls.events).toEqual([])
   })
   it("consumes the plugin-abort mark exactly once; a later unmarked abort is a plain user cancel", async () => {
     const { c, d, calls } = setup()
@@ -290,6 +387,7 @@ describe("Controller.onSessionError", () => {
     const { c, calls } = setup({ parentID: "parent" })
     await c.onSessionError("s1", err429)
     expect(calls.prompt).toHaveLength(0)
+    expect(calls.events).toEqual([])
   })
   it("ignores assistant messages without provider/model (title/summary agent)", async () => {
     const { c, calls } = setup({
@@ -301,6 +399,7 @@ describe("Controller.onSessionError", () => {
     await c.onSessionError("s1", err429)
     expect(calls.prompt).toHaveLength(0)
     expect(calls.abort).toHaveLength(0)
+    expect(calls.events).toEqual([])
   })
   it("does not run twice for the same failing message (dedup) or concurrently (lock)", async () => {
     const { c, calls } = setup()
@@ -340,6 +439,8 @@ describe("Controller.onSessionError", () => {
     await c.onSessionError("s1", err429)
     expect(calls.prompt).toHaveLength(0)
     expect(calls.logs[0]).toMatchObject({ kind: "switch_dropped", reason: "lock_held" }) // never silent (#66)
+    expect(calls.events).toEqual([{ ts: 1_000_000, sessionID: "s1", event: "switch", sw: { kind: "switch_dropped", reason: "lock_held" } }])
+    expect(d.health).toEqual({})
     d.lock.release("s1")
     void messages
     await c.onSessionError("s1", err429)
@@ -381,7 +482,12 @@ describe("Controller.onSessionError", () => {
   it("all other models cooling: exhausted toast, no abort/prompt", async () => {
     const { c, d, calls } = setup()
     d.health["b/2"] = { cooldownUntil: 2_000_000 }
-    await c.onSessionError("s1", err429)
+    expect(await c.onSessionError("s1", err429)).toBe(false)
+    expect(calls.events.filter((e) => e.event === "failure")).toEqual([
+      { ts: 1_000_000, sessionID: "s1", event: "failure", model: "a/1", tier: 1, errorKind: "rate_limit" },
+    ])
+    expect(d.health["a/1"]?.failures).toBe(1)
+    expect(d.state.get("s1").quarantine).toEqual({ "a/1": 1_000_000 })
     expect(calls.abort).toHaveLength(0)
     expect(calls.prompt).toHaveLength(0)
     expect(calls.toast.join(" ")).toMatch(/no healthy model/i)
@@ -952,6 +1058,15 @@ describe("Controller quality judge (#26)", () => {
     expect(d.state.get("s1")).toMatchObject({ switchCount: 1, pluginPinned: "a/1", judgeCalls: 2 })
     expect(d.state.judgeDaily).toMatchObject({ calls: 2, costUsd: 0.02 })
     expect(d.health["b/2"]).toBeUndefined() // quality is not a failure: b/2 was not cooled down
+    expect(d.state.get("s1").quarantine).toBeUndefined()
+    expect(calls.events.filter((e) => e.event === "failure")).toEqual([])
+    expect(calls.events.filter((e) => e.event === "judge")).toEqual([
+      expect.objectContaining({ model: "b/2", verdict: "switch" }),
+      expect.objectContaining({ model: "b/2", verdict: "switch" }),
+    ])
+    expect(calls.events.filter((e) => e.event === "switch")).toEqual([
+      { ts: 1_000_000, sessionID: "s1", event: "switch", sw: { kind: "quality", from: "b/2", to: "a/1" } },
+    ])
   })
 
   it("switch:false between switch:true verdicts breaks the streak; a third never switches alone", async () => {
