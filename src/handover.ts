@@ -43,7 +43,7 @@ function toolNameOf(part: unknown): string {
   const t = parsed.data
   const metadata = t.metadata
   const stateMetadata = t.state?.metadata
-  for (const candidate of [t.name, t.toolName, metadata?.name, metadata?.toolName, metadata?.tool, stateMetadata?.name, stateMetadata?.toolName, stateMetadata?.tool, t.state?.tool, t.tool]) {
+  for (const candidate of [t.tool, t.name, t.toolName, metadata?.name, metadata?.toolName, metadata?.tool, stateMetadata?.name, stateMetadata?.toolName, stateMetadata?.tool, t.state?.tool]) {
     const valid = z.string().min(1).max(MAX_TOOL_NAME).safeParse(candidate)
     if (valid.success) return valid.data
   }
