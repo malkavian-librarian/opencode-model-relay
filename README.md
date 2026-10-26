@@ -147,7 +147,8 @@ Besides `switches.jsonl`, the relay writes a per-turn event ledger on OpenCode v
 `salt` file as the switch log, so session ids hash identically. When the active
 file's first row belongs to an older UTC month, it is rotated to
 `events-<pid>-<YYYYMM>.jsonl` on the next append. Reads validate every row with the
-same zod schema the writer used and skip corrupt lines.
+same zod schema the writer used and skip corrupt lines and unreadable files,
+retaining events from the files that can be read.
 
 Each event row is metadata-only and uses these fields:
 

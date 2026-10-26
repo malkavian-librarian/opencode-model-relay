@@ -113,7 +113,7 @@ export class EventLog {
     } catch { return false }
   }
 
-  /** Backward bounded scan of active + rotated files, skipping corrupt lines, windowed to `days`. Never throws. */
+  /** Backward bounded scan of active + rotated files, skipping unreadable files and corrupt lines, windowed to `days`. Never throws. */
   read(days = 30, now = Date.now()): LedgerEvent[] {
     if (!this.enabled) return []
     try {
@@ -124,7 +124,10 @@ export class EventLog {
       const out: LedgerEvent[] = []
       for (const name of names) {
         if (out.length >= MAX_LINES) break
-        const lines = fs.readFileSync(path.join(this.dir, name), "utf8").split("\n")
+        let lines: string[]
+        try {
+          lines = fs.readFileSync(path.join(this.dir, name), "utf8").split("\n")
+        } catch { continue }
         for (let i = lines.length - 1; i >= 0 && out.length < MAX_LINES; i--) {
           try {
             const parsed = ledgerEventSchema.safeParse(JSON.parse(lines[i] as string))

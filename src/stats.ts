@@ -4,7 +4,9 @@ import { z } from "zod"
 import type { EventLog, LedgerEvent } from "./ledger"
 
 const DAY = 864e5
-const DEFAULT_STATS_DAYS = 30
+const MIN_STATS_DAYS = 1
+const MAX_STATS_DAYS = 30
+const DEFAULT_STATS_DAYS = MAX_STATS_DAYS
 const SURVIVAL_WINDOW_MS = 30 * 60 * 1000
 const SURVIVAL_MAX_TURNS = 5
 
@@ -58,14 +60,14 @@ export const STATS_REFRESH_WARNING = "Warning: the stats snapshot could not be r
 export const STATS_TOOL_INPUT = {
   type: "object",
   properties: {
-    days: { type: "integer", minimum: 1, maximum: 30 },
+    days: { type: "integer", minimum: MIN_STATS_DAYS, maximum: MAX_STATS_DAYS },
     kinds: { type: "boolean" },
   },
   additionalProperties: false,
 }
 
 const statsToolQuery = z.object({
-  days: z.number().int().min(1).max(DEFAULT_STATS_DAYS).optional(),
+  days: z.number().int().min(MIN_STATS_DAYS).max(MAX_STATS_DAYS).optional(),
   kinds: z.boolean().optional(),
 }).strict()
 
@@ -86,7 +88,7 @@ export function parseStatsOptions(text: string): StatsQuery | null {
       const value = tokens[++i]
       if (value === undefined || !/^[0-9]+$/.test(value)) return null
       const n = Number(value)
-      if (n < 1 || n > DEFAULT_STATS_DAYS) return null
+      if (n < MIN_STATS_DAYS || n > MAX_STATS_DAYS) return null
       days = n; daysSeen = true
     } else return null // unknown flag, --days=7, a value after --kinds, or a stray positional
   }

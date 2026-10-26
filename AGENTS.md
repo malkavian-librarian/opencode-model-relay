@@ -108,7 +108,7 @@ over with a structured summary. Design: `docs/superpowers/specs/2026-10-18-model
 - Older guidance: [graduated development gotchas](docs/process.md#graduated-development-gotchas).
 - Zero stats costs -> preserve V2 assistant USD cost and append known narrative spend for the original model before delivery guards; never rewrite immediate switch rows (2026-10-26)
 - Inflated failure counts from rejected/graced errors -> append at the accepted non-quality health mark after marker/dedup/grace guards, not after switch success (2026-10-26)
-- Purge left stats.json stale until the next start and the stats table medianed daily medians -> rebuild the snapshot inside the shared purge op and median all window samples (2026-10-26)
+- Stale purge snapshots, discarded readable rows and medianed daily medians -> rebuild on purge, catch each file read failure and median all window samples (2026-10-26)
 
 ## Bugs - [open]/[fixed] + repro (max 10)
 

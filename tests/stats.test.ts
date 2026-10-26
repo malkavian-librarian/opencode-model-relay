@@ -267,6 +267,28 @@ describe("purge refreshes the stats snapshot", () => {
       expect(JSON.parse(fs.readFileSync(path.join(d, "stats.json"), "utf8")).models["prov/a"]).toBeTruthy()
     } finally { spy.mockRestore() }
   })
+  it.each([4401, 4402, 4403])("retains readable events in the purge snapshot when file %i cannot be read", (unreadablePid) => {
+    const d = dir()
+    const T = Date.UTC(2026, 9, 26, 12)
+    const pids = [4401, 4402, 4403]
+    const l = new EventLog(d, true)
+    for (const pid of pids) {
+      expect(new EventLog(d, true, pid).append({ ts: T - pid, sessionID: "s", event: "turn", model: `prov/${pid}`, cost: 0.2 })).toBe(true)
+    }
+    expect(writeStats(buildStats(l.read(30, T), T), d)).toBe(true)
+    const readFile = fs.readFileSync
+    const removeSpy = vi.spyOn(fs, "rmSync").mockImplementation(() => { throw new Error("locked") })
+    const readSpy = vi.spyOn(fs, "readFileSync").mockImplementation((file, options) => {
+      if (file === path.join(d, `events-${unreadablePid}.jsonl`)) throw new Error("unreadable")
+      return readFile(file, options)
+    })
+    try {
+      expect(purgeAndRefreshStats(l, d, T)).toBe("Purged 0 ledger file(s).")
+      const expectedEvents = pids.filter((pid) => pid !== unreadablePid)
+        .map((pid) => turn(T - pid, `prov/${pid}`, { cost: 0.2 }))
+      expect(JSON.parse(readFile(path.join(d, "stats.json"), "utf8"))).toEqual(buildStats(expectedEvents, T))
+    } finally { readSpy.mockRestore(); removeSpy.mockRestore() }
+  })
   it("a failed snapshot write preserves the prior stats.json and adds only the fixed sanitized warning", () => {
     const d = dir()
     const l = new EventLog(d, true)

@@ -12,6 +12,12 @@ Record of `@coderabbitai` exchanges, so agents do not repeat past mistakes.
 
 ## Entries (newest first)
 
+### 2026-10-26 - PR #113 (issue #103), repair round 2
+
+- Major, `src/stats.ts`: confirmed repeated numeric day bounds; use shared minimum/maximum constants in advertised schema, Zod validation and command parser, preserving the 1–30-day contract.
+- Minor, `src/ledger.ts`: confirmed a file read error discarded all readable events; skip unreadable files individually. Regression cases cover purge snapshot retention with each of three files unreadable.
+- Warning, docstring coverage: ambiguous; supplied aggregate warning is truncated and identifies no missing functions or analyzer configuration. Public stats entry points already have JSDoc; exact missing-function evidence and a provider rerun are needed to verify the reported threshold.
+
 ### 2026-10-26 - PR #112 (issue #106)
 
 - Informational, CodeRabbit review at `65aaf727`: SUCCESS; no actionable or inline findings. Independent QA/security and required gates PASS at that head.
