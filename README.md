@@ -140,6 +140,11 @@ gap was therefore visible as a failure with no corresponding failover row; a fut
 lock-held, marker-guard, or superseded attempt is represented explicitly as
 `switch_dropped` with its reason and elapsed time.
 
+The log is size-bounded: on each append, rows older than 30 days (the ledger's
+default read window) are compacted away in one atomic rewrite gated on the
+file's oldest row, so most appends rewrite nothing; `/relay purge` also clears
+the file outright.
+
 ## Reading the event ledger and stats
 
 Besides `switches.jsonl`, the relay writes a per-turn event ledger on OpenCode v2 to
@@ -205,11 +210,14 @@ rebuilt.
 
 `/relay purge` (or the `relay_purge` tool, which takes no arguments; both
 OpenCode v2 only) deletes every `events-*.jsonl` file inside the ledger
-directory and nothing else, then rebuilds `stats.json` from what remains right
-away, while `state.json`, config and `switches.jsonl` are untouched. If that
+directory and clears `switches.jsonl`, touching nothing else, then rebuilds
+`stats.json` from what remains right away, while `state.json`, config and the
+`salt` are untouched. If that
 snapshot write fails, the purge still reports its file count plus a fixed
 sanitized warning (`Warning: the stats snapshot could not be refreshed.`) and
-leaves the previous `stats.json` as it was. Stats and purge command/tool
+leaves the previous `stats.json` as it was. If the switch log cannot be cleared,
+both purge surfaces append `Warning: the switch log could not be cleared.`;
+event purging and snapshot refresh still proceed. Stats and purge command/tool
 surfaces are V2-only: v1 keeps its `relay_status` / `relay_init` surfaces and
 the shared startup snapshot behavior.
 

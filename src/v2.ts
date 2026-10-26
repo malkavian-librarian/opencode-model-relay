@@ -5,6 +5,7 @@ import { INIT_TOOL_DESCRIPTION, RELAY_TOOL_DESCRIPTION, createRelay, listProvide
 import { initConfig } from "./init"
 import { configFile, dataDir } from "./config"
 import { STATS_TOOL_INPUT, STATS_USAGE, parseStatsOptions, parseStatsToolInput, purgeAndRefreshStats, statsText } from "./stats"
+import { SWITCH_LOG_CLEAR_WARNING, clearSwitchLog } from "./switchlog"
 import type { EventLog } from "./ledger"
 import { modelKey, parseModel, type ClientLike, type ModelRef, type OcMessage } from "./types"
 import type { Controller } from "./controller"
@@ -430,9 +431,13 @@ function registerTools(env: Env, ctx: V2Ctx, controller: Controller, adapter: Cl
       })
       editor.add({
         name: "relay_purge",
-        description: "Delete all relay ledger event files (metadata-only usage data; the stats.json snapshot is rebuilt immediately from what remains). This cannot be undone.",
+        description: "Delete all relay ledger event files and clear the switch log (metadata-only usage data; the stats.json snapshot is rebuilt immediately from what remains). This cannot be undone.",
         input: emptyInput,
-        execute: async () => ({ content: purgeAndRefreshStats(ledger, ledgerDir) }),
+        execute: async () => {
+          const cleared = clearSwitchLog(ledgerDir)
+          const report = purgeAndRefreshStats(ledger, ledgerDir)
+          return { content: cleared ? report : `${report} ${SWITCH_LOG_CLEAR_WARNING}` }
+        },
       })
     }))
   } catch (e) { return Promise.resolve(e) }
@@ -455,7 +460,9 @@ function registerCommands(env: Env, ctx: V2Ctx, controller: Controller, adapter:
               return input ?? {}
             }
             if (sessionID && args === "purge") {
-              await emitSynthetic(ctx, sessionID, purgeAndRefreshStats(ledger, ledgerDir))
+              const cleared = clearSwitchLog(ledgerDir)
+              const report = purgeAndRefreshStats(ledger, ledgerDir)
+              await emitSynthetic(ctx, sessionID, cleared ? report : `${report} ${SWITCH_LOG_CLEAR_WARNING}`)
               return input ?? {}
             }
             if (sessionID && (args === "next" || args === "model" || args.startsWith("model "))) {
