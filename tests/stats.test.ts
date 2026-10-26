@@ -103,6 +103,25 @@ describe("renderStatsTable", () => {
 })
 
 describe("ledger->stats integration", () => {
+  it("counts known narrative spend at completion across UTC midnight without phantom activity", () => {
+    const l = new EventLog(dir(), true, 4402)
+    const midnight = Date.UTC(2026, 9, 20)
+    const now = midnight + 1000
+    l.append({ ts: midnight - 3, sessionID: "s", event: "turn", model: "prov/a", cost: 0.20, latencyMs: 100, tokens: { input: 1, output: 2 } })
+    l.append({ ts: midnight - 2, sessionID: "s", event: "judge", model: "prov/a", verdict: "switch", helperCostUsd: 0.02 })
+    l.append({ ts: midnight - 1, sessionID: "s", event: "switch", sw: { kind: "quota", from: "prov/a", to: "prov/b" } })
+    const baseline = buildStats(l.read(30, now), now)
+    expect(l.append({ ts: midnight, sessionID: "s", event: "narrative", model: "prov/a", helperCostUsd: 0.03 })).toBe(true)
+    l.append({ ts: now + 1, sessionID: "s", event: "narrative", model: "prov/future", helperCostUsd: 1 })
+    l.append({ ts: now - 31 * DAY, sessionID: "s", event: "narrative", model: "prov/old", helperCostUsd: 1 })
+    const stats = buildStats(l.read(30, now), now)
+    expect(Object.keys(stats.models)).toEqual(["prov/a"])
+    expect(stats.models["prov/a"]!["2026-10-19"]).toEqual(baseline.models["prov/a"]!["2026-10-19"])
+    expect(stats.models["prov/a"]!["2026-10-20"]).toEqual({ turns: 0, failures: {}, judgeCalls: 0, judgeRejects: 0, switchAway: 0, survivalOk: 0, survivalFail: 0, survivalCensored: 0, tokensIn: 0, tokensOut: 0, costUsd: 0, helperCostUsd: 0.03 })
+    expect(renderStatsTable(stats).split("\n").find((r) => r.startsWith("prov/a |"))).toBe("prov/a | 1 | 0 | 100% | 1 | 0% | 100ms | 1/2 | $0.20 | $0.05")
+    // buildStats also independently prunes future and expired events, without relying on EventLog.read.
+    expect(buildStats(l.read(100, now + 1), now)).toEqual(stats)
+  })
   it("a real EventLog round-trips into buckets", () => {
     const d = dir(); const pid = 4401
     const l = new EventLog(d, true, pid)

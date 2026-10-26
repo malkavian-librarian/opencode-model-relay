@@ -330,6 +330,8 @@ export class Controller {
           const turnID = [...resumed].reverse().find((m) => m.info.role === "user")?.info.id
           const w = await writeNarrative({ chat: d.chat, cfg: d.cfg, key }, ex)
           if (!w) { await this.toast("handover_failed", {}, "warning"); return }
+          // Successful helper work is spent even when delivery below is stale or unavailable.
+          if (w.costUsd !== undefined) this.led({ ts: d.now(), sessionID, event: "narrative", model: current, tier: this.tierOf(current), helperCostUsd: w.costUsd })
           if (!d.lock.tryAcquire(sessionID)) return
           try {
             const latest = await this.fetchMessages(sessionID)
@@ -444,6 +446,7 @@ export class Controller {
         ts: this.d.now(), sessionID, event: "turn", model, tier: this.tierOf(model),
         ...(tin !== undefined && tout !== undefined ? { tokens: { input: tin, output: tout } } : {}),
         ...(lat !== undefined ? { latencyMs: lat } : {}),
+        ...(ms(src.cost) !== undefined ? { cost: src.cost } : {}),
       })
       this.storm.delete(sessionID) // the turn is over: the retry storm is spent
       const rec = this.d.state.get(sessionID)

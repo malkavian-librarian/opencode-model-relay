@@ -27,7 +27,7 @@ export type OcPart =
   | { type: string; [k: string]: unknown }
 
 export interface OcMessage {
-  info: { id: string; role: "user" | "assistant"; providerID?: string; modelID?: string; agent?: string; mode?: string; model?: { providerID: string; modelID: string }; tokens?: { input?: number; output?: number; reasoning?: number } }
+  info: { id: string; role: "user" | "assistant"; providerID?: string; modelID?: string; agent?: string; mode?: string; cost?: number; model?: { providerID: string; modelID: string }; tokens?: { input?: number; output?: number; reasoning?: number } }
   parts: OcPart[]
 }
 

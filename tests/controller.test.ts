@@ -468,6 +468,18 @@ describe("OpenCode provider discovery", () => {
 })
 
 describe("Controller.onSessionIdle", () => {
+  it.each([0.20, 0, undefined, null, "0.2", -1, NaN, Infinity, -Infinity])("records the turn but only known valid USD cost: %s", async (cost) => {
+    const { c, d, messages } = setup()
+    Object.assign(messages[1]!.info, { cost })
+    const append = vi.fn((_fields: any) => true)
+    d.ledger = { append }
+    await c.onSessionIdle("s1")
+    const turns = append.mock.calls.map(([e]) => e).filter((e) => e.event === "turn")
+    expect(turns).toHaveLength(1)
+    expect(turns[0]).toMatchObject({ model: "a/1", ts: 1_000_000 })
+    if (typeof cost === "number" && Number.isFinite(cost) && cost >= 0) expect(turns[0].cost).toBe(cost)
+    else expect(turns[0]).not.toHaveProperty("cost")
+  })
   it("lifts the failing model's blacklist on the next successful turn and persists the clear", async () => {
     const { c, d } = setup({ cfg: { privacy: { consent: true } }, env: { OPENROUTER_API_KEY: "k" } })
     await c.onSessionError("s1", { name: "APIError", data: { statusCode: 402, responseBody: "insufficient credits" } })
@@ -583,20 +595,105 @@ describe("Controller.status", () => {
 })
 
 describe("deferred narrative freshness", () => {
-  for (const change of ["pick", "unadopted pick", "new turn", "forged marker turn", "automatic switch", "switch away and back", "assistant progress", "locked", "read failure", "prompt throws", "prompt rejects"] as const) {
-    it(`discards stale work or contains failures: ${change}`, async () => {
-      let release!: (r: { text: string }) => void
-      const narrative = new Promise<{ text: string }>((r) => { release = r })
-      const { c, d, calls, messages } = setup({
-        cfg: { privacy: { consent: true }, handover: { maxCallsPerSession: 1 }, tiers: { primary: "a/1", secondary: ["b/2", "c/3"] } },
-        env: { OPENROUTER_API_KEY: "k" }, chat: () => narrative,
-      })
+  for (const guard of ["no consent", "no key", "cap", "manual", "superseded", "child"] as const) {
+    it(`${guard} starts no narrative and records no narrative spend`, async () => {
+      const { c, d, messages, calls } = setup({ cfg: { privacy: { consent: guard !== "no consent" }, handover: { maxCallsPerSession: guard === "cap" ? 0 : 1 } }, env: guard === "no key" ? {} : { OPENROUTER_API_KEY: "k" }, parentID: guard === "child" ? "parent" : undefined })
+      const events: any[] = []
+      d.ledger = { append: (e) => { events.push(e); return true } }
+      if (guard === "superseded") d.client.session.abort = async () => {
+        messages.push({ info: { id: "pick", role: "user", model: { providerID: "z", modelID: "9" } }, parts: [] })
+      }
+      if (guard === "manual") await c.manualSwitch("s1", "b/2")
+      else await c.onSessionError("s1", err429)
+      if (guard === "child") await c.onSessionIdle("s1")
+      await new Promise<void>((r) => setImmediate(r))
+      expect(calls.chat).toEqual([])
+      expect(events.filter((e) => e.event === "narrative")).toEqual([])
+      if (guard === "child") expect(events).toEqual([])
+    })
+  }
+  for (const costUsd of [0, undefined, null, "0.03", -1, NaN, Infinity, -Infinity]) {
+    it(`delivers a successful narrative with known-cost-only accounting: ${String(costUsd)}`, async () => {
+      const { c, d, calls, messages } = setup({ cfg: { privacy: { consent: true } }, env: { OPENROUTER_API_KEY: "k" }, chat: async () => ({ text: "SUMMARY", costUsd }) })
+      const events: any[] = []
+      d.ledger = { append: (e) => { events.push(e); return true } }
       d.client.session.prompt = (a) => {
         calls.prompt.push(a)
         messages.push({ info: { id: `h${calls.prompt.length}`, role: "user", model: a.body.model }, parts: a.body.parts })
         return Promise.resolve({})
       }
       expect(await c.onSessionError("s1", err429)).toBe(true)
+      await new Promise<void>((r) => setImmediate(r))
+      expect(calls.prompt).toHaveLength(2)
+      const rows = events.filter((e) => e.event === "narrative")
+      expect(rows).toHaveLength(costUsd === 0 ? 1 : 0)
+      if (costUsd === 0) expect(rows[0].helperCostUsd).toBe(0)
+    })
+  }
+  for (const ledger of ["disabled", "false", "throws"] as const) {
+    it(`ledger ${ledger} cannot block eligible delivery`, async () => {
+      const { c, d, calls, messages } = setup({ cfg: { privacy: { consent: true } }, env: { OPENROUTER_API_KEY: "k" } })
+      if (ledger !== "disabled") d.ledger = { append: () => { if (ledger === "throws") throw new Error("unavailable"); return false } }
+      d.client.session.prompt = (a) => {
+        calls.prompt.push(a)
+        messages.push({ info: { id: `h${calls.prompt.length}`, role: "user", model: a.body.model }, parts: a.body.parts })
+        return Promise.resolve({})
+      }
+      await expect(c.onSessionError("s1", err429)).resolves.toBe(true)
+      await new Promise<void>((r) => setImmediate(r))
+      expect(calls.prompt).toHaveLength(2)
+    })
+  }
+  for (const result of ["empty", "invalid", "reject"] as const) {
+    it(`null writer result (${result}) keeps the failure toast and creates no spend`, async () => {
+      const { c, d, calls } = setup({ cfg: { privacy: { consent: true } }, env: { OPENROUTER_API_KEY: "k" }, chat: async () => {
+        if (result === "reject") throw new Error("unavailable")
+        return { text: result === "empty" ? "" : null, costUsd: 0.03 }
+      } })
+      const events: any[] = []
+      d.ledger = { append: (e) => { events.push(e); return true } }
+      await c.onSessionError("s1", err429)
+      await new Promise<void>((r) => setImmediate(r))
+      expect(events.filter((e) => e.event === "narrative")).toEqual([])
+      expect(calls.prompt).toHaveLength(1)
+      expect(calls.toast.join(" ")).toMatch(/summary|handover/i)
+    })
+  }
+  it("attributes two independently completing helpers to their original models", async () => {
+    const releases: ((r: { text: string; costUsd: number }) => void)[] = []
+    const { c, d, messages, calls } = setup({ cfg: { privacy: { consent: true }, handover: { maxCallsPerSession: 2 }, tiers: { primary: "a/1", secondary: ["b/2", "c/3"] } }, env: { OPENROUTER_API_KEY: "k" }, chat: () => new Promise((r) => { releases.push(r) }) })
+    const events: any[] = []
+    d.ledger = { append: (e) => { events.push(e); return true } }
+    await c.onSessionError("s1", err429)
+    messages.push(asst("b1", "b", "2"))
+    await c.onSessionError("s1", err429)
+    expect(releases).toHaveLength(2)
+    releases[1]!({ text: "second", costUsd: 0.02 })
+    releases[0]!({ text: "first", costUsd: 0.03 })
+    await new Promise<void>((r) => setImmediate(r))
+    expect(events.filter((e) => e.event === "narrative").map((e) => [e.model, e.helperCostUsd])).toEqual([["b/2", 0.02], ["a/1", 0.03]])
+    expect(calls.logs).toHaveLength(2)
+    expect(calls.prompt).toHaveLength(2) // neither result is eligible for delivery
+  })
+  for (const change of ["pick", "unadopted pick", "new turn", "forged marker turn", "automatic switch", "switch away and back", "assistant progress", "locked", "read failure", "prompt throws", "prompt rejects"] as const) {
+    it(`discards stale work or contains failures: ${change}`, async () => {
+      let release!: (r: { text: string; costUsd: number }) => void
+      const narrative = new Promise<{ text: string; costUsd: number }>((r) => { release = r })
+      const { c, d, calls, messages } = setup({
+        cfg: { privacy: { consent: true }, handover: { maxCallsPerSession: 1 }, tiers: { primary: "a/1", secondary: ["b/2", "c/3"] } },
+        env: { OPENROUTER_API_KEY: "k" }, chat: () => narrative,
+      })
+      const append = vi.fn(() => true)
+      d.ledger = { append }
+      d.client.session.prompt = (a) => {
+        calls.prompt.push(a)
+        messages.push({ info: { id: `h${calls.prompt.length}`, role: "user", model: a.body.model }, parts: a.body.parts })
+        return Promise.resolve({})
+      }
+      expect(await c.onSessionError("s1", err429)).toBe(true)
+      expect(calls.logs).toHaveLength(1) // switch and feedback finish before the writer resolves
+      expect(calls.toast.join(" ")).toContain("b/2")
+      expect(append.mock.calls.map((args: any[]) => args[0]).filter((e) => e.event === "narrative")).toEqual([])
       if (change === "pick") c.adoptPick("s1", "z/9")
       if (change === "unadopted pick") messages[messages.length - 1]!.info.model = { providerID: "z", modelID: "9" }
       if (change === "new turn") messages.push({ info: { id: "u2", role: "user", model: { providerID: "b", modelID: "2" } }, parts: [{ type: "text", text: "new request" }] })
@@ -615,8 +712,14 @@ describe("deferred narrative freshness", () => {
       const before = { ...d.state.get("s1") }
       const log = vi.fn()
       d.log = log
-      release({ text: "OBSOLETE NARRATIVE" })
+      const switchRows = calls.logs.length
+      d.now = () => 2_000_000
+      release({ text: "OBSOLETE NARRATIVE", costUsd: 0.03 })
       await new Promise<void>((r) => setImmediate(r))
+      expect(append.mock.calls.map((args: any[]) => args[0]).filter((e) => e.event === "narrative")).toEqual([
+        { ts: 2_000_000, sessionID: "s1", event: "narrative", model: "a/1", tier: 1, helperCostUsd: 0.03 },
+      ])
+      expect(calls.logs).toHaveLength(switchRows)
       expect(calls.prompt).toHaveLength(count + (change === "assistant progress" ? 1 : 0))
       if (change === "assistant progress") expect(calls.prompt[count].body).toMatchObject({ model: { providerID: "b", modelID: "2" }, agent: "build" })
       expect(d.state.get("s1")).toEqual(before)

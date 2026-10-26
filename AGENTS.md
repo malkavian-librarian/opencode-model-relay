@@ -106,9 +106,9 @@ over with a structured summary. Design: `docs/superpowers/specs/2026-10-18-model
 ## Gotchas (max 15, newest at bottom)
 
 - Older guidance: [graduated development gotchas](docs/process.md#graduated-development-gotchas).
-- Superseded switches spent helper attempts and late narratives could restart stale turns -> reserve after enactment and lock/check the resumed model, turn and intent before dispatch; label only scheduled narratives deferred (2026-10-24)
 - Tail-window reads hid ledger rows (malformed tails, oversized valid model refs) -> bound refs to 120 chars and validate rows in one shared zod schema, scanning backward to the requested valid count then reversing (2026-10-25)
 - OpenCode V2 command text lives in `CommandInvocation.prompt.text` -> test official host shapes and keep legacy `arguments` fallback-only (2026-10-24)
+- Zero stats costs -> preserve V2 assistant USD cost and append known narrative spend for the original model before delivery guards; never rewrite immediate switch rows (2026-10-26)
 
 ## Bugs - [open]/[fixed] + repro (max 10)
 

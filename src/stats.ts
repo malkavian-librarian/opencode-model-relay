@@ -87,10 +87,10 @@ export function buildStats(events: LedgerEvent[], now: number): StatsDoc {
     } else if (e.event === "judge") {
       b.judgeCalls++
       if (e.verdict === "switch") b.judgeRejects++
-      if (e.helperCostUsd !== undefined) b.helperCostUsd += e.helperCostUsd
     } else if (e.event === "switch" && e.sw && e.sw.kind !== "manual" && e.sw.kind !== "switch_dropped") {
       b.switchAway++ // an effective auto switch IS the model being switched away from
     }
+    if ((e.event === "judge" || e.event === "narrative") && e.helperCostUsd !== undefined) b.helperCostUsd += e.helperCostUsd
   }
 
   // Median latency per bucket from the turn samples in it.
