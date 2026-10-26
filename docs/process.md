@@ -123,7 +123,7 @@ Publishing is an owner action; agents never publish or push tags.
 | `docs/superpowers/plans/2026-10-18-v1.0-failover-handover.md` | v1.0 implementation plan. |
 | `docs/superpowers/plans/2026-10-23-model-relay-levels-redesign.md` | Epic #62 levels redesign plan and child issue map. |
 
-## Epic #62 child status (2026-10-25 live)
+## Epic #62 child status (2026-10-26 live)
 
 | Child | Scope | Status | Next |
 |-------|-------|--------|------|
@@ -134,10 +134,10 @@ Publishing is an owner action; agents never publish or push tags.
 | #67 | /relay model + /relay next fast-path commands | ✅ Done (PR #84) | — |
 | #68 | fast failover: plain-tail default, async narrative, latency budget | ✅ Done (PR #85) | — |
 | #69 | find levels: free-model discovery, health-aware resolution, consent gate | ✅ Done (PR #86) | — |
-| #70 | observability: verbose switch-log + /relay status ladder view | 🔁 Backlog (reopened: two Important QA findings in `src/switchlog.ts`, remediation pending) | #70 remediation |
+| #70 | observability: verbose switch-log + /relay status ladder view | ✅ Done (PR #92) | — |
 | #71 | docs sweep: README/spec/SECURITY/CHANGELOG/AGENTS | ✅ Done (PR #88, `e7a3be8`) | — |
 | #72 | deploy & enable plugin on owner machine (`.disabled` artifact removed, exclusive loading) | ✅ Done (build `90dffbb`, live-verified) | — |
-| #73 | wrap-up: commit all, delete merged branches, worktree audit, push | 🔁 Backlog (reopened: blocked by #70; cleanup done and evidenced) | #70 |
+| #73 | wrap-up: commit all, delete merged branches, worktree audit, push | ✅ Done (closed 2026-10-25) | — |
 | #89 | v2 fix: /relay command text from `CommandInvocation.prompt` | ✅ Done (PR #90, `90dffbb`) | — |
 
 ## Graduated development gotchas
@@ -145,6 +145,7 @@ Publishing is an owner action; agents never publish or push tags.
 Older guidance moved from `AGENTS.md` to keep its cap; these rules still apply.
 
 - Zero stats costs -> preserve V2 assistant USD cost and append known narrative spend for the original model before delivery guards; never rewrite immediate switch rows (2026-10-26)
+
 - Tail-window reads hid ledger rows (malformed tails, oversized valid model refs) -> bound refs to 120 chars and validate rows in one shared zod schema, scanning backward to the requested valid count then reversing (2026-10-25)
 
 - OpenCode V2 command text lives in `CommandInvocation.prompt.text` -> test official host shapes and keep legacy `arguments` fallback-only (2026-10-24)

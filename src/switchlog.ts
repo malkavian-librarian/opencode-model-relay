@@ -21,6 +21,7 @@ const MAX_TAIL_BYTES = 64 * 1024
 const MODEL_REF_MAX_CHARS = 120
 const MODEL_REF = /^[A-Za-z0-9._:-]+(?:\/[A-Za-z0-9._:-]+)+$/
 const OMITTED_MODEL_REF = `unknown/${"x".repeat(112)}`
+const RETENTION_MS = 30 * 864e5
 
 /** One schema is the single validation source for both ledger boundaries (append and read), so the two paths cannot drift. */
 const switchRowSchema = z.object({
@@ -35,6 +36,14 @@ const switchRowSchema = z.object({
 }).refine((row) => (row.kind === "switch_dropped") === (row.reason !== undefined), { message: "switch_dropped requires a reason" })
 
 export type SwitchLogRow = z.infer<typeof switchRowSchema>
+
+/** One parse path for compaction: the shared schema, so retained rows cannot drift from recent()'s validation. */
+const parseSwitchRow = (line: string): SwitchLogRow | undefined => {
+  try {
+    const parsed = switchRowSchema.safeParse(JSON.parse(line))
+    return parsed.success ? parsed.data : undefined
+  } catch { return undefined }
+}
 
 function readSalt(f: string): Buffer | null {
   try {
@@ -85,6 +94,27 @@ export class SwitchLog {
     return this.salt
   }
 
+  /** Retention: while the file's oldest row is inside the 30-day window no rewrite happens; once it ages out, out-of-window rows and malformed lines are dropped in one atomic rewrite. Never throws. */
+  private compactTo(ts: number): void {
+    // Earlier of wall clock and the incoming row, so a skewed future ts cannot age out fresh rows.
+    const now = Math.min(Date.now(), ts)
+    const active = path.join(this.dir, "switches.jsonl")
+    let text: string
+    try { text = fs.readFileSync(active, "utf8") } catch { return }
+    const lines = text.split("\n").filter(Boolean)
+    if (lines.length === 0) return
+    // Anchor on the oldest valid row, so malformed leading lines do not churn a fresh file.
+    const anchor = lines.map(parseSwitchRow).find((row): row is SwitchLogRow => row !== undefined)
+    if (anchor && anchor.ts >= now - RETENTION_MS) return
+    const floor = now - RETENTION_MS
+    const kept = lines.filter((line) => { const row = parseSwitchRow(line); return row !== undefined && row.ts >= floor })
+    const tmp = path.join(this.dir, `switches.jsonl.tmp-${process.pid}-${Math.random().toString(36).slice(2, 8)}`)
+    try {
+      fs.writeFileSync(tmp, kept.length > 0 ? kept.join("\n") + "\n" : "", { mode: 0o600 })
+      fs.renameSync(tmp, active)
+    } catch { try { fs.unlinkSync(tmp) } catch { /* temp already gone */ } }
+  }
+
   /** Appends metadata with an HMAC session ID and finite non-negative duration; ledger failures never escape. */
   append(r: { ts: number; sessionID: string; from?: string; to?: string; kind: SwitchKind; reason?: SwitchDropReason; elapsedMs?: number; helperCostUsd?: number }): void {
     if (!this.enabled) return
@@ -101,6 +131,7 @@ export class SwitchLog {
       }
       if (!switchRowSchema.safeParse(row).success) return
       fs.mkdirSync(this.dir, { recursive: true, mode: 0o700 })
+      this.compactTo(row.ts)
       fs.appendFileSync(path.join(this.dir, "switches.jsonl"), JSON.stringify(row) + "\n", { mode: 0o600 })
     } catch { /* logging is best effort */ }
   }
@@ -132,4 +163,14 @@ export class SwitchLog {
       return out.reverse()
     } catch { return [] }
   }
+}
+
+export const SWITCH_LOG_CLEAR_WARNING = "Warning: the switch log could not be cleared."
+
+/** Both purge surfaces clear the switch log; returns true if removed or already absent, false on failure. Never throws. */
+export function clearSwitchLog(dir: string): boolean {
+  try {
+    fs.rmSync(path.join(dir, "switches.jsonl"), { force: true })
+    return true
+  } catch { return false }
 }

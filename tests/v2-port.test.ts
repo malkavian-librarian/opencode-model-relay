@@ -703,20 +703,24 @@ describe("v2 tools, commands and model list", () => {
     await until(() => calls.synthetic.some((x) => x.text.includes("a/1")))
     teardown?.()
   })
-  it("relay_purge and /relay purge delete only the event files, never other data", async () => {
+  it("relay_purge and /relay purge clear the event files and the switch log, never other data", async () => {
     const e = env()
     const ledgerDir = path.join(e.root, "data", "opencode-model-relay")
     fs.writeFileSync(path.join(ledgerDir, `events-${process.pid}.jsonl`), "\n")
+    fs.writeFileSync(path.join(ledgerDir, "switches.jsonl"), '{"kind":"sentinel"}\n')
     fs.writeFileSync(path.join(ledgerDir, "keep.txt"), "x")
     const { ctx, calls } = makeCtx()
     const teardown = await createV2Plugin(e.env).setup(ctx)
     const purgeTool = calls.tools.find((t) => t.name === "relay_purge")
     expect((await purgeTool!.execute(undefined, {})).content).toContain("Purged 1 ledger file(s).")
     expect(fs.readdirSync(ledgerDir)).not.toContain(`events-${process.pid}.jsonl`)
+    expect(fs.existsSync(path.join(ledgerDir, "switches.jsonl"))).toBe(false)
     expect(fs.readdirSync(ledgerDir)).toContain("keep.txt")
     const relayCmd = calls.commands.find((c) => c.name === "relay")
+    fs.writeFileSync(path.join(ledgerDir, "switches.jsonl"), '{"kind":"sentinel"}\n')
     await relayCmd!.execute({ sessionID: "s1", prompt: { text: "purge" }, delivery: "steer" })
     await until(() => calls.synthetic.some((x) => x.text.includes("Purged")))
+    expect(fs.existsSync(path.join(ledgerDir, "switches.jsonl"))).toBe(false)
     teardown?.()
   })
 
@@ -804,7 +808,7 @@ describe("v2 stats and purge surfaces (#103)", () => {
   const WARNING = "Warning: the stats snapshot could not be refreshed."
   const DAY = 864e5
 
-  it("relay_purge rebuilds stats.json immediately; other data survives; a zero-file repeat refreshes too", async () => {
+  it("relay_purge rebuilds stats.json immediately and clears the switch log; other data survives; a zero-file repeat refreshes too", async () => {
     const e = env()
     const ledgerDir = path.join(e.root, "data", "opencode-model-relay")
     const statsFile = path.join(ledgerDir, "stats.json")
@@ -821,7 +825,6 @@ describe("v2 stats and purge surfaces (#103)", () => {
       const before = {
         state: fs.readFileSync(e.stateFile, "utf8"),
         salt: fs.readFileSync(path.join(ledgerDir, "salt"), "utf8"),
-        sw: fs.readFileSync(path.join(ledgerDir, "switches.jsonl"), "utf8"),
         cfg: fs.readFileSync(path.join(e.root, "cfg", "opencode", "opencode-model-relay.jsonc"), "utf8"),
         keep: fs.readFileSync(path.join(ledgerDir, "keep.txt"), "utf8"),
       }
@@ -832,7 +835,7 @@ describe("v2 stats and purge surfaces (#103)", () => {
       expect(snap.generatedAt).toBeGreaterThanOrEqual(t0)
       expect(fs.readFileSync(e.stateFile, "utf8")).toBe(before.state)
       expect(fs.readFileSync(path.join(ledgerDir, "salt"), "utf8")).toBe(before.salt)
-      expect(fs.readFileSync(path.join(ledgerDir, "switches.jsonl"), "utf8")).toBe(before.sw)
+      expect(fs.existsSync(path.join(ledgerDir, "switches.jsonl"))).toBe(false)
       expect(fs.readFileSync(path.join(e.root, "cfg", "opencode", "opencode-model-relay.jsonc"), "utf8")).toBe(before.cfg)
       expect(fs.readFileSync(path.join(ledgerDir, "keep.txt"), "utf8")).toBe(before.keep)
       expect((await purgeTool.execute(undefined, {})).content).toBe("Purged 0 ledger file(s).") // zero-file repeat still refreshes
@@ -840,11 +843,12 @@ describe("v2 stats and purge surfaces (#103)", () => {
     } finally { teardown?.() }
   })
 
-  it("/relay purge also rebuilds the snapshot immediately (command surface, after reseeding)", async () => {
+  it("/relay purge also rebuilds the snapshot immediately and clears the switch log (command surface, after reseeding)", async () => {
     const e = env()
     const ledgerDir = path.join(e.root, "data", "opencode-model-relay")
     const l = new EventLog(ledgerDir, true)
     l.append({ ts: Date.now() - 1000, sessionID: "s1", event: "turn", model: "a/1" })
+    fs.writeFileSync(path.join(ledgerDir, "switches.jsonl"), '{"kind":"sentinel"}\n')
     const { ctx, calls } = makeCtx()
     const teardown = await createV2Plugin(e.env).setup(ctx)
     try {
@@ -852,6 +856,7 @@ describe("v2 stats and purge surfaces (#103)", () => {
       await relayCmd.execute({ sessionID: "s1", prompt: { text: "purge" }, delivery: "steer" })
       await until(() => calls.synthetic.some((x) => x.text.includes("Purged")))
       expect(calls.synthetic.at(-1)?.text).toBe("Purged 1 ledger file(s).")
+      expect(fs.existsSync(path.join(ledgerDir, "switches.jsonl"))).toBe(false)
       expect(JSON.parse(fs.readFileSync(path.join(ledgerDir, "stats.json"), "utf8")).models).toEqual({})
     } finally { teardown?.() }
   })
@@ -948,7 +953,39 @@ describe("v2 stats and purge surfaces (#103)", () => {
       const purgeTool = calls.tools.find((t) => t.name === "relay_purge")!
       expect(purgeTool.input).toEqual({ type: "object", properties: {}, additionalProperties: false })
       expect(purgeTool.description).toContain("immediately")
+      expect(purgeTool.description).toContain("switch log")
     } finally { teardown?.() }
+  })
+
+  it("a failed switch-log removal warns sanitized on both purge surfaces while event purge and stats refresh continue", async () => {
+    const e = env()
+    const ledgerDir = path.join(e.root, "data", "opencode-model-relay")
+    const switchFile = path.join(ledgerDir, "switches.jsonl")
+    const sentinel = '{"kind":"sentinel"}\n'
+    const l = new EventLog(ledgerDir, true)
+    l.append({ ts: Date.now() - 1000, sessionID: "s", event: "turn", model: "a/1" })
+    fs.writeFileSync(switchFile, sentinel)
+    const { ctx, calls } = makeCtx()
+    const teardown = await createV2Plugin(e.env).setup(ctx)
+    const rm = fs.rmSync
+    const spy = vi.spyOn(fs, "rmSync").mockImplementation((file, options) => {
+      if (file === switchFile) throw new Error("E_PERM secret /C:/users/path")
+      return rm(file, options)
+    })
+    try {
+      const warning = "Warning: the switch log could not be cleared."
+      const purgeTool = calls.tools.find((t) => t.name === "relay_purge")!
+      expect((await purgeTool.execute(undefined, {})).content).toBe(`Purged 1 ledger file(s). ${warning}`)
+      expect(fs.readFileSync(switchFile, "utf8")).toBe(sentinel)
+      const relayCmd = calls.commands.find((c) => c.name === "relay")!
+      await relayCmd.execute({ sessionID: "s1", prompt: { text: "purge" }, delivery: "steer" })
+      await until(() => calls.synthetic.some((x) => x.text.includes("Purged")))
+      expect(calls.synthetic.at(-1)?.text).toBe(`Purged 0 ledger file(s). ${warning}`)
+      expect(fs.readFileSync(switchFile, "utf8")).toBe(sentinel)
+      expect(JSON.parse(fs.readFileSync(path.join(ledgerDir, "stats.json"), "utf8")).models).toEqual({})
+      expect(calls.switchModel).toEqual([])
+      expect(calls.prompt).toEqual([])
+    } finally { spy.mockRestore(); teardown?.() }
   })
 
   it("a failed stats snapshot write during purge warns sanitized on both surfaces and switches nothing", async () => {
