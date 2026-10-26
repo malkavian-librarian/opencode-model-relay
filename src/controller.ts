@@ -5,7 +5,7 @@ import { classify, classifyRetryMessage } from "./classifier"
 import type { Classified } from "./types"
 import {
   buildLadder, clearSuccess, effectiveMaxSwitches, hasRelayMarker, recordFailure, triedThisTurn,
-  isValidDiscoveredModelId, walkFromTopAsync, type FindResolutionInput, type ModelHealth,
+  isValidDiscoveredModelId, walkCircular, walkFromTopAsync, type FindResolutionInput, type ModelHealth,
 } from "./strategy"
 import { FIND_CACHE_TTL_MS } from "./state"
 import { heuristicReasons, observeTurn } from "./heuristics"
@@ -169,7 +169,9 @@ export class Controller {
         const ex = extractFromMessages(msgs, this.d.cfg.handover)
         const text = buildHandover({ cfg: this.d.cfg, ex, from: current, to: target, reason: "quality", summary: null })
         const rec = this.d.state.get(sessionID)
-        this.d.state.set(sessionID, { ...rec, pluginPinned: target, pendingHandover: { to: target, at: started }, updated: started })
+        const next = { ...rec, pluginPinned: target, pendingHandover: { to: target, at: started }, updated: started }
+        delete next.circularOrigin; delete next.circularTransitions; delete next.circularFlows
+        this.d.state.set(sessionID, next)
         delete this.d.health[target]
         this.d.state.save()
         const superseded = await this.enactSwitch(sessionID, current, { to: parseModel(target), handoverText: text })
@@ -254,13 +256,16 @@ export class Controller {
 
       const ladder = buildLadder(d.cfg)
       const input = this.findInput(current, sessionID, now)
-      const decision = await walkFromTopAsync({
-        ...input, ladder, tried: triedThisTurn(msgs),
-        switchCount: rec.switchCount, maxSwitches: effectiveMaxSwitches(d.cfg),
-      })
+      const decision = d.cfg.maxCircularFlows > 0
+        ? walkCircular({ ...input, ladder, switchCount: rec.switchCount, maxSwitches: effectiveMaxSwitches(d.cfg), maxCircularFlows: d.cfg.maxCircularFlows, circularFlows: rec.circularFlows })
+        : await walkFromTopAsync({ ...input, ladder, tried: triedThisTurn(msgs), switchCount: rec.switchCount, maxSwitches: effectiveMaxSwitches(d.cfg) })
       let to: string
       if (decision.action === "switch") to = decision.to
       else {
+        if (d.cfg.maxCircularFlows > 0) {
+          await this.toast("cap_reached", {}, "warning", EXHAUSTED_HINT)
+          return false
+        }
         // AC-07 onExhausted acts: a last-resort hop to the deepest healthy level (even at the cap,
         // P1-F4); none healthy -> the /relay next hint, never a silent no-op.
         const fallback = await walkFromTopAsync({
@@ -290,6 +295,14 @@ export class Controller {
       const next: typeof rec = {
         ...d.state.get(sessionID), pluginPinned: to, pendingHandover: { to, at: now },
         switchCount: rec.switchCount + 1, helperCalls, updated: now,
+      }
+      if (d.cfg.maxCircularFlows > 0) {
+        const origin = rec.circularOrigin ?? current
+        const transitions = (rec.circularTransitions ?? 0) + 1
+        const completed = (rec.circularFlows ?? 0) + (to === origin && transitions >= 2 ? 1 : 0)
+        next.circularOrigin = origin
+        next.circularTransitions = to === origin && transitions >= 2 ? 0 : transitions
+        next.circularFlows = completed
       }
       delete next.adoptedAt // the grace window belongs to an adopted pick, never to the plugin's own switch
       d.state.set(sessionID, next)
@@ -455,7 +468,12 @@ export class Controller {
         this.d.state.save()
       }
       if (rec.pendingHandover !== undefined) {
-        const { pendingHandover: _spent, ...rest } = rec // the handover turn ended: the intent marker is spent
+        const { pendingHandover: _spent, circularOrigin: _origin, circularTransitions: _transitions, circularFlows: _flows, ...rest } = rec // the handover turn ended: the intent marker is spent
+        this.d.state.set(sessionID, { ...rest, updated: this.d.now() })
+        this.d.state.save()
+      }
+      else if (rec.circularOrigin !== undefined || rec.circularTransitions !== undefined || rec.circularFlows !== undefined) {
+        const { circularOrigin: _origin, circularTransitions: _transitions, circularFlows: _flows, ...rest } = rec
         this.d.state.set(sessionID, { ...rest, updated: this.d.now() })
         this.d.state.save()
       }
@@ -480,7 +498,9 @@ export class Controller {
       locked = d.lock.tryAcquire(sessionID)
       if (!locked) return
       const now = d.now()
-      d.state.set(sessionID, { ...d.state.get(sessionID), pluginPinned: pick, adoptedAt: now, updated: now })
+      const adopted = { ...d.state.get(sessionID), pluginPinned: pick, adoptedAt: now, updated: now }
+      delete adopted.circularOrigin; delete adopted.circularTransitions; delete adopted.circularFlows
+      d.state.set(sessionID, adopted)
       delete d.health[pick] // the owner chose it: cooldown, blacklist and failure count all clear, once
       d.state.save()
     } catch {
@@ -637,6 +657,7 @@ export class Controller {
         `pinned: ${rec?.pluginPinned ?? "none"}`,
         `adoptedAt: ${rec?.adoptedAt ?? "none"}`,
         `switches: ${rec?.switchCount ?? 0}`,
+        `circular: ${d.cfg.maxCircularFlows} (completed ${rec?.circularFlows ?? 0})`,
         `consent: ${d.cfg.privacy.consent ? "on" : "off"}`,
         `key: ${d.env[d.cfg.openrouter.keyEnv] ? "set" : "missing"}`,
         `counts: manual ${manual}, auto ${auto}`,

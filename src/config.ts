@@ -83,6 +83,7 @@ export const ConfigSchema = z
       .default({}),
     cooldownMs: z.number().int().positive().default(60000),
     maxSwitchesPerSession: z.number().int().positive().default(6),
+    maxCircularFlows: z.number().int().min(0).max(3).default(0),
     onExhausted: z.literal("stop").default("stop"),
     narrator: z
       .object({

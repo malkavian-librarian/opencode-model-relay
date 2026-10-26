@@ -81,6 +81,7 @@ File: `~/.config/opencode/opencode-model-relay.jsonc` (JSONC, max 64 KB). It is 
 | `judge.maxDailyUsd` | number | `0.5` (max 100) | Per-day judge spend cap across all sessions. |
 | `cooldownMs` | positive integer | `60000` | Base cooldown for a temporarily failed model; reset-aware cooldowns are capped at six hours. |
 | `maxSwitchesPerSession` | positive integer | `6` | Automatic cap; the default scales to at least `levels.length + 1`. Manual commands are exempt. |
+| `maxCircularFlows` | integer `0`–`3` | `0` | Opt-in deterministic circular failover cap. One flow returns to its origin after at least two model transitions (for example `A -> B -> C -> A`); zero preserves the normal top-down walk. |
 | `onExhausted` | `"stop"` | `"stop"` | Exhaustion falls back to the deepest healthy level; if none exists, the user is told to run `/relay next`. |
 | `narrator.verbosity` | `"off"` \| `"quiet"` \| `"normal"` \| `"chatty"` | `"normal"` | `quiet` shows only exhausted, cap and config problems. |
 | `narrator.tone` | `"plain"` \| `"british"` | `"plain"` | `plain` is terse. `british` is opt-in dry humour (tea, queueing, "Plan B"): every message still states the facts first (models, reason, or the actual condition), static text only, no repeats back to back. |

@@ -4,7 +4,7 @@ import os from "node:os"
 import path from "node:path"
 import { defaultConfig } from "../src/config"
 import {
-  buildLadder, clearSuccess, effectiveMaxSwitches, hasRelayMarker, resolveFindLevel, walkFromTopAsync,
+  buildLadder, clearSuccess, effectiveMaxSwitches, hasRelayMarker, resolveFindLevel, walkCircular, walkFromTopAsync,
   parseResetCooldown, recordFailure, triedThisTurn, walkFromTop,
   QUARANTINE_MS, RESET_COOLDOWN_MAX_MS,
   type Decision, type ModelHealth,
@@ -135,6 +135,30 @@ describe("walkFromTop (#64)", () => {
   it("exhaustion reasons: switch_cap when at the cap, no_candidates when nothing is walkable", () => {
     expect(w({ switchCount: 6 })).toEqual(CAP)
     expect(w({ current: "c/3", health: { "a/1": { permanent: true }, "b/2": { permanent: true } } })).toEqual(NONE)
+  })
+})
+
+describe("walkCircular (#122)", () => {
+  const ladder = ["a/1", "b/2", "c/3"] as any
+  const w = (current: string, o: Record<string, unknown> = {}) => walkCircular({
+    ladder, current, health: {}, now: 1000, switchCount: 0, maxSwitches: 20, maxCircularFlows: 3, ...o,
+  } as any)
+  it("walks forward and wraps deterministically", () => {
+    expect(w("a/1")).toEqual(sw("b/2"))
+    expect(w("b/2")).toEqual(sw("c/3"))
+    expect(w("c/3")).toEqual(sw("a/1"))
+  })
+  it("skips unhealthy entries without jumping backward", () => {
+    expect(w("a/1", { health: { "b/2": { permanent: true } } })).toEqual(sw("c/3"))
+    expect(w("a/1", { health: { "b/2": { permanent: true }, "c/3": { cooldownUntil: 1001 } } })).toEqual(NONE)
+  })
+  it("stops after the configured number of completed flows", () => {
+    expect(w("a/1", { circularFlows: 2 })).toEqual(sw("b/2"))
+    expect(w("a/1", { circularFlows: 3 })).toEqual(CAP)
+  })
+  it("does not cycle unresolved find entries or a one-model ladder", () => {
+    expect(w("a/1", { ladder: ["a/1", { find: { match: "b" } }] })).toEqual(NONE)
+    expect(w("a/1", { ladder: ["a/1"] })).toEqual(NONE)
   })
 })
 

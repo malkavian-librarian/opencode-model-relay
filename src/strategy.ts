@@ -194,6 +194,27 @@ export function walkFromTop(i: {
   return pick === undefined ? { action: "exhausted", reason: "no_candidates" } : { action: "switch", to: pick }
 }
 
+/** Deterministic cyclic walk: move forward from the current resolved ladder entry, never from the top. */
+export function walkCircular(i: {
+  ladder: readonly LevelEntry[]; current: string; health: Record<string, ModelHealth>
+  quarantine?: Readonly<Record<string, number>>; now: number; switchCount: number; maxSwitches: number
+  maxCircularFlows: number; circularFlows?: number
+}): Decision {
+  if (i.switchCount >= i.maxSwitches || (i.circularFlows ?? 0) >= i.maxCircularFlows) return { action: "exhausted", reason: "switch_cap" }
+  const levels = i.ladder.filter((entry): entry is string => typeof entry === "string")
+  const start = levels.indexOf(i.current)
+  if (start < 0 || levels.length < 2) return { action: "exhausted", reason: "no_candidates" }
+  const quarantined = (model: string): boolean => {
+    const at = i.quarantine?.[model]
+    return at !== undefined && i.now - at < QUARANTINE_MS
+  }
+  for (let offset = 1; offset < levels.length; offset++) {
+    const model = levels[(start + offset) % levels.length]!
+    if (isHealthy(i.health[model], i.now) && !quarantined(model)) return { action: "switch", to: model }
+  }
+  return { action: "exhausted", reason: "no_candidates" }
+}
+
 const RETRY_AFTER_TEXT = /retry-after[:\s]+(\d+(?:\.\d+)?)(?![\d.a-z])/i
 const ISO_TIMESTAMP = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?/
 const RESETS_AT = /resets?\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/i
