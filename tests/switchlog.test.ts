@@ -7,6 +7,8 @@ import { SwitchLog } from "../src/switchlog"
 const dir = () => fs.mkdtempSync(path.join(os.tmpdir(), "relay-sl-"))
 const rec = (ts: number) => ({ ts, sessionID: "s", from: "a/1", to: "b/2", kind: "quota" as const })
 const rows = (d: string) => fs.readFileSync(path.join(d, "switches.jsonl"), "utf8").trim().split("\n").map((x) => JSON.parse(x))
+/** A persisted row shape the shared schema accepts, for seeding the file directly like a prior process. */
+const seeded = (ts: number) => JSON.stringify({ ts, session: "0123456789abcdef", from: "a/1", to: "b/2", kind: "quota", elapsedMs: 5 })
 
 describe("SwitchLog", () => {
   it("writes JSONL with an HMAC'd, stable session id and no raw id", () => {
@@ -138,5 +140,51 @@ describe("SwitchLog", () => {
     const l = new SwitchLog(d, true)
     l.append(rec(2)); l.append(rec(3))
     expect(l.recent(10).map((r) => r.ts)).toEqual([2, 3])
+  })
+  it("compacts rows older than the 30-day window on append, keeping fresh rows visible to recent()", () => {
+    const now = Date.now()
+    const d = dir()
+    fs.writeFileSync(path.join(d, "switches.jsonl"), [seeded(1), seeded(2), seeded(now - 1000)].join("\n") + "\n")
+    const l = new SwitchLog(d, true)
+    l.append(rec(now))
+    expect(rows(d).map((r) => r.ts)).toEqual([now - 1000, now])
+    expect(l.recent(10).map((r) => r.ts)).toEqual([now - 1000, now])
+    if (process.platform !== "win32") expect(fs.statSync(path.join(d, "switches.jsonl")).mode & 0o077).toBe(0)
+  })
+  it("rewrites nothing while the oldest row is inside the window (anchor gate)", () => {
+    const now = Date.now()
+    const d = dir()
+    fs.writeFileSync(path.join(d, "switches.jsonl"), [seeded(now - 1000), seeded(now - 500)].join("\n") + "\n")
+    const rename = vi.spyOn(fs, "renameSync")
+    new SwitchLog(d, true).append(rec(now))
+    expect(rename).not.toHaveBeenCalled()
+    expect(rows(d).map((r) => r.ts)).toEqual([now - 1000, now - 500, now])
+    rename.mockRestore()
+  })
+  it("skips malformed lines during compaction", () => {
+    const now = Date.now()
+    const d = dir()
+    fs.writeFileSync(path.join(d, "switches.jsonl"), [seeded(1), "{malformed}", seeded(now - 1000)].join("\n") + "\n")
+    new SwitchLog(d, true).append(rec(now))
+    expect(rows(d).map((r) => r.ts)).toEqual([now - 1000, now])
+  })
+  it("no-ops when disabled, even with out-of-window rows on disk", () => {
+    const d = dir()
+    fs.writeFileSync(path.join(d, "switches.jsonl"), seeded(1) + "\n")
+    new SwitchLog(d, false).append(rec(Date.now()))
+    expect(fs.readFileSync(path.join(d, "switches.jsonl"), "utf8")).toBe(seeded(1) + "\n")
+  })
+  it("keeps the appended row, never throws and leaves no temp file when the rewrite rename fails", () => {
+    const now = Date.now()
+    const d = dir()
+    fs.writeFileSync(path.join(d, "switches.jsonl"), [seeded(1), seeded(now - 1000)].join("\n") + "\n")
+    const rename = vi.spyOn(fs, "renameSync").mockImplementation(() => { throw new Error("E_PERM") })
+    try {
+      const l = new SwitchLog(d, true)
+      expect(() => l.append(rec(now))).not.toThrow()
+      // Compaction is abandoned, not the append: the fresh row must still land after the old ones.
+      expect(rows(d).map((r) => r.ts)).toEqual([1, now - 1000, now])
+    } finally { rename.mockRestore() }
+    expect(fs.readdirSync(d).filter((n) => n.startsWith("switches.jsonl.tmp"))).toEqual([])
   })
 })
