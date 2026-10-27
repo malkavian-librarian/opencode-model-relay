@@ -7,11 +7,12 @@ import { configFile, dataDir } from "./config"
 import { STATS_TOOL_INPUT, STATS_USAGE, parseStatsOptions, parseStatsToolInput, purgeAndRefreshStats, statsText } from "./stats"
 import { SWITCH_LOG_CLEAR_WARNING, clearSwitchLog } from "./switchlog"
 import type { EventLog } from "./ledger"
-import { modelKey, parseModel, type ClientLike, type ModelRef, type OcMessage } from "./types"
+import { modelKey, parseModel, type ClientLike, type ModelRef } from "./types"
 import type { Controller } from "./controller"
 import type { createNarrator } from "./narrator"
 import type { StateStore } from "./state"
-import type { V2Ctx, V2Event, V2Message, V2SessionInfo } from "./v2-types"
+import type { V2Ctx, V2Event } from "./v2-types"
+import { adaptV2Client } from "./v2-adapter"
 
 // OpenCode 2 plugin layer (#56). Shapes are structural (src/v2-types.ts) per the live probe in
 // docs/spike-v2.md; nothing here may read ctx.options or ctx.location (untrusted project tree).
@@ -102,123 +103,6 @@ function coreFor(env: Env): Core {
   }
   CORE.current = core
   return core
-}
-
-// --- adapter: v2 ctx -> the v1 ClientLike the controller speaks (shapes per docs/spike-v2.md).
-
-function sessionModelOf(info: V2SessionInfo | undefined | null): { providerID: string; modelID: string } | undefined {
-  const m = info?.model
-  if (!m || typeof m !== "object") return undefined
-  if (typeof m.providerID !== "string" || typeof m.id !== "string") return undefined
-  return { providerID: m.providerID, modelID: m.id }
-}
-
-function toOcMessage(row: unknown, sessionModel: { providerID: string; modelID: string } | undefined): OcMessage | undefined {
-  if (!row || typeof row !== "object") return undefined
-  const v = row as V2Message
-  const id = typeof v.id === "string" ? v.id : ""
-  if (!id) return undefined
-  const synthetic = v.type === "synthetic" || v.synthetic === true
-  if (v.type === "user") {
-    return {
-      info: { id, role: "user", model: sessionModel },
-      parts: [{ type: "text", text: typeof v.text === "string" ? v.text : "", ...(synthetic ? { synthetic: true } : {}) }],
-    }
-  }
-  if (v.type === "assistant") {
-    const model = sessionModelOf({ model: v.model as V2SessionInfo["model"] })
-    const tokens = v.tokens as { output?: unknown } | undefined
-    return {
-      info: {
-        id,
-        role: "assistant",
-        ...(model ?? {}),
-        ...(typeof v.cost === "number" && Number.isFinite(v.cost) && v.cost >= 0 ? { cost: v.cost } : {}),
-        ...(typeof v.agent === "string" ? { agent: v.agent } : {}),
-        ...(tokens && typeof tokens.output === "number" && Number.isFinite(tokens.output) ? { tokens: { output: tokens.output } } : {}),
-      } as OcMessage["info"],
-      parts: Array.isArray(v.content) ? (v.content as OcMessage["parts"]) : [],
-    }
-  }
-  return undefined // "idle" and other status records are not transcript messages
-}
-
-/** Synthesizes the v1 providers shape from v2's model.list(); ids only, never options or keys. */
-function synthProviders(rows: unknown): { data: { providers: { id: string; models: Record<string, unknown> }[] } } {
-  const byProvider = new Map<string, Record<string, unknown>>()
-  for (const row of Array.isArray(rows) ? rows : []) {
-    if (!row || typeof row !== "object") continue
-    const m = row as { providerID?: unknown; modelID?: unknown; id?: unknown }
-    if (typeof m.providerID !== "string") continue
-    const modelID = typeof m.modelID === "string" ? m.modelID : typeof m.id === "string" ? m.id : ""
-    if (!modelID) continue
-    const models = byProvider.get(m.providerID) ?? Object.create(null)
-    if (!(modelID in models)) models[modelID] = {}
-    byProvider.set(m.providerID, models)
-  }
-  const providers = [...byProvider].map(([id, models]) => ({ id, models: models as Record<string, unknown> }))
-  return { data: { providers } }
-}
-
-function adaptV2Client(ctx: V2Ctx): ClientLike {
-  // Domain presence is guaranteed by domainsPresent(); the proxies still tolerate undefined results.
-  const session = ctx.session as Required<V2Ctx>["session"]
-  const model = ctx.model as NonNullable<V2Ctx["model"]>
-  const messagesFor = async (a: { path: { id: string } }): Promise<OcMessage[]> => {
-    // The session model backs user messages (v2 user rows carry none; v1's info.model did).
-    const [info, raw] = await Promise.all([
-      Promise.resolve(session?.get?.({ sessionID: a.path.id })),
-      Promise.resolve(session?.context?.({ sessionID: a.path.id })),
-    ])
-    const sessionModel = sessionModelOf(info)
-    const rows = Array.isArray(raw) ? raw : []
-    const out: OcMessage[] = []
-    for (const row of rows) {
-      const m = toOcMessage(row, sessionModel)
-      if (m) out.push(m)
-    }
-    return out
-  }
-  return {
-    session: {
-      get: async (a) => {
-        const info = await Promise.resolve(session?.get?.({ sessionID: a.path.id }))
-        // A missing session propagates as `data: undefined` so callers can treat it as ineligible.
-        return { data: info ? (typeof info.parentID === "string" ? { parentID: info.parentID } : {}) : undefined }
-      },
-      messages: async (a) => ({ data: await messagesFor(a) }),
-      abort: async (a) => Promise.resolve(session?.interrupt?.({ sessionID: a.path.id })),
-      prompt: async (a) => {
-        const sessionID = a.path.id
-        // The v2 prompt has no model field, so the session model is set explicitly before prompting.
-        const to = a.body?.model
-        if (to && typeof to.providerID === "string" && typeof to.modelID === "string") {
-          try {
-            await Promise.resolve(session?.switchModel?.({ sessionID, model: { providerID: to.providerID, id: to.modelID } }))
-          } catch { /* prompt anyway: stay-put means the session keeps whatever model it holds */ }
-        }
-        const text = (Array.isArray(a.body?.parts) ? a.body.parts : [])
-          .map((p) => (p && typeof p === "object" && typeof (p as { text?: unknown }).text === "string" ? (p as { text: string }).text : ""))
-          .join("\n\n")
-        await Promise.resolve(session?.prompt?.({ sessionID, ...(a.body?.agent ? { agent: a.body.agent } : {}), text }))
-      },
-    },
-    config: {
-      providers: async () => {
-        const res = await Promise.resolve(model?.list?.())
-        const rows = res && typeof res === "object" && "data" in res ? (res as { data?: unknown }).data : res
-        return synthProviders(rows)
-      },
-    },
-    tui: {
-      showToast: async (a) => {
-        // The plugins API has no toast endpoint on v2: surface as a synthetic message, best effort.
-        const sid = CORE.lastSession.sid
-        if (!sid) return
-        await Promise.resolve(session?.synthetic?.({ sessionID: sid, text: a.body.message }))
-      },
-    },
-  }
 }
 
 // --- event dispatch (v2 events carry the payload in `data`; the stream spans all projects).
@@ -523,7 +407,7 @@ export function createV2Plugin(env: Env): { id: string; setup: (ctx: V2Ctx) => P
       try {
         if (!domainsPresent(ctx)) return // dormant: the v1 server() layer owns the relay on such hosts
         const core = coreFor(env)
-        const adapter = adaptV2Client(ctx)
+        const adapter = adaptV2Client(ctx, CORE.lastSession)
         const epoch = CORE.client.epoch + 1
         CORE.client.epoch = epoch
         CORE.client.current = adapter
