@@ -11,11 +11,19 @@ code, tests, configuration, or workflows.
 - The lockfile also contains a separate nested `zod: 4.1.8` requirement from the
   OpenTUI dependency tree. That is not the relay's direct Zod version and does
   not constitute a relay migration.
-- `npm ls zod --all` returned no installed tree in this worktree, so no local
-  Zod 4 runtime probe was run.
+- Clean install environment: Windows, Node **v24.13.0**, npm **11.6.2**.
+  `npm ci` completed on 2026-10-27, adding 114 packages and auditing 115. npm
+  emitted an `EBADENGINE` warning for `ini@7.0.0` (it requests Node
+  `^22.22.2 || ^24.15.0 || >=26.0.0`); this was not changed here.
+- After that clean install, `npm ls zod --all` showed direct Zod **3.25.76** and
+  `@opencode-ai/plugin@1.19.0`'s nested Zod **4.1.8**.
 - `npm audit --omit=dev` reported **0 vulnerabilities** (0 high, 0 critical,
-  0 total) on 2026-10-27. This is the current audit result, not evidence that
-  the upstream advisory is fixed for every Zod 3 release.
+  0 total) on 2026-10-27. The unfiltered `npm audit` reported **2 high**:
+  GHSA-mrhx-c7xc-m3w5 (`zod`, range `<4.6.6`) affecting both installed Zod
+  nodes, and its high-severity effect on `@opencode-ai/plugin`. npm offered
+  Zod **4.6.7** as a major-version fix and did not change package files.
+  Therefore “0 with `--omit=dev`” and “2 without omission” are both exact
+  current results; neither claims the advisory is fixed for Zod 3.
 
 ## Validation boundary inventory
 
@@ -51,7 +59,8 @@ metadata-only logs; raw provider text is not accepted by these schemas.
 
 Existing coverage is in `tests/ledger.test.ts`, `tests/switchlog.test.ts`, and
 the ledger/statistics integration tests. The current implementation and tests
-were not executed against Zod 4 in this documentation spike.
+were not executed by substituting Zod 4 into the runtime modules in this
+documentation spike.
 
 ### OpenRouter responses
 
@@ -70,6 +79,49 @@ Other existing Zod boundaries include the judge verdict, handover tool parts,
 stats persistence/query input, and the OpenCode v2 resolved-model event. They
 are additional compatibility surfaces, but are not a reason to expand this
 issue into a runtime change.
+
+## Temporary Zod 4 compatibility probe
+
+On 2026-10-27, a non-committed Node probe used the lockfile-installed nested
+Zod **4.1.8** beside direct Zod **3.25.76**. The probe reproduced the current
+config default/strict-object constructs and representative ledger and
+switchlog schemas from `src/config.ts`, `src/ledger.ts`, and `src/switchlog.ts`.
+The temporary file was removed and no repository file was changed.
+
+Results:
+
+| Boundary | Zod 3.25.76 | Zod 4.1.8 | Assessment |
+|---|---|---|---|
+| Config `{}` | Nested defaults materialize (`tiers.secondary`, `tiers.tertiary`, and privacy defaults) | Nested objects remain empty; inner defaults do not materialize when the parent is absent | **Behavioral incompatibility confirmed**; `defaultConfig()` output must be preserved explicitly before migration |
+| Config `{ privacy: {} }` | Privacy defaults materialize | Privacy defaults materialize | Same for this partial-input case |
+| Strict unknown config key | Rejected as `unrecognized_keys` | Rejected as `unrecognized_keys` | Same observed behavior |
+| Switchlog valid row / invalid `switch_dropped` row | Accepted / rejected by refinement | Accepted / rejected by refinement | Same observed result |
+| Ledger valid failure / missing `errorKind` | Accepted / rejected by refinement | Accepted / rejected by refinement | Same observed result |
+| OpenRouter responses | No Zod schema exists | No Zod schema to execute | Manual bounded parsing needs a separate contract decision |
+
+This is a compatibility probe of the existing schema expressions, not a full
+runtime substitution: the production TypeScript modules import direct Zod 3,
+and changing that import or dependency graph is outside this docs-only issue.
+It establishes a real v4 behavioral difference and identifies the first
+required migration fix, but does not claim that every source schema and test
+passes under Zod 4.
+
+### Proposed exact AC-02 amendment
+
+Because the current “test ... against the candidate Zod 4 version” wording can
+be read as requiring a full source/runtime substitution that this docs-only
+issue forbids, the owner/PM should amend AC-02 to:
+
+> **AC-02 (proposed):** Inventory the existing Zod boundaries in config,
+> switchlog/ledger, and OpenRouter response handling. Run a non-committed
+> compatibility probe against an installed candidate Zod 4 API using equivalent
+> schema expressions and representative valid/invalid fixtures; record any
+> behavioral differences. For boundaries that are not Zod-backed, document
+> that fact and assess them separately. Full source substitution and migration
+> tests are required in the separate implementation issue.
+
+Until that amendment is accepted, the full-runtime portion of AC-02 remains an
+explicit contract gap rather than an unverified claim.
 
 ## Zod 4 assessment and decision
 
