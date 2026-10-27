@@ -17,6 +17,10 @@ import type { SwitchLog, SwitchLogRow } from "./switchlog"
 import type { orChat } from "./openrouter"
 import { buildHandover, extractFromMessages, writeNarrative } from "./handover"
 import type { EventInput } from "./ledger"
+import { manualSwitch as runManualSwitch } from "./controller-manual"
+import { runJudge as runQualityJudge } from "./controller-judge"
+import { buildStatus } from "./controller-status"
+import { stormActive as isStormActive, validatePersistedPins as validatePins } from "./controller-state"
 
 // In-memory bounds for the per-session maps (judge streaks, retry-storm tokens): one entry per
 // session, emptied on restart (fail safe) and cleared wholesale when the bound is hit.
@@ -123,7 +127,6 @@ export class Controller {
     try { this.d.ledger?.append(fields) } catch { /* hooks never throw */ }
   }
 
-  /** Ladder position of a model (1-based), or undefined when the model is not a resolved ladder level. */
   private tierOf(model: string): number | undefined {
     const i = buildLadder(this.d.cfg).indexOf(model)
     return i >= 0 ? i + 1 : undefined
@@ -131,63 +134,14 @@ export class Controller {
 
   /** Owner escape hatch: the same abort/switchModel seam as failover, but plain-tail and cap-exempt. */
   async manualSwitch(sessionID: string, requested?: string): Promise<ManualSwitchResult> {
-    const started = this.d.now()
-    let target: string | undefined
-    try {
-      if (requested !== undefined) target = modelKey(parseModel(requested))
-      if (!this.d.lock.tryAcquire(sessionID)) return { status: "locked" }
-      try {
-        const session = await this.d.client.session.get({ path: { id: sessionID } })
-        if (session.data?.parentID) return { status: "unavailable" }
-        const msgs = await this.fetchMessages(sessionID)
-        const newest = [...msgs].reverse().find((m) => {
-          const i = m.info
-          return i.role === "assistant" ? !!(i.providerID && i.modelID) : !!i.model?.providerID && !!i.model.modelID
-        })
-        if (!newest) return { status: "unavailable" }
-        const i = newest.info
-        const current = i.role === "assistant" ? `${i.providerID}/${i.modelID}` : `${i.model!.providerID}/${i.model!.modelID}`
-        if (target === undefined) {
-          const ladder = buildLadder(this.d.cfg)
-          let start = ladder.indexOf(current)
-          // A shared discovery cache can expire or be replaced by another session; it cannot own this session's position.
-          if (start < 0) start = ladder.findIndex((l) => {
-            if (typeof l === "string") return false
-            if (this.d.state.getFindCache(JSON.stringify(l), started) === current) return true
-            const remote = l.find.via === "openrouter"
-            const id = remote ? (current.startsWith("openrouter/") ? current.slice("openrouter/".length) : undefined) : current
-            return isValidDiscoveredModelId(id) && (remote || !l.find.free || id.endsWith("-free")) && new RegExp(l.find.match).test(id)
-          })
-          const decision = await walkFromTopAsync({
-            ...this.findInput(current, sessionID, started), ladder: ladder.slice(start + 1),
-            tried: triedThisTurn(msgs), switchCount: 0, maxSwitches: Infinity, allowQuarantined: false,
-          })
-          if (decision.action === "switch") target = decision.to
-        }
-        if (target === undefined || target === current) return { status: "bottom", from: current }
-
-        const ex = extractFromMessages(msgs, this.d.cfg.handover)
-        const text = buildHandover({ cfg: this.d.cfg, ex, from: current, to: target, reason: "quality", summary: null })
-        const rec = this.d.state.get(sessionID)
-        const next = { ...rec, pluginPinned: target, pendingHandover: { to: target, at: started }, updated: started }
-        delete next.circularOrigin; delete next.circularFindKey; delete next.circularTransitions; delete next.circularFlows
-        this.d.state.set(sessionID, next)
-        delete this.d.health[target]
-        this.d.state.save()
-        const superseded = await this.enactSwitch(sessionID, current, { to: parseModel(target), handoverText: text })
-        if (superseded !== undefined) return { status: "unavailable", from: current, to: superseded }
-        this.d.switchLog.append({ ts: started, sessionID, from: current, to: target, kind: "manual", elapsedMs: Math.max(0, this.d.now() - started) })
-        this.led({ ts: started, sessionID, event: "switch", sw: { kind: "manual", from: current, to: target } })
-        return { status: "switched", from: current, to: target, elapsedMs: Math.max(0, this.d.now() - started) }
-      } finally {
-        this.d.lock.release(sessionID)
-      }
-    } catch (e) {
-      try { this.d.log(`manual switch failed: ${e instanceof Error ? e.message : String(e)}`) } catch { /* ignore */ }
-      return { status: "unavailable", ...(target ? { to: target } : {}) }
-    }
+    return runManualSwitch({
+      d: this.d, sessionID, requested,
+      fetchMessages: (id) => this.fetchMessages(id),
+      findInput: (current, sid, now) => this.findInput(current, sid, now),
+      enactSwitch: (sid, current, options) => this.enactSwitch(sid, current, options),
+      led: (fields) => this.led(fields),
+    })
   }
-
   /**
    * Runs the switch decision. Returns whether a handover was enacted: the v2 retry hook may only veto
    * OpenCode's own retry when the relay actually took the turn over (#56). `from` (optional) is the model
@@ -498,7 +452,6 @@ export class Controller {
       try { this.d.log(`onSessionIdle failed: ${e instanceof Error ? e.message : String(e)}`) } catch { /* ignore */ }
     }
   }
-
   /**
    * Adopts the owner's manually picked model (AC-01): merges the record under the SessionLock (never
    * lock-free next to a failover), sets pluginPinned := pick, clears the pick's marks once and opens
@@ -523,120 +476,18 @@ export class Controller {
       if (locked) d.lock.release(sessionID)
     }
   }
-
-  /**
-   * True when a switch was enacted for this session within RETRY_STORM_MS and the retrying model is
-   * not the plugin-set one: the event belongs to the old, already-failed-over turn and is consumed (AC-05).
-   */
-  stormActive(sessionID: string, fromKey?: string): boolean {
-    const at = this.storm.get(sessionID)
-    if (at === undefined) return false
-    if (this.d.now() - at >= RETRY_STORM_MS) { this.storm.delete(sessionID); return false }
-    if (fromKey !== undefined && fromKey === this.d.state.get(sessionID).pluginPinned) return false
-    return true
-  }
-
-  /**
-   * Load-time crash-window validation (AC-04): pluginPinned values that no longer resolve to a
-   * configured level are dropped silently; the next context hook re-syncs to the runtime's model.
-   */
-  validatePersistedPins(): void {
-    const known = new Set(buildLadder(this.d.cfg).filter((l): l is string => typeof l === "string"))
-    this.d.state.validatePinned(known)
-    this.d.state.save()
-  }
-
-  /**
-   * Quality judge (#26): gate, cheap heuristics, then the OpenRouter call. Fails safe everywhere: a judge
-   * error, timeout or invalid JSON never switches; the call counts towards the caps anyway.
-   */
+  stormActive(sessionID: string, fromKey?: string): boolean { return isStormActive(this.d, this.storm, sessionID, fromKey) }
+  validatePersistedPins(): void { validatePins(this.d) }
+  /** Quality judge wrapper; the policy implementation lives outside the switch controller. */
   private async runJudge(sessionID: string, current: string, msgs: OcMessage[]): Promise<void> {
-    const d = this.d
-    try {
-      const cfg = d.cfg.judge
-      if (!cfg.enabled) return
-      const now = d.now()
-      // The judge never evaluates level 1 (AC-09): that model is the owner's chosen primary, and
-      // judging it would risk switching the session away from it on one bad turn.
-      if (buildLadder(d.cfg)[0] === current) return
-      // Egress is consent-gated like the handover summary; nothing leaves without both consent and key.
-      const key = d.env[d.cfg.openrouter.keyEnv]
-      if (!d.cfg.privacy.consent || !key) return
-      // The turn must be finished: an assistant message last, tokens produced.
-      const last = msgs[msgs.length - 1]
-      if (!last || last.info.role !== "assistant") return // never switch while a user question is pending
-      const output = last.info.tokens?.output
-      if (typeof output !== "number" || !Number.isFinite(output) || output <= 0) return
-      // The judge never evaluates its own or the handover's turns: the newest real user message must not be ours.
-      const lastUser = [...msgs].reverse().find((m) => m.info.role === "user")
-      if (!lastUser || hasRelayMarker(lastUser.parts)) return
-
-      // Caps are persisted (#26): per-session calls and last call time ride on the session record, the
-      // daily USD budget on the global judgeDaily bucket (reset by save() when the UTC day rolls over).
-      const rec = d.state.get(sessionID)
-      if ((rec.judgeCalls ?? 0) >= cfg.maxCallsPerSession) return
-      if (now < (rec.lastJudgeAt ?? 0) + cfg.minIntervalMs) return
-      // Once-per-turn is authoritative and persisted: a TTL map alone would let a re-fired idle
-      // (after the TTL, before or even after minIntervalMs) answer the same turn twice, and two
-      // switch:true verdicts for one turn would produce a switch.
-      if (last.info.id === rec.lastJudgeMessageId) return
-      const daily = d.state.judgeDaily
-      // The bucket may carry yesterday's counters (file loaded, no save yet): reset it before reading.
-      const today = new Date(now).toISOString().slice(0, 10)
-      if (daily.date !== today) {
-        daily.calls = undefined
-        daily.costUsd = undefined
-        daily.date = today
-      }
-      if (daily.costUsd !== undefined && daily.costUsd >= cfg.maxDailyUsd) return
-      // Cheap pre-filter: an immediate re-fire of the same idle (same in-memory lock turn).
-      if (d.lock.isDuplicate(`${sessionID}:judge:${last.info.id}`)) return
-
-      // Cheap local heuristics first: only suspicious turns may reach the LLM judge.
-      const reasons = heuristicReasons(observeTurn(msgs))
-      if (reasons.length === 0) { this.judgeStreak.delete(sessionID); return }
-
-      // Count the attempt even if the call fails, then spend.
-      const judgeCalls = (rec.judgeCalls ?? 0) + 1
-      daily.calls = (daily.calls ?? 0) + 1
-      const fresh = d.state.get(sessionID)
-      d.state.set(sessionID, { ...fresh, judgeCalls, lastJudgeAt: now, lastJudgeMessageId: last.info.id, updated: now })
-      d.state.save()
-
-      const ex = extractFromMessages(msgs, d.cfg.handover)
-      const { payload, call } = buildJudgeInput(ex, reasons)
-      const r = await d.chat({
-        baseUrl: d.cfg.openrouter.baseUrl, key, model: cfg.model, system: cfg.prompt, user: payload,
-        maxTokens: call.maxTokens, timeoutMs: call.timeoutMs, zdr: d.cfg.privacy.zdr,
-      })
-      // Spend counts whenever the call returned a cost: a billed reply that fails to parse is still spent.
-      const cost = typeof r.costUsd === "number" && Number.isFinite(r.costUsd) && r.costUsd >= 0 ? r.costUsd : 0
-      daily.costUsd = (daily.costUsd ?? 0) + cost
-      d.state.save()
-      const verdict = parseVerdict(r.text)
-      // Invalid JSON / timeout / error => no switch (the verdict object itself carries the decision only).
-      if (!verdict) return
-      // Only valid verdicts are ledgered: an errored judge call is not a "stay" (it changed nothing).
-      this.led({ ts: d.now(), sessionID, event: "judge", verdict: verdict.switch ? "switch" : "stay", tier: this.tierOf(current), model: current, helperCostUsd: cost > 0 ? cost : undefined })
-
-      const streak = verdict.switch ? (this.judgeStreak.get(sessionID) ?? 0) + 1 : 0
-      if (streak <= 0) { this.judgeStreak.delete(sessionID); return }
-      if (this.judgeStreak.size >= MAX_SESSION_ENTRIES) this.judgeStreak.clear() // bound the in-memory map
-      this.judgeStreak.set(sessionID, streak)
-      if (streak < 2) return // two consecutive switch:true verdicts required
-      this.judgeStreak.delete(sessionID)
-      // A verdict may outlive its turn: a newer message can arrive during the judge call. Only switch
-      // if the judged turn is still the newest one; the newer turn gets a fresh look at the next idle.
-      const nowMsgs = await this.fetchMessages(sessionID)
-      const newest = nowMsgs[nowMsgs.length - 1]
-      if (!newest || newest.info.id !== last.info.id) return
-      // Same switch path as a hard failure (lock, dedup, strategy, handover), logged as kind "quality".
-      await this.handle(sessionID, { kind: "quality", retryable: false, permanent: false, switchable: true })
-    } catch (e) {
-      try { d.log(`runJudge failed: ${e instanceof Error ? e.message : String(e)}`) } catch { /* ignore */ }
-    }
+    await runQualityJudge({
+      d: this.d, sessionID, current, msgs, judgeStreak: this.judgeStreak,
+      fetchMessages: (id) => this.fetchMessages(id),
+      handle: (sid) => this.handle(sid, { kind: "quality", retryable: false, permanent: false, switchable: true }),
+      led: (fields) => this.led(fields),
+      tierOf: (model) => this.tierOf(model),
+    })
   }
-
   /**
    * chat.message (v1 hook contract, server.ts): stay-put (#66). The pin machinery is gone and the turn
    * always keeps the session's model; v2 adoption lives in the context hook. Never throws.
@@ -644,60 +495,6 @@ export class Controller {
   onChatMessage(_sessionID: string, _inputModelKey: string, _parts: unknown): string | undefined {
     return undefined
   }
-
-  status(sessionID?: string): string {
-    try {
-      const d = this.d
-      const now = d.now()
-      const rec = sessionID ? d.state.get(sessionID) : undefined
-      const ladder = buildLadder(d.cfg)
-      const chain = ladder.map((level) => typeof level === "string" ? level : "(unresolved find)").join(" -> ")
-      const levels = ladder.map((level, index) => {
-        if (typeof level === "string") return `${index + 1}. ${level} ${this.healthStatus(level, now)}`
-        if (!d.cfg.privacy.consent) return `${index + 1}. find [consent-gated]`
-        const cached = d.state.findCache[JSON.stringify(level)]
-        if (!cached || cached.resolvedAt > now || now - cached.resolvedAt > FIND_CACHE_TTL_MS) {
-          return `${index + 1}. find [unresolved]`
-        }
-        return `${index + 1}. find [resolved -> ${cached.model} (cached, ageMs: ${Math.max(0, now - cached.resolvedAt)})] ${this.healthStatus(cached.model, now)}`
-      })
-      const rows = (d.switchLog.recent?.(10) ?? []).slice(-10)
-      const manual = rows.filter((row) => row.kind === "manual").length
-      const auto = rows.filter((row) => row.kind !== "manual" && row.kind !== "switch_dropped").length
-      return [
-        `chain: ${chain || "(no levels configured)"}`,
-        `ladder:\n${levels.join("\n") || "(no levels configured)"}`,
-        `pluginPinned: ${rec?.pluginPinned ?? "none"}`,
-        `pinned: ${rec?.pluginPinned ?? "none"}`,
-        `adoptedAt: ${rec?.adoptedAt ?? "none"}`,
-        `switches: ${rec?.switchCount ?? 0}`,
-        `circular: ${d.cfg.maxCircularFlows} (completed ${rec?.circularFlows ?? 0})`,
-        `consent: ${d.cfg.privacy.consent ? "on" : "off"}`,
-        `key: ${d.env[d.cfg.openrouter.keyEnv] ? "set" : "missing"}`,
-        `counts: manual ${manual}, auto ${auto}`,
-        "last 10 ledger entries:",
-        ...(rows.length ? rows.map((row) => this.formatLedgerRow(row)) : ["(none)"]),
-      ].join("\n")
-    } catch { return "relay status unavailable" }
-  }
-
-  private healthStatus(model: string, now: number): string {
-    const health = this.d.health[model]
-    if (health?.permanent) return `blacklisted-until: ${health.permanentAt === undefined ? "unknown" : health.permanentAt + 24 * 60 * 60 * 1000}`
-    if (health?.cooldownUntil !== undefined && health.cooldownUntil > now) return `cooldown ${health.cooldownUntil - now}ms`
-    return "healthy"
-  }
-
-  private formatLedgerRow(row: SwitchLogRow): string {
-    return [
-      `ts=${row.ts}`, `session=${row.session}`, `kind=${row.kind}`,
-      ...(row.reason === undefined ? [] : [`reason=${row.reason}`]),
-      `elapsedMs=${row.elapsedMs}`,
-      ...(row.from === undefined ? [] : [`from=${row.from}`]),
-      ...(row.to === undefined ? [] : [`to=${row.to}`]),
-      ...(row.helperCostUsd === undefined ? [] : [`helperCostUsd=${row.helperCostUsd}`]),
-    ].join(" ")
-  }
+  status(sessionID?: string): string { return buildStatus(this.d, sessionID) }
 }
-
-// (No module-scope helpers follow the class: the judge reads the clock through the local `now` above.)
+// (No module-scope helpers follow the class: controller policy lives in focused modules.)
