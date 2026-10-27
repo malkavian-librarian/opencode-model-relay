@@ -125,6 +125,32 @@ describe("buildStats", () => {
     expect(s.models["prov/a"]!["2026-10-19"]!.offPrimary).toBe(1)
     expect(s.models["prov/a"]!["2026-10-20"]!.offPrimary).toBe(0)
   })
+  it("aggregates shared health across sessions while isolating models and clipping window boundaries", () => {
+    // Synthetic metadata: model health is shared even when another session observes recovery.
+    const other = "fedcba9876543210"
+    const floor = NOW - DAY
+    const ev: LedgerEvent[] = [
+      { ts: floor - 100, session: S, event: "health", model: "prov/a", what: "cooldown_start", untilMs: floor + 200 },
+      { ts: floor + 100, session: other, event: "health", model: "prov/a", what: "cooldown_end" },
+      { ts: NOW - 300, session: other, event: "health", model: "prov/a", what: "permanent_mark", untilMs: NOW + 100 },
+      { ts: NOW - 100, session: S, event: "health", model: "prov/a", what: "permanent_expire" },
+      { ts: NOW - 250, session: S, event: "health", model: "prov/b", what: "cooldown_start", untilMs: NOW + 250 },
+      { ts: NOW + 50, session: other, event: "health", model: "prov/b", what: "cooldown_end" },
+      { ts: NOW + 1, session: S, event: "health", model: "prov/future", what: "permanent_mark", untilMs: NOW + DAY },
+      { ts: floor - 200, session: S, event: "health", model: "prov/old", what: "cooldown_start", untilMs: floor },
+      turn(floor, "prov/a", { tier: 1 }),
+      turn(floor + 1, "prov/a", { session: other, tier: 2 }),
+      turn(NOW, "prov/a", { session: other, tier: 2 }),
+      turn(NOW + 1, "prov/a", { tier: 1 }),
+      turn(floor - 1, "prov/a", { tier: 1 }),
+      turn(NOW, "prov/b", { session: other }),
+    ]
+    const s = buildStats(ev, NOW, 1)
+    expect(Object.keys(s.models).sort()).toEqual(["prov/a", "prov/b"])
+    expect(s.models["prov/a"]!["2026-10-19"]).toMatchObject({ turns: 2, down: 100, offPrimary: 0.5 })
+    expect(s.models["prov/a"]!["2026-10-20"]).toMatchObject({ turns: 1, down: 200, offPrimary: 1 })
+    expect(s.models["prov/b"]!["2026-10-20"]).toMatchObject({ turns: 1, down: 250, offPrimary: 0 })
+  })
 })
 
 describe("stats.json write", () => {
