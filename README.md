@@ -161,13 +161,14 @@ Each event row is metadata-only and uses these fields:
 | Field | Meaning |
 |---|---|
 | `ts` / `session` | As in the switch log. |
-| `event` | `turn` (a completed turn), `failure` (an accepted non-quality failure mark), `judge` (a quality-judge verdict), `switch` (an enacted or dropped switch), or `narrative` (successful deferred helper work with known cost). |
+| `event` | `turn` (a completed turn), `failure` (an accepted non-quality failure mark), `judge` (a quality-judge verdict), `switch` (an enacted or dropped switch), `narrative` (successful deferred helper work with known cost), or `health` (a named health transition). |
 | `model` / `tier` | The affected `provider/model` and its 1-based ladder position, when known. |
 | `latencyMs`, `tokens`, `cost` | Optional turn measurements; only fields the host actually provides are recorded. `cost` is the selected assistant message's finite non-negative USD spend, including explicit zero, not an estimate or sum of all assistant steps. |
 | `errorKind` | For `failure` rows: the failure-kind enum. |
 | `verdict` | For `judge` rows: `switch` or `stay`. Only valid verdicts are recorded; an errored judge call is not a `stay`. |
 | `sw` | Required for `switch` rows: `kind`, plus `reason` for `switch_dropped` and `from`/`to` when known. |
 | `helperCostUsd` | Optional judge-call cost; required finite non-negative USD cost (including zero) for `narrative` rows, which also require `model`. |
+| `what` / `untilMs` | For `health` rows: the transition enum and an optional deadline for cooldown/permanent starts. |
 
 `failure` counts accepted non-quality health marks, not every raw provider error.
 Marker-rejected and message-dedup-rejected errors, and errors whose re-marking is
@@ -199,7 +200,9 @@ flags, `--days=7`, a value after `--kinds`, stray tokens, or any wrong tool
 input shape) print `Usage: /relay stats [--days N] [--kinds]` and change
 nothing. `--kinds` (tool: `kinds: true`) adds one breakdown line per model with
 its nonzero failure kinds and counts in lexicographic order, `none` when
-failure-free; the counts sum to the model's `fails` column. These are not a
+failure-free; the counts sum to the model's `fails` column. `downMs` is
+window-clipped cooldown/permanent downtime, and `offPrimary` is the fraction of
+that model's retained turns below ladder tier 1. These are not a
 complete provider invoice: absent/invalid costs are not estimated, and
 failed/null narrative results may have unknown spend.
 

@@ -101,6 +101,14 @@ describe("recordFailure", () => {
     recordFailure(h, "a/1", c({}), 10, 60000)
     expect(h["a/1"]?.cooldownUntil).toBe(10 + 3_600_000)
   })
+  it("emits one transition for a new mark, not for repeated failures during the same cooldown", () => {
+    const h: Record<string, ModelHealth> = {}
+    const events: unknown[] = []
+    const emit = (what: string, untilMs?: number) => events.push({ what, untilMs })
+    recordFailure(h, "a/1", c({}), 1000, 60000, undefined, emit)
+    recordFailure(h, "a/1", c({}), 1000, 60000, undefined, emit)
+    expect(events).toEqual([{ what: "cooldown_start", untilMs: 61000 }])
+  })
 })
 
 describe("buildLadder (#64)", () => {
@@ -124,6 +132,11 @@ describe("walkFromTop (#64)", () => {
     expect(
       walkFromTop({ ladder: ["x/9", { find: { match: "glm" } }, "y/1"], current: "x/9", health: {}, now: 1000, switchCount: 0, maxSwitches: 6 } as any),
     ).toEqual(sw("y/1"))
+  })
+  it("reports quarantined candidates that are skipped without changing the selected model", () => {
+    const skipped: string[] = []
+    expect(walkFromTop({ ladder, current: "a/1", health: {}, quarantine: { "b/2": 900 }, now: 1000, switchCount: 0, maxSwitches: 6, onQuarantineSkip: (m) => skipped.push(m) })).toEqual(sw("c/3"))
+    expect(skipped).toEqual(["b/2"])
   })
   it("a quarantined model is skipped while a healthy alternative exists, chosen when it is the only candidate", () => {
     expect(w({ current: "b/2", quarantine: { "a/1": 950 } })).toEqual(sw("c/3"))

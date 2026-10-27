@@ -76,6 +76,23 @@ describe("buildStats", () => {
     expect(s.models["prov/a"]!["2026-10-19"]!.switchAway).toBe(1)
     expect(s.models["prov/b"]!["2026-10-19"]!).toMatchObject({ judgeCalls: 1, judgeRejects: 1, helperCostUsd: 0.01 })
   })
+  it("derives cooldown downtime and off-primary share from health and turn events", () => {
+    const ev = [
+      turn(NOW - 1000, "prov/a", { tier: 1 }),
+      turn(NOW - 900, "prov/b", { tier: 2 }),
+      { ts: NOW - 800, session: S, event: "health", model: "prov/b", tier: 2, what: "cooldown_start", untilMs: NOW - 300 },
+      { ts: NOW - 200, session: S, event: "health", model: "prov/b", tier: 2, what: "cooldown_end" },
+    ] as LedgerEvent[]
+    const b = buildStats(ev, NOW).models["prov/b"]![new Date(NOW).toISOString().slice(0, 10)]!
+    expect(b.down).toBe(500)
+    expect(b.offPrimary).toBe(1)
+  })
+  it("clips downtime to the selected window and keeps zero metrics for missing health data", () => {
+    const ev = [{ ts: NOW - 1000, session: S, event: "health", model: "prov/a", what: "cooldown_start", untilMs: NOW + 1000 }] as LedgerEvent[]
+    const s = buildStats(ev, NOW, 1)
+    expect(s.models["prov/a"]![new Date(NOW).toISOString().slice(0, 10)]!.down).toBe(1000)
+    expect(s.models["prov/a"]![new Date(NOW).toISOString().slice(0, 10)]!.offPrimary).toBe(0)
+  })
 })
 
 describe("stats.json write", () => {
@@ -113,7 +130,7 @@ describe("renderStatsTable", () => {
       turn(NOW - DAY, "prov/a", { latencyMs: 30 }),
       turn(NOW - 2 * DAY, "prov/a", { latencyMs: 1000 }),
     ]
-    expect(renderStatsTable(buildStats(ev, NOW), ev)).toContain("prov/a | 4 | 0 | – | 0 | 100% | 25ms | 0/0 | $0.00 | $0.00")
+    expect(renderStatsTable(buildStats(ev, NOW), ev)).toContain("prov/a | 4 | 0 | – | 0 | 0 | 0% | 100% | 25ms | 0/0 | $0.00 | $0.00")
   })
 })
 
@@ -133,8 +150,8 @@ describe("ledger->stats integration", () => {
     const stats = buildStats(events, now)
     expect(Object.keys(stats.models)).toEqual(["prov/a"])
     expect(stats.models["prov/a"]!["2026-10-19"]).toEqual(baseline.models["prov/a"]!["2026-10-19"])
-    expect(stats.models["prov/a"]!["2026-10-20"]).toEqual({ turns: 0, failures: {}, judgeCalls: 0, judgeRejects: 0, switchAway: 0, survivalOk: 0, survivalFail: 0, survivalCensored: 0, tokensIn: 0, tokensOut: 0, costUsd: 0, helperCostUsd: 0.03 })
-    expect(renderStatsTable(stats, events).split("\n").find((r) => r.startsWith("prov/a |"))).toBe("prov/a | 1 | 0 | 100% | 1 | 0% | 100ms | 1/2 | $0.20 | $0.05")
+    expect(stats.models["prov/a"]!["2026-10-20"]).toEqual({ turns: 0, failures: {}, judgeCalls: 0, judgeRejects: 0, switchAway: 0, down: 0, offPrimary: 0, survivalOk: 0, survivalFail: 0, survivalCensored: 0, tokensIn: 0, tokensOut: 0, costUsd: 0, helperCostUsd: 0.03 })
+    expect(renderStatsTable(stats, events).split("\n").find((r) => r.startsWith("prov/a |"))).toBe("prov/a | 1 | 0 | 100% | 1 | 0 | 0% | 0% | 100ms | 1/2 | $0.20 | $0.05")
     // buildStats also independently prunes future and expired events, without relying on EventLog.read.
     expect(buildStats(l.read(100, now + 1), now)).toEqual(stats)
   })
@@ -184,8 +201,8 @@ describe("stats window, kinds and sample median", () => {
       turn(NOW + 1, "prov/fut", { latencyMs: 400 }),
     ]
     const txt = renderStatsTable(buildStats(ev, NOW, 2), ev)
-    expect(txt).toContain("prov/in | 1 | 0 | – | 0 | – | 100ms | 0/0 | $0.00 | $0.00")
-    expect(txt).toContain("prov/now | 1 | 0 | – | 0 | – | 200ms | 0/0 | $0.00 | $0.00")
+    expect(txt).toContain("prov/in | 1 | 0 | – | 0 | 0 | 0% | – | 100ms | 0/0 | $0.00 | $0.00")
+    expect(txt).toContain("prov/now | 1 | 0 | – | 0 | 0 | 0% | – | 200ms | 0/0 | $0.00 | $0.00")
     expect(txt).not.toContain("prov/out")
     expect(txt).not.toContain("prov/fut")
   })
@@ -198,7 +215,7 @@ describe("stats window, kinds and sample median", () => {
     l.append({ ts: T - 1000, sessionID: "s", event: "turn", model: "prov/a", latencyMs: 20 })
     // T-DAY-1 shares the cutoff edge's UTC day but sits 1ms below the days=1 floor: excluded from
     // buckets and samples alike; the two kept turns are a day apart, so both are censored.
-    expect(statsText(l, { days: 1, kinds: false }, T)).toContain("prov/a | 2 | 0 | – | 0 | – | 15ms | 0/0 | $0.00 | $0.00")
+    expect(statsText(l, { days: 1, kinds: false }, T)).toContain("prov/a | 2 | 0 | – | 0 | 0 | 0% | – | 15ms | 0/0 | $0.00 | $0.00")
   })
   it("median covers odd, even, zero and absent samples across models", () => {
     const ev = [
@@ -208,10 +225,10 @@ describe("stats window, kinds and sample median", () => {
       turn(NOW - DAY, "prov/none"),
     ]
     const txt = renderStatsTable(buildStats(ev, NOW), ev)
-    expect(txt).toContain("prov/odd | 3 | 0 | – | 0 | 100% | 20ms | 0/0 | $0.00 | $0.00")
-    expect(txt).toContain("prov/even | 2 | 0 | – | 0 | 100% | 25ms | 0/0 | $0.00 | $0.00")
-    expect(txt).toContain("prov/zero | 1 | 0 | – | 0 | – | 0ms | 0/0 | $0.00 | $0.00")
-    expect(txt).toContain("prov/none | 1 | 0 | – | 0 | – | – | 0/0 | $0.00 | $0.00")
+    expect(txt).toContain("prov/odd | 3 | 0 | – | 0 | 0 | 0% | 100% | 20ms | 0/0 | $0.00 | $0.00")
+    expect(txt).toContain("prov/even | 2 | 0 | – | 0 | 0 | 0% | 100% | 25ms | 0/0 | $0.00 | $0.00")
+    expect(txt).toContain("prov/zero | 1 | 0 | – | 0 | 0 | 0% | – | 0ms | 0/0 | $0.00 | $0.00")
+    expect(txt).toContain("prov/none | 1 | 0 | – | 0 | 0 | 0% | – | – | 0/0 | $0.00 | $0.00")
   })
   it("--kinds adds one breakdown line per model in lexicographic kind order; none when failure-free", () => {
     const ev = [
@@ -222,11 +239,11 @@ describe("stats window, kinds and sample median", () => {
       turn(NOW - DAY, "prov/clean"),
     ] as LedgerEvent[]
     const txt = renderStatsTable(buildStats(ev, NOW), ev, true)
-    expect(txt).toContain("prov/a | 1 | 3 | – | 0 | – | – | 0/0 | $0.00 | $0.00")
+    expect(txt).toContain("prov/a | 1 | 3 | – | 0 | 0 | 0% | – | – | 0/0 | $0.00 | $0.00")
     expect(txt).toContain("prov/a failure kinds: quota 2, timeout 1")
     expect(txt).toContain("prov/clean failure kinds: none")
     expect(renderStatsTable(buildStats(ev, NOW), ev, false).split("\n")).toHaveLength(3) // header + 2 rows, no breakdown
-    expect(renderStatsTable(buildStats([], NOW), [], true)).toBe("model | turns | fails | judgeRej | switchAway | survival | medianLat | tok in/out | cost$ | helper$")
+    expect(renderStatsTable(buildStats([], NOW), [], true)).toBe("model | turns | fails | judgeRej | switchAway | downMs | offPrimary | survival | medianLat | tok in/out | cost$ | helper$")
   })
   it("statsText renders a real ledger's mixed events inside the exact window with costs", () => {
     const d = dir()
@@ -239,11 +256,11 @@ describe("stats window, kinds and sample median", () => {
     l.append({ ts: T - 1000, sessionID: "s", event: "turn", model: "prov/a", latencyMs: 100, tokens: { input: 3, output: 4 }, cost: 0.1 })
     l.append({ ts: T - 2 * DAY - 1, sessionID: "s", event: "turn", model: "prov/a", latencyMs: 999 })
     const txt = statsText(l, { days: 2, kinds: true }, T)
-    expect(txt).toContain("prov/a | 1 | 1 | 100% | 1 | – | 100ms | 3/4 | $0.10 | $0.02")
+    expect(txt).toContain("prov/a | 1 | 1 | 100% | 1 | 0 | 0% | – | 100ms | 3/4 | $0.10 | $0.02")
     expect(txt).toContain("prov/a failure kinds: quota 1")
-    expect(txt).toContain("prov/b | 0 | 0 | – | 0 | – | – | 0/0 | $0.00 | $0.03")
+    expect(txt).toContain("prov/b | 0 | 0 | – | 0 | 0 | 0% | – | – | 0/0 | $0.00 | $0.03")
     expect(txt).toContain("prov/b failure kinds: none")
-    expect(statsText(l, { days: 30, kinds: false }, T)).toContain("prov/a | 2 | 1 | 100% | 1 | – | 550ms | 3/4 | $0.10 | $0.02")
+    expect(statsText(l, { days: 30, kinds: false }, T)).toContain("prov/a | 2 | 1 | 100% | 1 | 0 | 0% | – | 550ms | 3/4 | $0.10 | $0.02")
   })
 })
 

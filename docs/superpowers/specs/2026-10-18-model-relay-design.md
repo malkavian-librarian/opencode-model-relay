@@ -89,13 +89,13 @@ Facts first, flavour second: every message carries from-model, to-model and reas
 
 ## 9. Performance ledger
 
-The following full-ledger design is retained as a historical proposal for #7, not
-shipped behavior. The current metadata-only `switches.jsonl` schema and status view
-are documented in [Reading the switch log](../../../README.md#reading-the-switch-log).
+The metadata-only event ledger is shipped behavior. The current event schema and
+stats surface are documented in [Reading the event ledger and stats](../../../README.md#reading-the-event-ledger-and-stats).
 
 - Location: user data dir `~/.local/share/opencode-model-relay` (`XDG_DATA_HOME` overrides), never under the project tree. Directory 0700 / files 0600 on POSIX; on Windows rely on the user-private location and say so in docs.
 - Raw: per-process `events-<pid>.jsonl` (or a lockfile), one line per append, readers skip corrupt lines, monthly rotation. Fields: epoch-ms ts, HMAC session id (random per-install salt), model, tier, mode, latencyMs, tokens, cost, errorKind enum, judge verdict, switch from/to/reason enum, helper-call cost. Every completed turn is recorded (needed as the denominator).
-- Derived: proposed `stats.json` (schema-versioned, atomic temp+rename write), per-model UTC daily buckets over a rolling 30 days: turns, failures by kind, judge rejection rate (below level 1), switch-away rate, survival, median latency, tokens, cost, helper overhead. Prune by `ts`, not bucket label; rebuild on startup.
+- Derived: `stats.json` (schema-versioned, atomic temp+rename write), per-model UTC daily buckets over a rolling 30 days: turns, failures by kind, judge rejection rate (below level 1), switch-away rate, survival, median latency, tokens, cost, helper overhead, clipped downtime (`downMs`), and off-primary usage share (`offPrimary`). Prune by `ts`, not bucket label; rebuild on startup.
+- Health rows use named transitions (`cooldown_start`, `cooldown_end`, `permanent_mark`, `permanent_expire`, `quarantine_skip`, `exhausted`, `cap_hit`), model/tier metadata, and a numeric deadline only where applicable; emission is best effort and cannot change switching decisions.
 - Survival: the next assistant turn on the same model in the same session completes with no switch within 30 minutes or 5 turns; sessions with no next turn are censored and excluded from the denominator.
 - `/relay stats` prints the per-model table including relay overhead $; `/relay purge` deletes ledger data.
 

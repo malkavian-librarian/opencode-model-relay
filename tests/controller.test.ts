@@ -63,6 +63,9 @@ describe("Controller.onSessionError", () => {
     expect(calls.events.filter((e) => e.event === "failure")).toEqual([
       { ts: 1_000_000, sessionID: "s1", event: "failure", model: "a/1", tier: 1, errorKind: "rate_limit" },
     ])
+    expect(calls.events.filter((e) => e.event === "health")).toEqual([
+      { ts: 1_000_000, sessionID: "s1", event: "health", model: "a/1", tier: 1, what: "cooldown_start", untilMs: 1_060_000 },
+    ])
     expect(d.health["a/1"]?.failures).toBe(1)
     expect(calls.prompt).toHaveLength(1)
     messages.push(asst("b1", "b", "2"))

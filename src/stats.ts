@@ -16,6 +16,8 @@ export const bucketSchema = z.object({
   judgeCalls: z.number().int().nonnegative(),
   judgeRejects: z.number().int().nonnegative(),
   switchAway: z.number().int().nonnegative(),
+  down: z.number().finite().nonnegative().default(0),
+  offPrimary: z.number().finite().nonnegative().max(1).default(0),
   survivalOk: z.number().int().nonnegative(),
   survivalFail: z.number().int().nonnegative(),
   survivalCensored: z.number().int().nonnegative(),
@@ -36,7 +38,7 @@ export type StatsBucket = z.infer<typeof bucketSchema>
 export type StatsDoc = z.infer<typeof statsSchema>
 
 const emptyBucket = (): StatsBucket => ({
-  turns: 0, failures: {}, judgeCalls: 0, judgeRejects: 0, switchAway: 0,
+  turns: 0, failures: {}, judgeCalls: 0, judgeRejects: 0, switchAway: 0, down: 0, offPrimary: 0,
   survivalOk: 0, survivalFail: 0, survivalCensored: 0,
   tokensIn: 0, tokensOut: 0, costUsd: 0, helperCostUsd: 0,
 })
@@ -148,6 +150,46 @@ export function buildStats(events: LedgerEvent[], now: number, days = DEFAULT_ST
     if ((e.event === "judge" || e.event === "narrative") && e.helperCostUsd !== undefined) b.helperCostUsd += e.helperCostUsd
   }
 
+  // Health intervals are clipped to the selected event window and split at UTC midnight.
+  const healthByModel = new Map<string, LedgerEvent[]>()
+  for (const e of pruned) if (e.event === "health" && e.model !== undefined) {
+    const list = healthByModel.get(e.model) ?? []
+    list.push(e)
+    healthByModel.set(e.model, list)
+  }
+  for (const [model, healthEvents] of healthByModel) {
+    healthEvents.sort((a, b) => a.ts - b.ts)
+    for (let i = 0; i < healthEvents.length; i++) {
+      const start = healthEvents[i]!
+      if (start.what !== "cooldown_start" && start.what !== "permanent_mark") continue
+      const matchingEnd = healthEvents.slice(i + 1).find((e) =>
+        (start.what === "cooldown_start" && e.what === "cooldown_end") ||
+        (start.what === "permanent_mark" && e.what === "permanent_expire"))
+      const rawEnd = Math.min(start.untilMs ?? Number.POSITIVE_INFINITY, matchingEnd?.ts ?? Number.POSITIVE_INFINITY)
+      const from = Math.max(start.ts, floor)
+      const to = Math.min(rawEnd, now)
+      if (!Number.isFinite(to) || to <= from) continue
+      let cursor = from
+      while (cursor < to) {
+        const dayEnd = Date.UTC(new Date(cursor).getUTCFullYear(), new Date(cursor).getUTCMonth(), new Date(cursor).getUTCDate() + 1)
+        const segmentEnd = Math.min(to, dayEnd)
+        bucketFor(model, cursor).down += segmentEnd - cursor
+        cursor = segmentEnd
+      }
+    }
+  }
+
+  // Off-primary is the fraction of this model's retained turns that ran below ladder tier 1.
+  for (const [model, daysOfModel] of Object.entries(models)) {
+    let turns = 0
+    let offPrimary = 0
+    for (const e of pruned) if (e.event === "turn" && e.model === model) {
+      turns++
+      if ((e.tier ?? 1) > 1) offPrimary++
+    }
+    if (turns > 0) for (const b of Object.values(daysOfModel)) b.offPrimary = offPrimary / turns
+  }
+
   // Median latency per bucket from the turn samples in it.
   const latency = new Map<string, number[]>()
   for (const e of pruned) {
@@ -221,16 +263,17 @@ export function purgeAndRefreshStats(ledger: EventLog, dir: string, now = Date.n
  *  `events` are the same retained-window events `stats` was built from (statsText passes ledger.read's
  *  output): the latency column medians their turn samples directly, never the daily bucket medians. */
 export function renderStatsTable(stats: StatsDoc, events: readonly LedgerEvent[], kinds = false): string {
-  const rows: string[] = ["model | turns | fails | judgeRej | switchAway | survival | medianLat | tok in/out | cost$ | helper$"]
+  const rows: string[] = ["model | turns | fails | judgeRej | switchAway | downMs | offPrimary | survival | medianLat | tok in/out | cost$ | helper$"]
   const samples = new Map<string, number[]>()
   for (const e of events) {
     if (e.event !== "turn" || e.model === undefined || e.latencyMs === undefined) continue
     ;(samples.get(e.model) ?? samples.set(e.model, []).get(e.model)!).push(e.latencyMs)
   }
   for (const [model, days] of Object.entries(stats.models)) {
-    let turns = 0, fails = 0, jc = 0, jr = 0, sw = 0, ok = 0, fail = 0, tokIn = 0, tokOut = 0, cost = 0, helper = 0
+    let turns = 0, fails = 0, jc = 0, jr = 0, sw = 0, down = 0, offPrimary = 0, ok = 0, fail = 0, tokIn = 0, tokOut = 0, cost = 0, helper = 0
     for (const b of Object.values(days)) {
       turns += b.turns; jc += b.judgeCalls; jr += b.judgeRejects; sw += b.switchAway
+      down += b.down; offPrimary = Math.max(offPrimary, b.offPrimary)
       ok += b.survivalOk; fail += b.survivalFail
       tokIn += b.tokensIn; tokOut += b.tokensOut; cost += b.costUsd; helper += b.helperCostUsd
       fails += Object.values(b.failures).reduce((a, c) => a + c, 0)
@@ -238,7 +281,7 @@ export function renderStatsTable(stats: StatsDoc, events: readonly LedgerEvent[]
     const pct = (n: number, d: number): string => (d > 0 ? `${Math.round((100 * n) / d)}%` : "–")
     const lats = samples.get(model)
     const med = lats && lats.length ? `${Math.round(median(lats)!)}ms` : "–"
-    rows.push(`${model} | ${turns} | ${fails} | ${pct(jr, jc)} | ${sw} | ${pct(ok, ok + fail)} | ${med} | ${tokIn}/${tokOut} | $${cost.toFixed(2)} | $${helper.toFixed(2)}`)
+    rows.push(`${model} | ${turns} | ${fails} | ${pct(jr, jc)} | ${sw} | ${down} | ${pct(offPrimary, 1)} | ${pct(ok, ok + fail)} | ${med} | ${tokIn}/${tokOut} | $${cost.toFixed(2)} | $${helper.toFixed(2)}`)
     if (kinds) {
       const counts = new Map<string, number>()
       for (const b of Object.values(days)) for (const [k, c] of Object.entries(b.failures)) counts.set(k, (counts.get(k) ?? 0) + c)
