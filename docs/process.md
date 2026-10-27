@@ -128,6 +128,7 @@ Publishing is an owner action; agents never publish or push tags.
 | `docs/superpowers/specs/2026-10-18-model-relay-design.md` | Design spec and hard constraints. |
 | `docs/superpowers/plans/2026-10-18-v1.0-failover-handover.md` | v1.0 implementation plan. |
 | `docs/superpowers/plans/2026-10-23-model-relay-levels-redesign.md` | Epic #62 levels redesign plan and child issue map. |
+| `docs/spike-breaker.md` | Phase C decision spike (#110): ranked circuit-breaker, provider-cooldown and return-to-primary verdicts from shipped metrics. |
 
 ## Epic #62 child status (2026-10-27 live)
 
