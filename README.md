@@ -44,7 +44,7 @@ Details and the verified runtime shapes: [docs/spike-v2.md](docs/spike-v2.md).
 
 ## Levels and manual commands
 
-`levels` is an ordered ladder of exact `provider/model` strings or `{ "find": { "match", "free", "via" } }` matchers. It is capped at 32 entries, deduplicated with the first occurrence winning, and invalid entries produce a warning naming their index. Failover walks from level 1. A model that failed in this session is quarantined for 10 minutes where possible, but quarantine is a preference rather than a veto when it is the only healthy candidate. Reset-aware cooldowns are capped at six hours; the configured default switch cap grows to `max(6, levels.length + 1)`, while other explicit values win.
+`levels` is an ordered ladder of exact `provider/model` strings or `{ "find": { "match", "free", "via" } }` matchers. It is capped at 32 entries, deduplicated with the first occurrence winning, and invalid entries produce a warning naming their index. Failover walks from level 1. A model that failed in this session is quarantined for 10 minutes where possible, but quarantine is a preference rather than a veto when it is the only healthy candidate. Reset-aware cooldowns are capped at six hours; the configured default switch cap grows to `max(6, levels.length + 1)`, while other explicit values win. The `/relay-init` example's slot #7 is restricted to the newest text-capable Gemini model; image-generation and Banana models are not auto-suggested.
 
 The deprecated `tiers` shape is accepted and auto-migrated (`primary` to level 1, then `secondary` and `tertiary` in order), with a warning. If both are present, explicit `levels` wins and `tiers` is not merged. The old `mode` key is ignored with a deprecation warning.
 

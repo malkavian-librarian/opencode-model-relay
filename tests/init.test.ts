@@ -44,7 +44,7 @@ describe("buildDefaultConfigText", () => {
     const text = buildDefaultConfigText(["zzz/only"])
     for (const target of ["openai/gpt-6.1-sol", "opencode/muse-spark-1.3", "openrouter/z-ai/glm-5.3"])
       expect(text).toMatch(new RegExp(`// "${target}".*not in your configured models`))
-    expect(text).toContain("openrouter/google/<gemini-pro-id>")
+    expect(text).toContain("openrouter/google/<gemini-text-id>")
     expect(text).not.toContain("flash") // no id variant is ever fabricated
   })
   it("resolves all explicit targets, preferring exact ids to same-provider slug variants", () => {
@@ -53,6 +53,26 @@ describe("buildDefaultConfigText", () => {
       expect(buildDefaultConfigText([variant])).toContain(`// "${variant}", //`)
       expect(buildDefaultConfigText([variant, target])).toContain(`// "${target}", //`)
     }
+  })
+  it("U-01: never resolves image or banana Gemini models into slot #7", () => {
+    const text = buildDefaultConfigText(["openrouter/google/gemini-3-pro-image", "openrouter/google/gemini-nano-banana-2.1"])
+    expect(text).toMatch(/latest Gemini text model/)
+    expect(text).not.toMatch(/resolved from your configured models[\s\S]*gemini-(?:3-pro-image|nano-banana-2\.1)/)
+    expect(text).toContain('"openrouter/google/<gemini-text-id>"')
+  })
+  it("U-02: chooses the newest safe text Gemini independent of input order", () => {
+    const models = ["openrouter/google/gemini-3.1-pro", "openrouter/google/gemini-4-argon", "openrouter/google/gemini-3-pro-image"]
+    for (const input of [models, [...models].reverse()]) {
+      const text = buildDefaultConfigText(input)
+      expect(text).toContain('"openrouter/google/gemini-4-argon", // #7 — latest Gemini text model, resolved from your configured models')
+      expect(text).not.toContain('"openrouter/google/gemini-3.1-pro", // #7')
+    }
+  })
+  it("U-03/U-04: keeps a placeholder when no safe text Gemini exists", () => {
+    const text = buildDefaultConfigText(["openrouter/google/gemini-3-pro-image"])
+    expect(text).toContain('"openrouter/google/<gemini-text-id>"')
+    expect(text).toContain("latest Gemini text model")
+    expect(text).not.toContain("add your OpenRouter Gemini Pro id")
   })
   it("lists discovered ids only inside comment lines, max 10, ignoring malformed ids", () => {
     const many = Array.from({ length: 15 }, (_, i) => `prov/model${i}`)
