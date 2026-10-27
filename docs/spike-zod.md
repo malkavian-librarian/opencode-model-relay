@@ -1,0 +1,130 @@
+# Zod compatibility spike (#94)
+
+**Decision date:** 2026-10-27  
+**Scope:** documentation only. This spike does not change dependencies, runtime
+code, tests, configuration, or workflows.
+
+## Current repository evidence
+
+- `package.json` declares direct dev dependency `zod: ^3.23.8`.
+- `package-lock.json` resolves the direct `node_modules/zod` entry to **3.25.76**.
+- The lockfile also contains a separate nested `zod: 4.1.8` requirement from the
+  OpenTUI dependency tree. That is not the relay's direct Zod version and does
+  not constitute a relay migration.
+- `npm ls zod --all` returned no installed tree in this worktree, so no local
+  Zod 4 runtime probe was run.
+- `npm audit --omit=dev` reported **0 vulnerabilities** (0 high, 0 critical,
+  0 total) on 2026-10-27. This is the current audit result, not evidence that
+  the upstream advisory is fixed for every Zod 3 release.
+
+## Validation boundary inventory
+
+### Configuration: Zod 3 (`src/config.ts`)
+
+`ConfigSchema` is the trust boundary after bounded JSONC parsing. It uses strict
+nested objects, bounded arrays and strings, finite/non-negative numeric values,
+model-reference and URL constraints, and a `superRefine` HTTPS/OpenRouter-host
+policy. `loadConfig` calls `safeParse`; invalid or oversized user-level config
+falls back to defaults and a warning. The schema also supplies nested defaults
+and supports the existing `tiers` to `levels` migration.
+
+Relevant tests are in `tests/config.test.ts`, including strict keys, defaults,
+size limits, URL policy, invalid input fallback, and path confinement.
+
+**Compatibility concern:** this schema deliberately relies on nested
+`.default({})` behavior. The repository's process gotcha records that Zod 3
+applies inner defaults in this pattern while Zod 4 changes the behavior. A v4
+change must therefore compare `defaultConfig()` and partial-config results,
+not only compile the schema.
+
+### Persisted metadata: ledger and switch log
+
+`src/ledger.ts` uses `ledgerEventSchema` for both append and read paths. It
+validates event kinds, HMAC-shaped session IDs, bounded model references,
+finite numeric fields, token/cost values, and event-specific relationships.
+Input is bounded by the read window and `MAX_LINES` before/while scanning.
+
+`src/switchlog.ts` uses one `switchRowSchema` for append, recent reads, and
+compaction. It bounds the tail to 64 KiB, limits recent rows to 10, caps model
+references at 120 characters, and drops malformed/untrusted rows. These are
+metadata-only logs; raw provider text is not accepted by these schemas.
+
+Existing coverage is in `tests/ledger.test.ts`, `tests/switchlog.test.ts`, and
+the ledger/statistics integration tests. The current implementation and tests
+were not executed against Zod 4 in this documentation spike.
+
+### OpenRouter responses
+
+`src/openrouter.ts` does **not** currently use Zod. It bounds response bodies
+(1 MiB for chat and 2 MiB for the public catalog), parses JSON, then manually
+projects only the expected catalog IDs/pricing and chat completion text/cost.
+It rejects invalid JSON, oversized bodies, empty completions, bad status and
+unsafe URLs with generic errors. Tests are in `tests/openrouter.test.ts`.
+
+This is an important migration distinction: a Zod 4 plan must not claim an
+OpenRouter Zod boundary exists. If a follow-up introduces one, it needs a
+separate contract decision and tests for bounded input, unknown fields,
+missing/invalid choices, numeric cost, and secret-safe errors.
+
+Other existing Zod boundaries include the judge verdict, handover tool parts,
+stats persistence/query input, and the OpenCode v2 resolved-model event. They
+are additional compatibility surfaces, but are not a reason to expand this
+issue into a runtime change.
+
+## Zod 4 assessment and decision
+
+The advisory makes a major-version migration a compatibility project rather
+than an emergency patch. The repository should **retain direct Zod 3 for now**.
+No Zod 4 migration, compatibility install, or v4 test run is claimed here.
+
+Before a migration is approved, the follow-up must specifically assess:
+
+1. nested object defaults in `ConfigSchema` and the resulting `RelayConfig`;
+2. `z.record(...)` calls in handover/stats and any changed key/value semantics;
+3. `ZodIssue` typing and formatted warning paths in `config.ts`;
+4. strict-object unknown-key behavior and all `.refine`/`.superRefine`
+   invariants;
+5. inferred TypeScript types and error behavior at every existing boundary;
+6. package-tree duplication: the direct relay dependency must be intentionally
+   selected, rather than relying on the unrelated nested Zod 4 entry.
+
+The OpenRouter response code should remain manual unless a separate design
+decision establishes a Zod schema. A migration must not silently broaden the
+accepted response shape or expose response/body/key data in errors.
+
+## Risks and rollback
+
+**Risks:** changed default materialization can alter effective configuration;
+record/object semantics can reject valid persisted stats or tool metadata;
+error/type changes can alter warning text or fail-safe paths; a transitive Zod 4
+entry can hide an incomplete direct dependency migration; and response parsing
+changes can weaken size or secret-safety guarantees.
+
+**Rollback:** keep this issue docs-only and leave the direct `^3` dependency and
+lockfile unchanged. If a follow-up migration is attempted, isolate it in its
+own PR, revert that PR (including its lockfile), and verify the prior Zod 3
+lockfile plus the full gates before release. Do not mix a rollback with a
+runtime behavior change.
+
+## Exact follow-up gates
+
+Create a separate implementation issue/PR only after a v4 compatibility plan
+names the affected schemas and expected outputs. In that PR:
+
+1. install and lock the selected supported Zod 4 version deliberately;
+2. add/update focused RED tests for config defaults, ledger/switchlog malformed
+   and oversized input, all existing Zod boundaries, and any newly proposed
+   OpenRouter schema;
+3. run `npm run typecheck`;
+4. run `npm test`;
+5. run `npm run build`;
+6. run `npm pack --dry-run`;
+7. run `npm audit --omit=dev` and record the result;
+8. inspect package contents and dependency tree for accidental duplicate or
+   unintended Zod versions;
+9. perform an independent QA/security review, including secret-safe errors,
+   user-level config confinement, metadata-only logs, and fail-safe hooks;
+10. require green CI and CodeRabbit before the orchestrator considers merge.
+
+Until those gates pass and the compatibility behavior is reviewed, the
+documented decision remains: **retain Zod 3.25.76**.
