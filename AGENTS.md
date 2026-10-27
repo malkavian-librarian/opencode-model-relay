@@ -67,7 +67,7 @@ over with a structured summary. Design: `docs/superpowers/specs/2026-10-18-model
 
 ## Quality gates and ticket workflow (details: `docs/process.md`)
 
-1. GitHub issues are the source of truth; keep the "Relay" project board (project 7)
+1. GitHub issues are the source of truth; before any status claim or gate/merge action, fetch live GitHub state and ignore historical reports; keep the "Relay" project board (project 7)
    card statuses current at every lifecycle step (owner directive - paramount;
    details: `docs/process.md` Conventions). One issue at a time:
    **PM** grooms (`docs/team/pm.md`, `docs/task-template.md`) then **Engineer**
