@@ -151,6 +151,8 @@ Publishing is an owner action; agents never publish or push tags.
 
 Older guidance moved from `AGENTS.md` to keep its cap; these rules still apply.
 
+- Circular mode hit the existing deepest fallback after its cap -> stop cleanly before fallback to keep cycles bounded and repeatable (2026-10-27)
+
 - Compaction anchored to wall-clock Date.now() or a malformed first line aged out/rewrote valid rows -> gate retention on the incoming row's ts clamped to the earlier of it and Date.now(), using the oldest valid row (2026-10-26)
 - Stale purge snapshots, discarded readable rows and medianed daily medians -> rebuild on purge, catch each file read failure and median all window samples (2026-10-26)
 - Zero stats costs -> preserve V2 assistant USD cost and append known narrative spend for the original model before delivery guards; never rewrite immediate switch rows (2026-10-26)

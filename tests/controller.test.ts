@@ -424,7 +424,7 @@ describe("Controller.onSessionError", () => {
     expect(calls.prompt).toHaveLength(0)
     expect(calls.abort).toHaveLength(0)
   })
-  it("records a non-switchable overflow failure once, with its httpStatus when known; never takes the lock (#107)", async () => {
+  it("records a non-switchable overflow failure once, with its httpStatus when known; the lock is free after recording (#107, #134)", async () => {
     const a = setup()
     expect(await a.c.onSessionError("s1", { name: "UnknownError", data: { message: "prompt is too long" } })).toBe(false)
     expect(a.calls.events).toEqual([{ ts: 1_000_000, sessionID: "s1", event: "failure", model: "a/1", tier: 1, errorKind: "overflow" }])
@@ -438,7 +438,7 @@ describe("Controller.onSessionError", () => {
       expect(s.d.state.get("s1").switchCount).toBe(0)
       await s.c.onSessionError("s1", { name: "APIError", data: { statusCode: 400, responseBody: "This model's maximum context length is 128000 tokens" } })
       expect(s.calls.events.filter((e) => e.event === "failure")).toHaveLength(1) // deduped by the failing message id
-      expect(s.d.lock.tryAcquire("s1")).toBe(true) // no lock was taken: nothing to switch
+      expect(s.d.lock.tryAcquire("s1")).toBe(true) // the recording hold is always released
       s.d.lock.release("s1")
     }
   })
@@ -469,13 +469,38 @@ describe("Controller.onSessionError", () => {
     await grace.c.onSessionError("s1", { name: "APIError", data: { statusCode: 418 } })
     expect(grace.calls.events).toEqual([]) // failures of a just-adopted pick are graced
   })
-  it("non-switchable recording never throws when the client fails (#107)", async () => {
+  it("non-switchable recording never throws when the client fails, and never leaks the lock (#107, #134)", async () => {
     const a = setup()
     ;(a.d.client.session as any).get = async () => { throw new Error("down") }
     await expect(a.c.onSessionError("s1", { name: "APIError", data: { statusCode: 418 } })).resolves.toBe(false)
+    expect(a.d.lock.tryAcquire("s1")).toBe(true) // a throw inside the hold must not leak the lock
+    a.d.lock.release("s1")
     const b = setup()
     ;(b.d.client.session as any).messages = async () => { throw new Error("down") }
     await expect(b.c.onSessionError("s1", { name: "APIError", data: { statusCode: 418 } })).resolves.toBe(false)
+    expect(b.d.lock.tryAcquire("s1")).toBe(true)
+    b.d.lock.release("s1")
+  })
+  it("a non-switchable error arriving while a failover holds the lock adds no row naming the new pick (#134)", async () => {
+    const { c, d, calls } = setup({ messages: [
+      { info: { id: "u1", role: "user" }, parts: [{ type: "text", text: "hi" }] },
+      asst("b1", "b", "2"),
+    ] })
+    // Mid-failover: handle has already pinned the pick, and the transcript's newest message is it.
+    d.state.set("s1", { pluginPinned: "b/2", switchCount: 1, updated: 1_000_000 })
+    expect(d.lock.tryAcquire("s1")).toBe(true) // held by the failover's handle (or the deferred narrative)
+    try {
+      await expect(c.onSessionError("s1", { name: "APIError", data: { statusCode: 418 } })).resolves.toBe(false)
+      expect(calls.events).toEqual([]) // the old model's late error is never attributed to the new pick
+      expect(d.lock.tryAcquire("s1")).toBe(false) // the guard never releases a lock it did not take
+    } finally {
+      d.lock.release("s1")
+    }
+    // The skip burned no once-only slot: outside the failover window the same error records its row.
+    await c.onSessionError("s1", { name: "APIError", data: { statusCode: 418 } })
+    expect(calls.events.filter((e) => e.event === "failure")).toEqual([
+      { ts: 1_000_000, sessionID: "s1", event: "failure", model: "b/2", tier: 2, errorKind: "unknown", httpStatus: 418 },
+    ])
   })
   it("consumes the plugin-abort mark exactly once; a later unmarked abort is a plain user cancel", async () => {
     const { c, d, calls } = setup()
