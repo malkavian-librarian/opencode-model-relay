@@ -68,6 +68,24 @@ describe("buildDefaultConfigText", () => {
       expect(text).not.toContain('"openrouter/google/gemini-3.1-pro", // #7')
     }
   })
+  it("U-02: compares Gemini version components numerically", () => {
+    const models = ["openrouter/google/gemini-2.9-pro", "openrouter/google/gemini-2.10-pro"]
+    for (const input of [models, [...models].reverse()]) {
+      const text = buildDefaultConfigText(input)
+      expect(text).toContain('"openrouter/google/gemini-2.10-pro", // #7 — latest Gemini text model, resolved from your configured models')
+      expect(text).not.toContain('"openrouter/google/gemini-2.9-pro", // #7')
+    }
+  })
+  it("U-02/AC-05: excludes speech-only and malformed Gemini ids", () => {
+    const text = buildDefaultConfigText([
+      "openrouter/google/gemini-3.8-flash-tts",
+      "openrouter/google/gemini-3.7-pro bad",
+      "openrouter/google/gemini-3.6-pro",
+    ])
+    expect(text).toContain('"openrouter/google/gemini-3.6-pro", // #7 — latest Gemini text model, resolved from your configured models')
+    expect(text).not.toContain("gemini-3.8-flash-tts\", // #7")
+    expect(text).not.toContain("gemini-3.7-pro bad")
+  })
   it("U-03/U-04: keeps a placeholder when no safe text Gemini exists", () => {
     const text = buildDefaultConfigText(["openrouter/google/gemini-3-pro-image"])
     expect(text).toContain('"openrouter/google/<gemini-text-id>"')
