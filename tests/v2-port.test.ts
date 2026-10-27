@@ -22,6 +22,14 @@ function readState(file: string): any {
   try { return JSON.parse(fs.readFileSync(file, "utf8")) } catch { return { sessions: {}, health: {} } }
 }
 
+/** Every valid row in the core's real ledger dir (the HMAC session id is opaque to these tests). */
+function readLedgerRows(dir: string): any[] {
+  try {
+    return fs.readdirSync(dir).filter((n) => /^events-.*\.jsonl$/.test(n))
+      .flatMap((n) => fs.readFileSync(path.join(dir, n), "utf8").split("\n").filter((l) => l !== "").map((l) => JSON.parse(l)))
+  } catch { return [] }
+}
+
 function env(withConfig = true) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "relay-v2-"))
   fs.mkdirSync(path.join(root, "cfg", "opencode"), { recursive: true })
@@ -279,6 +287,43 @@ describe("v2 failure and retry paths", () => {
     expect(calls.interrupt).toEqual([])
     expect(calls.switchModel).toEqual([])
     teardown?.()
+  })
+  it("records non-switchable retry errors from attempt 2 with their attempt and never vetoes OpenCode's own retry (#107)", async () => {
+    const e = env()
+    const ledgerDir = path.join(e.root, "data", "opencode-model-relay")
+    const { ctx, calls } = makeCtx()
+    const teardown = await createV2Plugin(e.env).setup(ctx)
+    try {
+      const first = { sessionID: "s1", attempt: 1, model: { providerID: "a", id: "1" }, error: { message: "teapot gone", status: 418 }, decision: { retry: true, delay: 1000 } }
+      await calls.hooks.retry!(first)
+      expect(first.decision.retry).toBe(true) // nothing was enacted: no veto
+      expect(readLedgerRows(ledgerDir)).toEqual([])
+      const second = { sessionID: "s1", attempt: 2, model: { providerID: "a", id: "1" }, error: { message: "teapot gone", status: 418 }, decision: { retry: true, delay: 1000 } }
+      await calls.hooks.retry!(second)
+      expect(second.decision.retry).toBe(true) // recorded, still not vetoed
+      const failures = () => readLedgerRows(ledgerDir).filter((r) => r.event === "failure")
+        .map(({ event, errorKind, model, tier, httpStatus, attempt }) => ({ event, errorKind, model, tier, httpStatus, attempt }))
+      expect(failures()).toEqual([{ event: "failure", errorKind: "unknown", model: "a/1", tier: 1, httpStatus: 418, attempt: 2 }])
+      await calls.hooks.retry!({ ...second, attempt: 3, decision: { retry: true } })
+      expect(failures()).toHaveLength(1) // deduped by the failing message id
+      expect(calls.switchModel).toEqual([])
+      expect(calls.interrupt).toEqual([])
+    } finally { teardown?.() }
+  })
+  it("session.error records a non-switchable failure unconditionally, without attempt (#107)", async () => {
+    const e = env()
+    const ledgerDir = path.join(e.root, "data", "opencode-model-relay")
+    const { ctx, calls } = makeCtx()
+    const teardown = await createV2Plugin(e.env).setup(ctx)
+    try {
+      ctx.__emit({ created: 1, type: "session.error", data: { sessionID: "s1", error: { message: "teapot gone", status: 418 } } })
+      await until(() => readLedgerRows(ledgerDir).some((r) => r.event === "failure"))
+      const failures = readLedgerRows(ledgerDir).filter((r) => r.event === "failure")
+        .map(({ event, errorKind, model, tier, httpStatus, attempt }) => ({ event, errorKind, model, tier, httpStatus, attempt }))
+      expect(failures).toEqual([{ event: "failure", errorKind: "unknown", model: "a/1", tier: 1, httpStatus: 418 }])
+      expect(calls.switchModel).toEqual([])
+      expect(calls.interrupt).toEqual([])
+    } finally { teardown?.() }
   })
   it("a failure attributed to the handover target advances the chain: the handover turn itself failed (#56)", async () => {
     const e = env(false)
@@ -886,9 +931,9 @@ describe("v2 stats and purge surfaces (#103)", () => {
       await relayCmd.execute({ sessionID: "s1", prompt: { text: "stats --kinds --days 1" }, delivery: "steer" })
       expect(calls.synthetic.at(-1)?.text).toBe(toolText)
       expect(toolText).toContain("a/1 | 2 | 3 | – | 0 | 0 | 0% | 100% | 200ms | 0/0 | $0.00 | $0.00")
-      expect(toolText).toContain("a/1 failure kinds: quota 2, timeout 1") // lexicographic, sums to the fails column
+      expect(toolText).toContain("a/1 failure kinds: quota 2, timeout 1 (unknown share: 0%)") // lexicographic, sums to the fails column
       expect(toolText).toContain("b/2 | 1 | 0 | – | 0 | 0 | 0% | – | 50ms | 0/0 | $0.00 | $0.00")
-      expect(toolText).toContain("b/2 failure kinds: none")
+      expect(toolText).toContain("b/2 failure kinds: none (unknown share: –)")
     } finally { teardown?.() }
   })
 

@@ -52,6 +52,41 @@ describe("EventLog", () => {
     expect(l.read(30, 2)).toHaveLength(8)
     for (const event of ["failure", "judge", "switch"]) expect(l.append({ ...base, event } as never)).toBe(false)
   })
+  it("failure rows accept bounded optional httpStatus and attempt; historical rows without them still parse (#107)", () => {
+    const d = dir(); const pid = nextPid(); const l = new EventLog(d, true, pid)
+    const rows = [
+      { ts: 1, httpStatus: 100, attempt: 0 },
+      { ts: 2, httpStatus: 418 },
+      { ts: 3, attempt: 2 },
+      { ts: 4, httpStatus: 599, attempt: 7 },
+    ]
+    for (const r of rows) expect(l.append({ ...base, ...r, event: "failure", errorKind: "unknown", model: "prov/a" })).toBe(true)
+    expect(l.read(30, 5).map((r) => [r.httpStatus, r.attempt])).toEqual([[100, 0], [418, undefined], [undefined, 2], [599, 7]])
+    // a historical row without the fields parses at the read boundary: no migration, no startup order change
+    fs.appendFileSync(path.join(d, `events-${pid}.jsonl`), JSON.stringify({ ts: 5, session: "0123456789abcdef", event: "failure", errorKind: "quota" }) + "\n")
+    expect(l.read(30, 5)).toHaveLength(5)
+    expect(l.read(30, 5).at(-1)).toMatchObject({ event: "failure", errorKind: "quota" })
+  })
+  it("rejects out-of-range, non-integer and non-finite httpStatus/attempt, and both fields on non-failure rows (#107)", () => {
+    const d = dir(); const l = new EventLog(d, true, nextPid())
+    const bad = [
+      ...[99, 600, 1000, 418.5, "418", NaN, Infinity, -Infinity].map((httpStatus) => ({ httpStatus })),
+      ...[-1, 1.5, "2", NaN, Infinity].map((attempt) => ({ attempt })),
+    ]
+    for (const override of bad) {
+      expect(l.append({ ...base, event: "failure", errorKind: "unknown", model: "prov/a", ...override } as never), JSON.stringify(override)).toBe(false)
+    }
+    for (const row of [
+      { event: "turn", model: "prov/a" },
+      { event: "health", model: "prov/a", what: "cooldown_start", untilMs: 101 },
+      { event: "judge", model: "prov/a", verdict: "stay" },
+      { event: "switch", sw: { kind: "manual" } },
+    ]) {
+      expect(l.append({ ...base, ...row, httpStatus: 418 } as never)).toBe(false)
+      expect(l.append({ ...base, ...row, attempt: 2 } as never)).toBe(false)
+    }
+    expect(l.read(30, 2)).toEqual([])
+  })
   it("round-trips every judge outcome and deterministic heuristic evidence", () => {
     const l = new EventLog(dir(), true, nextPid())
     const rows = [

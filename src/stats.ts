@@ -339,7 +339,9 @@ export function renderStatsTable(stats: StatsDoc, events: readonly LedgerEvent[]
       const counts = new Map<string, number>()
       for (const b of Object.values(days)) for (const [k, c] of Object.entries(b.failures)) counts.set(k, (counts.get(k) ?? 0) + c)
       const listed = [...counts.keys()].sort().map((k) => `${k} ${counts.get(k)}`).join(", ")
-      rows.push(`${model} failure kinds: ${listed || "none"}`)
+      // Unknown share over all the model's recorded failures in the window (#107); the same zero-denominator
+      // "–" as every other share cell when it has none, because 0% would read as a measured zero.
+      rows.push(`${model} failure kinds: ${listed || "none"} (unknown share: ${pct(counts.get("unknown") ?? 0, fails)})`)
     }
   }
   return rows.join("\n")

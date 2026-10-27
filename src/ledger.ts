@@ -2,7 +2,7 @@ import { createHmac, randomBytes } from "node:crypto"
 import fs from "node:fs"
 import path from "node:path"
 import { z } from "zod"
-import type { FailureKind } from "./types"
+import { HTTP_STATUS_MAX, HTTP_STATUS_MIN, type FailureKind } from "./types"
 
 /** UTC month of a timestamp, as YYYYMM (rotation suffix and window math). */
 export function utcMonth(ts: number): string {
@@ -44,6 +44,8 @@ export const ledgerEventSchema = z.object({
   tokens: z.object({ input: z.number().int().nonnegative(), output: z.number().int().nonnegative() }).optional(),
   cost: z.number().finite().nonnegative().optional(),
   errorKind: z.enum(SWITCH_KINDS).optional(),
+  httpStatus: z.number().int().min(HTTP_STATUS_MIN).max(HTTP_STATUS_MAX).optional(),
+  attempt: z.number().int().min(0).optional(),
   verdict: z.enum(["switch", "stay"]).optional(),
   outcome: z.enum(JUDGE_OUTCOMES).optional(),
   reason: z.enum(JUDGE_REASONS).optional(),
@@ -54,6 +56,7 @@ export const ledgerEventSchema = z.object({
   what: z.enum(HEALTH_WHATS).optional(),
   untilMs: z.number().finite().nonnegative().optional(),
 }).refine((e) => (e.event === "failure") === (e.errorKind !== undefined), { message: "failure events need an errorKind" })
+  .refine((e) => e.event === "failure" || (e.httpStatus === undefined && e.attempt === undefined), { message: "httpStatus/attempt are failure metadata" })
   .refine((e) => e.event !== "judge" || ((e.verdict !== undefined) !== (e.outcome !== undefined)), { message: "judge events need a verdict or outcome" })
   .refine((e) => e.event === "judge" || e.verdict === undefined, { message: "verdict metadata belongs to judge events" })
   .refine((e) => e.event === "judge" || e.outcome === undefined, { message: "outcome metadata belongs to judge events" })

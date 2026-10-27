@@ -1,4 +1,4 @@
-import type { Classified, FailureKind } from "./types"
+import { HTTP_STATUS_MAX, HTTP_STATUS_MIN, type Classified, type FailureKind } from "./types"
 
 const RE = {
   freeTier: /free tier can only be used from within opencode|FreeTierError/i,
@@ -23,30 +23,33 @@ export function classify(err: unknown): Classified {
     const name = typeof e.name === "string" ? e.name : ""
     const data = (typeof e.data === "object" && e.data !== null ? e.data : e) as Record<string, any>
     const status = typeof data.statusCode === "number" ? data.statusCode : undefined
+    // #107: a bounded HTTP status rides on the verdict, never coerced — a finite integer in 100-599 only.
+    const httpStatus = status !== undefined && Number.isInteger(status) && status >= HTTP_STATUS_MIN && status <= HTTP_STATUS_MAX ? status : undefined
+    const withStatus = (c: Classified): Classified => httpStatus === undefined ? c : { ...c, httpStatus }
     const text = `${data.responseBody ?? ""} ${data.message ?? ""}`
 
-    if (name === "MessageAbortedError") return { kind: "user_abort", retryable: false, permanent: false, switchable: false }
-    if (name === "ProviderAuthError") return mk("auth", true)
-    if (status !== 429 && RE.overflow.test(text)) return { kind: "overflow", retryable: false, permanent: false, switchable: false }
-    if (RE.freeTier.test(text)) return mk("free_tier_403", true)
-    if (status === 402 || (status !== 429 && RE.quota.test(text))) return mk("quota", true)
-    if (status === 429 && RE.quota.test(text)) return mk("quota", true)
-    if (status === 401 || status === 403) return mk("auth", true)
+    if (name === "MessageAbortedError") return withStatus({ kind: "user_abort", retryable: false, permanent: false, switchable: false })
+    if (name === "ProviderAuthError") return withStatus(mk("auth", true))
+    if (status !== 429 && RE.overflow.test(text)) return withStatus({ kind: "overflow", retryable: false, permanent: false, switchable: false })
+    if (RE.freeTier.test(text)) return withStatus(mk("free_tier_403", true))
+    if (status === 402 || (status !== 429 && RE.quota.test(text))) return withStatus(mk("quota", true))
+    if (status === 429 && RE.quota.test(text)) return withStatus(mk("quota", true))
+    if (status === 401 || status === 403) return withStatus(mk("auth", true))
     // Usage exhaustion is weaker evidence than explicit auth/quota. Reset hints must be
     // checked here, before classifyRetryMessage delegates, to avoid permanent blacklisting.
     const usageLimit = RE.usageLimit.test(text)
-    if (usageLimit && !RE.resetHint.test(text)) return mk(RE.freeUsageLimit.test(text) ? "free_tier_403" : "quota", true)
+    if (usageLimit && !RE.resetHint.test(text)) return withStatus(mk(RE.freeUsageLimit.test(text) ? "free_tier_403" : "quota", true))
     if (status === 429 || usageLimit) {
       const h = data.responseHeaders as Record<string, string> | undefined
       const key = h && typeof h === "object" ? Object.keys(h).find((k) => k.toLowerCase() === "retry-after") : undefined
       const raw = key !== undefined ? String(h![key]).trim() : ""
       const secs = /^-?\d+(\.\d+)?$/.test(raw) ? Number(raw) : NaN
-      return mk("rate_limit", false, Number.isFinite(secs) ? { retryAfterMs: Math.max(0, secs * 1000) } : {})
+      return withStatus(mk("rate_limit", false, Number.isFinite(secs) ? { retryAfterMs: Math.max(0, secs * 1000) } : {}))
     }
-    if (status === 404 || RE.notFound.test(text)) return mk("model_not_found", true)
-    if (status !== undefined && status >= 500) return mk("server_5xx", false)
-    if (RE.timeout.test(text)) return mk("timeout", false)
-    return unknown
+    if (status === 404 || RE.notFound.test(text)) return withStatus(mk("model_not_found", true))
+    if (status !== undefined && status >= 500) return withStatus(mk("server_5xx", false))
+    if (RE.timeout.test(text)) return withStatus(mk("timeout", false))
+    return withStatus(unknown)
   } catch {
     return unknown
   }

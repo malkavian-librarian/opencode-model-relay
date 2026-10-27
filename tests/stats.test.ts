@@ -351,10 +351,30 @@ describe("stats window, kinds and sample median", () => {
     ] as LedgerEvent[]
     const txt = renderStatsTable(buildStats(ev, NOW), ev, true)
     expect(txt).toContain("prov/a | 1 | 3 | – | 0 | 0 | 0% | – | – | 0/0 | $0.00 | $0.00")
-    expect(txt).toContain("prov/a failure kinds: quota 2, timeout 1")
-    expect(txt).toContain("prov/clean failure kinds: none")
+    expect(txt).toContain("prov/a failure kinds: quota 2, timeout 1 (unknown share: 0%)")
+    expect(txt).toContain("prov/clean failure kinds: none (unknown share: –)")
     expect(renderStatsTable(buildStats(ev, NOW), ev, false).split("\n")).toHaveLength(3) // header + 2 rows, no breakdown
     expect(renderStatsTable(buildStats([], NOW), [], true)).toBe("model | turns | fails | judgeRej | switchAway | downMs | offPrimary | survival | medianLat | tok in/out | cost$ | helper$ | regret")
+  })
+  it("--kinds shows the per-model unknown share of all recorded failures in the window (#107)", () => {
+    const ev = [
+      turn(NOW - DAY, "prov/mixed"),
+      { ts: NOW - DAY, session: S, event: "failure", errorKind: "unknown", model: "prov/mixed" },
+      { ts: NOW - DAY, session: S, event: "failure", errorKind: "quota", model: "prov/mixed" },
+      { ts: NOW - DAY, session: S, event: "failure", errorKind: "timeout", model: "prov/mixed" },
+      turn(NOW - DAY, "prov/all-unknown"),
+      { ts: NOW - DAY, session: S, event: "failure", errorKind: "unknown", model: "prov/all-unknown" },
+      turn(NOW - DAY, "prov/known"),
+      { ts: NOW - DAY, session: S, event: "failure", errorKind: "quota", model: "prov/known" },
+      turn(NOW - DAY, "prov/clean"),
+    ] as LedgerEvent[]
+    const txt = renderStatsTable(buildStats(ev, NOW), ev, true)
+    expect(txt).toContain("prov/mixed failure kinds: quota 1, timeout 1, unknown 1 (unknown share: 33%)")
+    expect(txt).toContain("prov/all-unknown failure kinds: unknown 1 (unknown share: 100%)")
+    expect(txt).toContain("prov/known failure kinds: quota 1 (unknown share: 0%)")
+    expect(txt).toContain("prov/clean failure kinds: none (unknown share: –)") // zero failures: explicit, never a misleading 0%
+    // the share rides the kinds line only: the plain table is unchanged
+    expect(renderStatsTable(buildStats(ev, NOW), ev, false)).not.toContain("unknown share")
   })
   it("statsText renders a real ledger's mixed events inside the exact window with costs", () => {
     const d = dir()
