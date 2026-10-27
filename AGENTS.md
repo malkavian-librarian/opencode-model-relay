@@ -108,6 +108,7 @@ over with a structured summary. Design: `docs/superpowers/specs/2026-10-18-model
 - Circular mode hit the existing deepest fallback after its cap -> stop cleanly before fallback to keep cycles bounded and repeatable (2026-10-27)
 - Gemini slot matching accepted image ids as text -> exclude image/banana ids, sort text candidates by numeric version, apply SAFE_MODEL_ID, and exclude non-chat variants (2026-10-27)
 - Repeated live preflights on unchanged summaries wasted turns -> cache one snapshot per resumed turn and recheck only on concrete change signals or irreversible actions (2026-10-27)
+- Judge/switch outcome rows contradicted each other (skip rows diluted the judge share, abort-race drops landed while enactment continued, regret fired without a return to the source) -> one truthful row per attempt: verdict-only denominators, drops only when the attempt stops, exact-reversal regret (2026-10-27)
 
 ## Bugs - [open]/[fixed] + repro (max 10)
 

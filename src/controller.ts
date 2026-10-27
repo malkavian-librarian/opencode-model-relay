@@ -13,7 +13,7 @@ import { buildJudgeInput, parseVerdict } from "./judge"
 import type { SessionLock } from "./session-lock"
 import type { StateStore } from "./state"
 import type { createNarrator, NarrationEvent } from "./narrator"
-import type { SwitchLog, SwitchLogRow } from "./switchlog"
+import type { SwitchLog, SwitchLogRow, SwitchDropReason } from "./switchlog"
 import type { orChat } from "./openrouter"
 import { buildHandover, extractFromMessages, writeNarrative } from "./handover"
 import type { EventInput } from "./ledger"
@@ -74,6 +74,7 @@ export class Controller {
   // Retry-storm tokens: sessionID -> switch enacted at. In memory only: a restart is fail safe because
   // the transcript re-read and the attribution guard reject stale events on their own.
   private storm = new Map<string, number>()
+  private automaticSwitches = new Map<string, { ts: number; from: string; to: string }>()
   private readonly healthEvents: HealthEvents
   constructor(private d: Deps) { this.healthEvents = new HealthEvents((fields) => this.led(fields), (model) => this.tierOf(model)) }
 
@@ -129,6 +130,14 @@ export class Controller {
     try { this.d.ledger?.append(fields) } catch { /* hooks never throw */ }
   }
 
+  private dropSwitch(sessionID: string, reason: SwitchDropReason, started: number, from?: string, to?: string): void {
+    const ts = this.d.now()
+    try {
+      this.d.switchLog.append({ ts, sessionID, ...(from ? { from } : {}), ...(to ? { to } : {}), kind: "switch_dropped", reason, elapsedMs: Math.max(0, ts - started) })
+      this.led({ ts, sessionID, event: "switch", sw: { kind: "switch_dropped", reason, ...(from ? { from } : {}), ...(to ? { to } : {}) } })
+    } catch { /* logging is best effort */ }
+  }
+
   private tierOf(model: string): number | undefined {
     const i = buildLadder(this.d.cfg).indexOf(model)
     return i >= 0 ? i + 1 : undefined
@@ -136,15 +145,35 @@ export class Controller {
 
   /** Owner escape hatch: the same abort/switchModel seam as failover, but plain-tail and cap-exempt. */
   async manualSwitch(sessionID: string, requested?: string): Promise<ManualSwitchResult> {
+    const manualD = {
+      ...this.d,
+      switchLog: {
+        ...this.d.switchLog,
+        append: (row: Parameters<SwitchLog["append"]>[0]) => this.d.switchLog.append({
+          ...row,
+          ...(row.kind === "manual" && row.from && row.to && this.isRegret(sessionID, row.from, row.to, row.ts) ? { regret: true } : {}),
+        }),
+      },
+    }
     return runManualSwitch({
-      d: this.d, sessionID, requested, healthEvents: this.healthEvents,
+      d: manualD, sessionID, requested, healthEvents: this.healthEvents,
       fetchMessages: (id) => this.fetchMessages(id),
       findInput: (current, sid, now) => this.findInput(current, sid, now),
       enactSwitch: (sid, current, options) => this.enactSwitch(sid, current, options),
-      led: (fields) => this.led(fields),
+      led: (fields) => {
+        if (fields.event === "switch" && fields.sw?.kind === "manual" && fields.sw.from && fields.sw.to && this.isRegret(sessionID, fields.sw.from, fields.sw.to, fields.ts)) {
+          this.led({ ...fields, sw: { ...fields.sw, regret: true } })
+        } else this.led(fields)
+      },
       clearSuccess: (sid, model, ts) => this.healthEvents.clearSuccess(sid, model, this.d.health, ts),
       saveState: (sid) => this.saveState(sid),
     })
+  }
+
+  /** Regret marks the exact manual reversal of the latest automatic switch: back to that switch's source model, within five minutes. */
+  private isRegret(sessionID: string, from: string, to: string, ts: number): boolean {
+    const automatic = this.automaticSwitches.get(sessionID)
+    return automatic !== undefined && automatic.to === from && automatic.from === to && ts >= automatic.ts && ts - automatic.ts <= 5 * 60 * 1000
   }
 
   private saveState(sessionID: string): void {
@@ -166,11 +195,9 @@ export class Controller {
     if (!c.switchable) return false
 
     const session = await d.client.session.get({ path: { id: sessionID } })
-    if (session.data?.parentID) return false
+    if (session.data?.parentID) { this.dropSwitch(sessionID, "child_session", started); return false }
     if (!d.lock.tryAcquire(sessionID)) {
-      // AC-06: the incident's silent drop class becomes diagnosable (metadata only, rule 8).
-      d.switchLog.append({ ts: d.now(), sessionID, ...(from ? { from: modelKey(from) } : {}), kind: "switch_dropped", reason: "lock_held", elapsedMs: Math.max(0, d.now() - started) })
-      this.led({ ts: d.now(), sessionID, event: "switch", sw: { kind: "switch_dropped", reason: "lock_held", ...(from ? { from: modelKey(from) } : {}) } })
+      this.dropSwitch(sessionID, "lock_held", started, from ? modelKey(from) : undefined)
       return false
     }
     try {
@@ -197,12 +224,11 @@ export class Controller {
       // Marker guard (#56, AC-03): marker text is untrusted; a marker newest while the session is not
       // on the plugin-set model is a stale error, and the drop is logged, never silent (AC-06).
       if (hasRelayMarker(newest.parts) && rec.pluginPinned !== current) {
-        d.switchLog.append({ ts: now, sessionID, from: current, kind: "switch_dropped", reason: "marker_guard", elapsedMs: Math.max(0, d.now() - started) })
-        this.led({ ts: now, sessionID, event: "switch", sw: { kind: "switch_dropped", reason: "marker_guard", from: current } })
+        this.dropSwitch(sessionID, "marker_guard", started, current)
         return false
       }
 
-      if (d.lock.isDuplicate(`${sessionID}:${ni.id}`)) return false
+      if (d.lock.isDuplicate(`${sessionID}:${ni.id}`)) { this.dropSwitch(sessionID, "duplicate", started, current); return false }
 
       // Adoption grace (AC-01): failures of a just-adopted pick within the window do not re-mark it.
       const inGrace = rec.adoptedAt !== undefined && rec.pluginPinned === current && now - rec.adoptedAt < ADOPTION_GRACE_MS
@@ -247,6 +273,7 @@ export class Controller {
         if (decision.reason === "switch_cap") healthEvent(current, "cap_hit")
         if (d.cfg.maxCircularFlows > 0 && decision.reason === "switch_cap") {
           await this.toast("cap_reached", {}, "warning", EXHAUSTED_HINT)
+          this.dropSwitch(sessionID, "cap_hit", started, current)
           return false
         }
         // AC-07 onExhausted acts: a last-resort hop to the deepest healthy level (even at the cap,
@@ -259,6 +286,9 @@ export class Controller {
         if (fallback.action !== "switch") {
           healthEvent(current, decision.reason === "switch_cap" ? "cap_hit" : "exhausted")
           await this.toast(decision.reason === "switch_cap" ? "cap_reached" : "exhausted", {}, "warning", EXHAUSTED_HINT)
+          // no_consent is reserved for consent actually gating a discovery destination; cap and exhaustion stand on their own regardless of consent.
+          const consentGatedDiscovery = !d.cfg.privacy.consent && ladder.some((level) => typeof level !== "string")
+          this.dropSwitch(sessionID, consentGatedDiscovery ? "no_consent" : decision.reason === "switch_cap" ? "cap_hit" : "exhausted", started, current)
           return false
         }
         to = fallback.to
@@ -299,7 +329,16 @@ export class Controller {
       d.state.set(sessionID, next)
       this.saveState(sessionID)
 
-      const supersededBy = await this.enactSwitch(sessionID, current, { to: parseModel(to), ...(agent ? { agent } : {}), handoverText: text })
+      // A drop row is recorded only when the attempt stops before the prompt fires; once the enacted
+      // row is written, a late prompt rejection is a turn failure, not another switch drop.
+      let promptStopped = false
+      let switchEnacted = false
+      const onDrop = (reason: "prompt_failed"): void => {
+        if (switchEnacted) return
+        promptStopped = true
+        this.dropSwitch(sessionID, reason, started, current, to)
+      }
+      const supersededBy = await this.enactSwitch(sessionID, current, { to: parseModel(to), ...(agent ? { agent } : {}), handoverText: text }, onDrop)
       if (supersededBy !== undefined) {
         // AC-02: the pick supersedes the pending switch; adopt it under the still-held lock (merged
         // write, marks cleared once, the switchCount rolled back: nothing was enacted).
@@ -313,10 +352,10 @@ export class Controller {
         this.healthEvents.clearSuccess(sessionID, supersededBy, d.health, d.now())
         delete d.health[supersededBy] // the owner chose it: cooldown, blacklist and failure count all clear, once
         this.saveState(sessionID)
-        d.switchLog.append({ ts: d.now(), sessionID, from: current, to: supersededBy, kind: "switch_dropped", reason: "superseded", elapsedMs: Math.max(0, d.now() - started) })
-        this.led({ ts: d.now(), sessionID, event: "switch", sw: { kind: "switch_dropped", reason: "superseded", from: current, to: supersededBy } })
+        this.dropSwitch(sessionID, "superseded", started, current, supersededBy)
         return false
       }
+      if (promptStopped) return false // the prompt never fired: the drop row is this attempt's only outcome row
       if (narrativeDeferred) {
         // Only an enacted switch spends an attempt; persist it under the lock before the writer starts.
         d.state.set(sessionID, { ...d.state.get(sessionID), helperCalls: helperCalls + 1, updated: d.now() })
@@ -328,6 +367,9 @@ export class Controller {
         ts: now, sessionID, from: current, to, kind: c.kind, elapsedMs: Math.max(0, d.now() - started),
       })
       this.led({ ts: now, sessionID, event: "switch", sw: { kind: c.kind, from: current, to } })
+      this.automaticSwitches.set(sessionID, { ts: now, from: current, to })
+      if (this.automaticSwitches.size > MAX_SESSION_ENTRIES) this.automaticSwitches.clear()
+      switchEnacted = true // from here a late prompt rejection is a turn failure, not a switch drop
       await this.toast("switch_done", { from: current, to, reason: c.kind })
       if (narrativeDeferred && key) {
         void (async () => {
@@ -377,8 +419,15 @@ export class Controller {
   private async enactSwitch(
     sessionID: string, current: string,
     a: { to: ModelRef; agent?: string; handoverText: string },
+    onDrop?: (reason: "prompt_failed") => void,
   ): Promise<string | undefined> {
     const d = this.d
+    let dropLogged = false
+    const reportDrop = (reason: "prompt_failed") => {
+      if (dropLogged) return
+      dropLogged = true
+      onDrop?.(reason)
+    }
     d.lock.markPluginAbort(sessionID)
 
     let timer: ReturnType<typeof setTimeout> | undefined
@@ -396,6 +445,8 @@ export class Controller {
     // The abort mark stays set on ok/timeout (handle() swallows the resulting MessageAbortedError);
     // cleared only when abort was rejected (no abort error will arrive).
     if (outcome === "rejected") d.lock.consumePluginAbort(sessionID)
+    // Timeout and rejection do not drop the attempt: enactment continues past the abort race, so
+    // the only drop left is a prompt that never fires.
 
     const delay = d.switchOpts?.abortDelayMs ?? ABORT_DELAY_MS
     if (delay > 0) await new Promise<void>((r) => { setTimeout(r, delay) })
@@ -421,8 +472,9 @@ export class Controller {
             parts: [{ type: "text", text: a.handoverText }],
           },
         }),
-      ).catch((e: unknown) => { try { d.log(`prompt failed: ${e instanceof Error ? e.message : String(e)}`) } catch { /* ignore */ } })
+      ).catch((e: unknown) => { reportDrop("prompt_failed"); try { d.log(`prompt failed: ${e instanceof Error ? e.message : String(e)}`) } catch { /* ignore */ } })
     } catch (e) {
+      reportDrop("prompt_failed")
       try { d.log(`prompt failed: ${e instanceof Error ? e.message : String(e)}`) } catch { /* ignore */ }
     }
     return undefined

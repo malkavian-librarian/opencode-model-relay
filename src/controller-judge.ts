@@ -34,29 +34,48 @@ export async function runJudge(input: {
     const lastUser = [...msgs].reverse().find((m) => m.info.role === "user")
     if (!lastUser || hasRelayMarker(lastUser.parts)) return
     const rec = d.state.get(sessionID)
-    if ((rec.judgeCalls ?? 0) >= cfg.maxCallsPerSession) return
+    const reasons = heuristicReasons(observeTurn(msgs))
+    const emit = (fields: Omit<EventInput, "event" | "sessionID" | "ts"> & { outcome?: "error" | "timeout" | "unparseable" | "skipped_cap" | "skipped_no_heuristic"; verdict?: "switch" | "stay" }): void => {
+      led({ ts: d.now(), sessionID, event: "judge", model: current, tier: tierOf(current), heuristicReasons: reasons, ...fields })
+    }
     const now = d.now()
-    if (now < (rec.lastJudgeAt ?? 0) + cfg.minIntervalMs || last.info.id === rec.lastJudgeMessageId) return
+    const markSkipped = (): void => {
+      d.state.set(sessionID, { ...d.state.get(sessionID), lastJudgeMessageId: last.info.id, updated: now })
+      saveState()
+    }
+    // A re-processed assistant message returns before the cap checks: its already-logged skip must not log another skipped_cap row.
+    if (last.info.id === rec.lastJudgeMessageId) return
+    if ((rec.judgeCalls ?? 0) >= cfg.maxCallsPerSession) { emit({ outcome: "skipped_cap" }); markSkipped(); return }
+    if (now < (rec.lastJudgeAt ?? 0) + cfg.minIntervalMs) return
     const daily = d.state.judgeDaily
     const today = new Date(now).toISOString().slice(0, 10)
     if (daily.date !== today) { daily.calls = undefined; daily.costUsd = undefined; daily.date = today }
-    if (daily.costUsd !== undefined && daily.costUsd >= cfg.maxDailyUsd) return
+    if (daily.costUsd !== undefined && daily.costUsd >= cfg.maxDailyUsd) { emit({ outcome: "skipped_cap" }); markSkipped(); return }
     if (d.lock.isDuplicate(`${sessionID}:judge:${last.info.id}`)) return
-    const reasons = heuristicReasons(observeTurn(msgs))
-    if (reasons.length === 0) { judgeStreak.delete(sessionID); return }
+    if (reasons.length === 0) { judgeStreak.delete(sessionID); emit({ outcome: "skipped_no_heuristic", heuristicReasons: [] }); markSkipped(); return }
     const judgeCalls = (rec.judgeCalls ?? 0) + 1
     daily.calls = (daily.calls ?? 0) + 1
     d.state.set(sessionID, { ...d.state.get(sessionID), judgeCalls, lastJudgeAt: now, lastJudgeMessageId: last.info.id, updated: now })
     saveState()
     const ex = extractFromMessages(msgs, d.cfg.handover)
     const { payload, call } = buildJudgeInput(ex, reasons)
-    const r = await d.chat({ baseUrl: d.cfg.openrouter.baseUrl, key, model: cfg.model, system: cfg.prompt, user: payload, maxTokens: call.maxTokens, timeoutMs: call.timeoutMs, zdr: d.cfg.privacy.zdr })
+    const started = d.now()
+    let r: { text: string; costUsd?: number }
+    try {
+      r = await d.chat({ baseUrl: d.cfg.openrouter.baseUrl, key, model: cfg.model, system: cfg.prompt, user: payload, maxTokens: call.maxTokens, timeoutMs: call.timeoutMs, zdr: d.cfg.privacy.zdr })
+    } catch (e) {
+      const message = e instanceof Error ? e.message : ""
+      emit({ outcome: /timed out|timeout/i.test(message) ? "timeout" : "error", latencyMs: Math.max(0, d.now() - started) })
+      return
+    }
     const cost = typeof r.costUsd === "number" && Number.isFinite(r.costUsd) && r.costUsd >= 0 ? r.costUsd : 0
     daily.costUsd = (daily.costUsd ?? 0) + cost
     saveState()
     const verdict = parseVerdict(r.text)
-    if (!verdict) return
-    led({ ts: d.now(), sessionID, event: "judge", verdict: verdict.switch ? "switch" : "stay", tier: tierOf(current), model: current, helperCostUsd: cost > 0 ? cost : undefined })
+    const latencyMs = Math.max(0, d.now() - started)
+    if (!verdict) { emit({ outcome: "unparseable", latencyMs, ...(cost > 0 ? { helperCostUsd: cost } : {}) }); return }
+    if ("outcome" in verdict) { emit({ outcome: verdict.outcome, latencyMs, ...(cost > 0 ? { helperCostUsd: cost } : {}) }); return }
+    emit({ verdict: verdict.switch ? "switch" : "stay", reason: verdict.reason, confidence: verdict.confidence, latencyMs, ...(cost > 0 ? { helperCostUsd: cost } : {}) })
     const streak = verdict.switch ? (judgeStreak.get(sessionID) ?? 0) + 1 : 0
     if (streak <= 0) { judgeStreak.delete(sessionID); return }
     if (judgeStreak.size >= MAX_SESSION_ENTRIES) judgeStreak.clear()

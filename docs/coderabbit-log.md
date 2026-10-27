@@ -12,6 +12,15 @@ Record of `@coderabbitai` exchanges, so agents do not repeat past mistakes.
 
 ## Entries (newest first)
 
+### 2026-10-27 - PR #128 (issue #109), CodeRabbit remediation round 1
+
+- Major, `src/stats.ts:145-147` (outside diff): skip/outcome judge rows diluted the rejection share (one `switch` verdict plus nine skips read as 10% instead of 100%) -> fixed in `e93a472`: `judgeCalls` counts verdict rows only; helper cost stays accounted separately.
+- Major, `src/controller.ts:173-175` + `src/stats.ts:161-163` (additional, posted unverified): a manual `b/2` -> `c/3` after an automatic `a/1` -> `b/2` got `regret: true` -> fixed in `e93a472`: the automatic source is stored and exact reversal (manual destination = automatic source) is required in both the in-memory predicate and the stats inference.
+- Minor, `src/controller-judge.ts:46`: a re-processed capped assistant message emitted another `skipped_cap` row -> fixed in `e93a472`: the message-ID dedup check returns before both cap checks; cap behavior for new message ids unchanged.
+- Major, `src/controller.ts:434-435`: abort timeout/rejection recorded drop rows while enactment continued, and the async `prompt_failed` callback could record a drop after the enacted-switch event was written -> fixed in `e93a472`: drops are recorded only when the attempt stops (the prompt never fired); a late rejection after the enacted row is a turn failure; `handle()` writes no enacted row and returns false when the prompt never fired.
+- Minor, `src/controller.ts:288`: `no_consent` was used for every dropped switch when consent was off -> fixed in `e93a472`: `no_consent` only when consent gated a discovery (`find`) destination; `cap_hit` for switch-cap stops and `exhausted` for local exhaustion, regardless of consent.
+- All five findings re-verified against current code before fixing; each has a failing-first regression test (10 new tests; RED 10 failed / 203 passed at `89a8288`, GREEN 213/213 scoped, 669/669 full, typecheck/build/pack/diff-check clean). README drop semantics, regret wording and verdict-row share plus spec section 9 updated in the same commit; AGENTS.md gotcha added; inline threads answered with @coderabbitai.
+
 ### 2026-10-27 - PR #123 (issue #122), repair round 1
 
 - Medium, `src/controller.ts`: circular cap handling also intercepted `no_candidates` and skipped the existing exhaustion fallback -> fixed by limiting the early stop to `switch_cap`; circular mode still avoids fallback only at its configured cap.

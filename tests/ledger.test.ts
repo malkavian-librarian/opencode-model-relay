@@ -52,6 +52,16 @@ describe("EventLog", () => {
     expect(l.read(30, 2)).toHaveLength(8)
     for (const event of ["failure", "judge", "switch"]) expect(l.append({ ...base, event } as never)).toBe(false)
   })
+  it("round-trips every judge outcome and deterministic heuristic evidence", () => {
+    const l = new EventLog(dir(), true, nextPid())
+    const rows = [
+      { outcome: "error" }, { outcome: "timeout" }, { outcome: "unparseable" },
+      { outcome: "skipped_cap" }, { outcome: "skipped_no_heuristic" },
+      { verdict: "switch", reason: "loop", confidence: 0.8, latencyMs: 12, heuristicReasons: ["loop", "no_output"] },
+    ]
+    for (const row of rows) expect(l.append({ ...base, event: "judge", model: "prov/a", ...row } as never)).toBe(true)
+    expect(l.read(30, 2)).toHaveLength(rows.length)
+  })
   it("round-trips validated health transitions and rejects invalid timing fields", () => {
     const l = new EventLog(dir(), true, nextPid())
     expect(l.append({ ...base, event: "health", model: "prov/a", what: "cooldown_start", untilMs: 101 } as never)).toBe(true)
