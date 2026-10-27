@@ -5,8 +5,7 @@ import { classify, classifyRetryMessage } from "./classifier"
 import type { Classified } from "./types"
 import {
   buildLadder, clearSuccess, effectiveMaxSwitches, hasRelayMarker, recordFailure, triedThisTurn,
-  PERMANENT_HEALTH_TTL_MS,
-  isValidDiscoveredModelId, walkCircular, walkFromTopAsync, type FindResolutionInput, type ModelHealth,
+  isHealthy, isValidDiscoveredModelId, walkCircular, walkFromTopAsync, type FindResolutionInput, type HealthExpiry, type ModelHealth,
 } from "./strategy"
 import { FIND_CACHE_TTL_MS } from "./state"
 import { heuristicReasons, observeTurn } from "./heuristics"
@@ -74,6 +73,7 @@ export class Controller {
   // Retry-storm tokens: sessionID -> switch enacted at. In memory only: a restart is fail safe because
   // the transcript re-read and the attribution guard reject stale events on their own.
   private storm = new Map<string, number>()
+  private emittedExpiry = new Set<string>()
   constructor(private d: Deps) {}
 
   private async toast(ev: NarrationEvent, v?: Parameters<Deps["narrate"]>[1], variant: "info" | "warning" = "info", suffix = "") {
@@ -126,6 +126,17 @@ export class Controller {
   /** Metadata-only ledger append (best effort, #7): never throws and never changes session behavior. */
   private led(fields: EventInput): void {
     try { this.d.ledger?.append(fields) } catch { /* hooks never throw */ }
+  }
+
+  private healthExpiry(sessionID: string, model: string, what: HealthExpiry, h: ModelHealth | undefined, ts: number): void {
+    try {
+      const marker = what === "cooldown_end" ? h?.cooldownUntil : h?.permanentAt
+      const key = `${sessionID}:${model}:${what}:${marker ?? "unknown"}`
+      if (this.emittedExpiry.has(key)) return
+      if (this.emittedExpiry.size >= MAX_SESSION_ENTRIES) this.emittedExpiry.clear()
+      this.emittedExpiry.add(key)
+      this.led({ ts, sessionID, event: "health", model, tier: this.tierOf(model), what })
+    } catch { /* health telemetry never changes the decision */ }
   }
 
   private tierOf(model: string): number | undefined {
@@ -228,10 +239,11 @@ export class Controller {
           ...input, ladder, switchCount: rec.switchCount, maxSwitches: effectiveMaxSwitches(d.cfg), maxCircularFlows: d.cfg.maxCircularFlows,
           circularFlows: rec.circularFlows,
           onQuarantineSkip: (model) => healthEvent(model, "quarantine_skip"),
+          onHealthExpiry: (model, what) => this.healthExpiry(sessionID, model, what, d.health[model], now),
           resolveFind: (entry) => circularCurrentFind && JSON.stringify(entry) === JSON.stringify(circularCurrentFind)
             ? current : d.state.getFindCache(JSON.stringify(entry), now),
         })
-        : await walkFromTopAsync({ ...input, ladder, tried: triedThisTurn(msgs), switchCount: rec.switchCount, maxSwitches: effectiveMaxSwitches(d.cfg), onQuarantineSkip: (model) => healthEvent(model, "quarantine_skip") })
+        : await walkFromTopAsync({ ...input, ladder, tried: triedThisTurn(msgs), switchCount: rec.switchCount, maxSwitches: effectiveMaxSwitches(d.cfg), onQuarantineSkip: (model) => healthEvent(model, "quarantine_skip"), onHealthExpiry: (model, what) => this.healthExpiry(sessionID, model, what, d.health[model], now) })
       let to: string
       if (decision.action === "switch") to = decision.to
       else {
@@ -245,6 +257,7 @@ export class Controller {
         const fallback = await walkFromTopAsync({
           ...input, ladder: [...ladder].reverse(), switchCount: 0, maxSwitches: Infinity, allowQuarantined: false,
           onQuarantineSkip: (model) => healthEvent(model, "quarantine_skip"),
+          onHealthExpiry: (model, what) => this.healthExpiry(sessionID, model, what, d.health[model], now),
         })
         if (fallback.action !== "switch") {
           healthEvent(current, decision.reason === "switch_cap" ? "cap_hit" : "exhausted")
@@ -446,12 +459,7 @@ export class Controller {
       this.storm.delete(sessionID) // the turn is over: the retry storm is spent
       const rec = this.d.state.get(sessionID)
       const h = this.d.health[model]
-      if (h?.cooldownUntil !== undefined && h.cooldownUntil <= this.d.now()) {
-        this.led({ ts: this.d.now(), sessionID, event: "health", model, tier: this.tierOf(model), what: "cooldown_end" })
-      }
-      if (h?.permanent === true && h.permanentAt !== undefined && this.d.now() - h.permanentAt > PERMANENT_HEALTH_TTL_MS) {
-        this.led({ ts: this.d.now(), sessionID, event: "health", model, tier: this.tierOf(model), what: "permanent_expire" })
-      }
+      isHealthy(h, this.d.now(), (what) => this.healthExpiry(sessionID, model, what, h, this.d.now()))
       if (this.d.health[model] !== undefined) {
         clearSuccess(this.d.health, model)
         this.d.state.save()

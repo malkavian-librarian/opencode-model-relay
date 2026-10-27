@@ -183,6 +183,10 @@ The immediate append-only `switches.jsonl` row is unchanged: it precedes narrati
 completion and cannot include that deferred cost. The event ledger is authoritative
 for this spend; no second switch row or historical backfill is written.
 
+Each cooldown renewal records its latest bounded `untilMs`; stats treat overlapping
+renewals as one continuous interval and consume each matching end transition once.
+Unmatched end transitions do not create or extend downtime.
+
 `/relay stats [--days N] [--kinds]` (OpenCode v2 only; the `relay_stats` tool is
 the same surface with optional `days` (integer 1-30, default 30) and `kinds`
 (boolean)) prints a per-model table over the selected rolling window: turns,

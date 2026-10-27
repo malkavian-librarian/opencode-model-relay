@@ -93,6 +93,16 @@ describe("buildStats", () => {
     expect(s.models["prov/a"]![new Date(NOW).toISOString().slice(0, 10)]!.down).toBe(1000)
     expect(s.models["prov/a"]![new Date(NOW).toISOString().slice(0, 10)]!.offPrimary).toBe(0)
   })
+  it("extends one downtime interval across renewals and consumes each end at most once", () => {
+    const ev = [
+      { ts: NOW - 1000, session: S, event: "health", model: "prov/a", what: "cooldown_start", untilMs: NOW - 500 },
+      { ts: NOW - 900, session: S, event: "health", model: "prov/a", what: "cooldown_start", untilMs: NOW - 100 },
+      { ts: NOW - 800, session: S, event: "health", model: "prov/a", what: "cooldown_end" },
+      { ts: NOW - 700, session: S, event: "health", model: "prov/a", what: "cooldown_end" },
+    ] as LedgerEvent[]
+    const b = buildStats(ev, NOW).models["prov/a"]![new Date(NOW).toISOString().slice(0, 10)]!
+    expect(b.down).toBe(200)
+  })
 })
 
 describe("stats.json write", () => {

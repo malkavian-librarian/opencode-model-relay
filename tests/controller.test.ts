@@ -78,6 +78,16 @@ describe("Controller.onSessionError", () => {
     expect(calls.prompt).toHaveLength(2)
     expect(calls.chat).toEqual([])
   })
+  it("records lazy cooldown expiry when ladder health is read, without changing the selected target", async () => {
+    const { c, d, calls } = setup({ cfg: { tiers: { primary: "a/1", secondary: ["b/2"] } } })
+    d.health["b/2"] = { cooldownUntil: 1_000_000, failures: 1 }
+    vi.spyOn(d.state, "save").mockImplementation(() => {})
+    expect(await c.onSessionError("s1", err429)).toBe(true)
+    expect(calls.prompt.at(-1)?.body.model).toEqual({ providerID: "b", modelID: "2" })
+    expect(calls.events.filter((e) => e.event === "health" && e.model === "b/2")).toEqual([
+      { ts: 1_000_000, sessionID: "s1", event: "health", model: "b/2", tier: 2, what: "cooldown_end" },
+    ])
+  })
   it("completes three deterministic circular flows and then stops", async () => {
     const { c, d, calls, messages } = setup({ cfg: { tiers: { primary: "a/1", secondary: ["b/2"], tertiary: ["c/3"] }, maxCircularFlows: 3, maxSwitchesPerSession: 20 } })
     const sequence = ["b/2", "c/3", "a/1", "b/2", "c/3", "a/1", "b/2", "c/3", "a/1"]

@@ -57,6 +57,7 @@ describe("EventLog", () => {
     expect(l.append({ ...base, event: "health", model: "prov/a", what: "cooldown_start", untilMs: 101 } as never)).toBe(true)
     expect(l.append({ ...base, event: "health", model: "prov/a", what: "cooldown_end", untilMs: 101 } as never)).toBe(false)
     expect(l.append({ ...base, event: "health", model: "prov/a", what: "quarantine_skip", untilMs: 101 } as never)).toBe(false)
+    expect(l.append({ ...base, event: "health", model: "prov/a", what: "exhausted", cost: 1 } as never)).toBe(false)
     expect(l.read(30, 0)).toEqual([])
     expect(l.read(30, 101)).toMatchObject([{ event: "health", model: "prov/a", what: "cooldown_start", untilMs: 101 }])
   })

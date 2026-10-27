@@ -52,6 +52,7 @@ export const ledgerEventSchema = z.object({
   .refine((e) => e.event === "health" || e.what === undefined, { message: "what is health metadata" })
   .refine((e) => e.untilMs === undefined || e.event === "health", { message: "untilMs is health metadata" })
   .refine((e) => e.event !== "health" || e.what === "cooldown_start" || e.what === "permanent_mark" || e.untilMs === undefined, { message: "untilMs only applies to health start events" })
+  .refine((e) => e.event !== "health" || (e.latencyMs === undefined && e.tokens === undefined && e.cost === undefined && e.errorKind === undefined && e.verdict === undefined && e.sw === undefined && e.helperCostUsd === undefined), { message: "health rows contain only health metadata" })
 
 export type LedgerEvent = z.infer<typeof ledgerEventSchema>
 export type EventInput = Omit<LedgerEvent, "session"> & { sessionID: string }

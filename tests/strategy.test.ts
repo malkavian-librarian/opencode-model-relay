@@ -4,9 +4,9 @@ import os from "node:os"
 import path from "node:path"
 import { defaultConfig } from "../src/config"
 import {
-  buildLadder, clearSuccess, effectiveMaxSwitches, hasRelayMarker, resolveFindLevel, walkCircular, walkFromTopAsync,
+  buildLadder, clearSuccess, effectiveMaxSwitches, hasRelayMarker, isHealthy, resolveFindLevel, walkCircular, walkFromTopAsync,
   parseResetCooldown, recordFailure, triedThisTurn, walkFromTop,
-  QUARANTINE_MS, RESET_COOLDOWN_MAX_MS,
+  PERMANENT_HEALTH_TTL_MS, QUARANTINE_MS, RESET_COOLDOWN_MAX_MS,
   type Decision, type ModelHealth,
 } from "../src/strategy"
 import { StateStore } from "../src/state"
@@ -107,7 +107,13 @@ describe("recordFailure", () => {
     const emit = (what: string, untilMs?: number) => events.push({ what, untilMs })
     recordFailure(h, "a/1", c({}), 1000, 60000, undefined, emit)
     recordFailure(h, "a/1", c({}), 1000, 60000, undefined, emit)
-    expect(events).toEqual([{ what: "cooldown_start", untilMs: 61000 }])
+    expect(events).toEqual([{ what: "cooldown_start", untilMs: 61000 }, { what: "cooldown_start", untilMs: 121000 }])
+  })
+  it("reports cooldown and permanent expiry when a health read observes it", () => {
+    const events: string[] = []
+    expect(isHealthy({ cooldownUntil: 100 }, 100, (what) => events.push(what))).toBe(true)
+    expect(isHealthy({ permanent: true, permanentAt: 0 }, PERMANENT_HEALTH_TTL_MS + 1, (what) => events.push(what))).toBe(false)
+    expect(events).toEqual(["cooldown_end", "permanent_expire"])
   })
 })
 

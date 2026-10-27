@@ -159,23 +159,42 @@ export function buildStats(events: LedgerEvent[], now: number, days = DEFAULT_ST
   }
   for (const [model, healthEvents] of healthByModel) {
     healthEvents.sort((a, b) => a.ts - b.ts)
-    for (let i = 0; i < healthEvents.length; i++) {
-      const start = healthEvents[i]!
-      if (start.what !== "cooldown_start" && start.what !== "permanent_mark") continue
-      const matchingEnd = healthEvents.slice(i + 1).find((e) =>
-        (start.what === "cooldown_start" && e.what === "cooldown_end") ||
-        (start.what === "permanent_mark" && e.what === "permanent_expire"))
-      const rawEnd = Math.min(start.untilMs ?? Number.POSITIVE_INFINITY, matchingEnd?.ts ?? Number.POSITIVE_INFINITY)
-      const from = Math.max(start.ts, floor)
-      const to = Math.min(rawEnd, now)
-      if (!Number.isFinite(to) || to <= from) continue
-      let cursor = from
-      while (cursor < to) {
-        const dayEnd = Date.UTC(new Date(cursor).getUTCFullYear(), new Date(cursor).getUTCMonth(), new Date(cursor).getUTCDate() + 1)
-        const segmentEnd = Math.min(to, dayEnd)
-        bucketFor(model, cursor).down += segmentEnd - cursor
-        cursor = segmentEnd
+    for (const [startWhat, endWhat] of [["cooldown_start", "cooldown_end"], ["permanent_mark", "permanent_expire"]] as const) {
+      let activeStart: number | undefined
+      let activeUntil: number | undefined
+      const addInterval = (start: number, rawEnd: number | undefined): void => {
+        const from = Math.max(start, floor)
+        const to = Math.min(rawEnd ?? now, now)
+        if (to <= from) return
+        let cursor = from
+        while (cursor < to) {
+          const date = new Date(cursor)
+          const dayEnd = Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate() + 1)
+          const segmentEnd = Math.min(to, dayEnd)
+          bucketFor(model, cursor).down += segmentEnd - cursor
+          cursor = segmentEnd
+        }
       }
+      for (const event of healthEvents) {
+        if (event.what === startWhat) {
+          if (activeStart !== undefined && activeUntil !== undefined && event.ts >= activeUntil) {
+            addInterval(activeStart, activeUntil)
+            activeStart = undefined
+            activeUntil = undefined
+          }
+          if (activeStart === undefined) {
+            activeStart = event.ts
+            activeUntil = event.untilMs
+          } else if (event.untilMs !== undefined) {
+            activeUntil = event.untilMs
+          }
+        } else if (event.what === endWhat && activeStart !== undefined) {
+          addInterval(activeStart, activeUntil === undefined ? event.ts : Math.min(activeUntil, event.ts))
+          activeStart = undefined
+          activeUntil = undefined
+        }
+      }
+      if (activeStart !== undefined) addInterval(activeStart, activeUntil)
     }
   }
 

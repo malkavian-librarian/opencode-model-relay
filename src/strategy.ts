@@ -6,13 +6,18 @@ import { RELAY_MARKER } from "./defaults"
 
 export interface ModelHealth { permanent?: boolean; permanentAt?: number; cooldownUntil?: number; failures?: number }
 export type HealthTransition = "cooldown_start" | "permanent_mark"
+export type HealthExpiry = "cooldown_end" | "permanent_expire"
 
 export type Decision =
   | { action: "switch"; to: string }
   | { action: "exhausted"; reason: "no_candidates" | "switch_cap" }
 
 /** Healthy = not permanently blacklisted and no cooldown running; a cooldown ending exactly at `now` has expired. */
-export function isHealthy(h: ModelHealth | undefined, now: number): boolean {
+export function isHealthy(h: ModelHealth | undefined, now: number, onExpiry?: (what: HealthExpiry) => void): boolean {
+  try {
+    if (h?.cooldownUntil !== undefined && h.cooldownUntil <= now) onExpiry?.("cooldown_end")
+    if (h?.permanent === true && h.permanentAt !== undefined && now - h.permanentAt > PERMANENT_HEALTH_TTL_MS) onExpiry?.("permanent_expire")
+  } catch { /* health telemetry never changes the decision */ }
   if (h?.permanent) return false
   return !(h?.cooldownUntil !== undefined && h.cooldownUntil > now)
 }
@@ -73,16 +78,14 @@ export function recordFailure(
   // real cooldown to the reset time, capped at 6 h; anything else keeps the exponential backoff.
   const until = parseResetCooldown(resetText, now) ?? retryAfterUntil(c.retryAfterMs, now)
   if (until !== undefined) {
-    const transition = h.cooldownUntil === undefined || h.cooldownUntil <= now
     h.cooldownUntil = until
-    if (transition) onTransition?.("cooldown_start", until)
+    onTransition?.("cooldown_start", until)
     return
   }
   const exp = Math.min(h.failures - 1, MAX_BACKOFF_EXPONENT)
   const deadline = now + Math.min(cooldownMs * 2 ** exp, MAX_COOLDOWN_MS)
-  const transition = h.cooldownUntil === undefined || h.cooldownUntil <= now
   h.cooldownUntil = deadline
-  if (transition) onTransition?.("cooldown_start", deadline)
+  onTransition?.("cooldown_start", deadline)
 }
 
 /** Converts a finite, nonnegative retry delay to a deadline capped at the reset cooldown maximum. */
@@ -102,6 +105,7 @@ export interface FindResolutionInput {
   cache?: Pick<StateStore, "getFindCache" | "setFindCache" | "invalidateFindCache">
   failed?: string
   allowQuarantined?: boolean
+  onHealthExpiry?: (model: string, what: HealthExpiry) => void
 }
 
 const DISCOVERED_ID = /^[A-Za-z0-9._:-]+(?:\/[A-Za-z0-9._:-]+)*$/
@@ -122,7 +126,7 @@ export async function resolveFindLevel(entry: Exclude<LevelEntry, string>, i: Fi
     const at = i.quarantine?.[m]
     return at !== undefined && i.now - at < QUARANTINE_MS
   }
-  const usable = (m: string): boolean => m !== i.current && !i.tried?.includes(m) && isHealthy(i.health[m], i.now) && (i.allowQuarantined !== false || !quarantined(m))
+  const usable = (m: string): boolean => m !== i.current && !i.tried?.includes(m) && isHealthy(i.health[m], i.now, (what) => i.onHealthExpiry?.(m, what)) && (i.allowQuarantined !== false || !quarantined(m))
   if (cached && usable(cached) && !quarantined(cached)) return cached
   if (cached) i.cache?.invalidateFindCache(key)
   let candidates: string[] = []
@@ -151,6 +155,7 @@ export async function walkFromTopAsync(i: {
   fetchCatalog?: () => Promise<OpenRouterCatalogModel[]>; cache?: FindResolutionInput["cache"]
   allowQuarantined?: boolean
   onQuarantineSkip?: (model: string) => void
+  onHealthExpiry?: (model: string, what: HealthExpiry) => void
 }): Promise<Decision> {
   if (i.switchCount >= i.maxSwitches) return { action: "exhausted", reason: "switch_cap" }
   let fallback: string | undefined
@@ -160,7 +165,7 @@ export async function walkFromTopAsync(i: {
   }
   for (const level of i.ladder) {
     const model = typeof level === "string" ? level : await resolveFindLevel(level, i)
-    if (model === undefined || model === i.current || i.tried?.includes(model) || !isHealthy(i.health[model], i.now)) continue
+    if (model === undefined || model === i.current || i.tried?.includes(model) || !isHealthy(i.health[model], i.now, (what) => i.onHealthExpiry?.(model, what))) continue
     if (quarantined(model)) { i.onQuarantineSkip?.(model); if (i.allowQuarantined === false) continue }
     if (!quarantined(model)) return { action: "switch", to: model }
     if (i.allowQuarantined !== false) fallback ??= model
@@ -195,6 +200,7 @@ export function walkFromTop(i: {
   tried?: readonly string[]; quarantine?: Readonly<Record<string, number>>
   now: number; switchCount: number; maxSwitches: number
   onQuarantineSkip?: (model: string) => void
+  onHealthExpiry?: (model: string, what: HealthExpiry) => void
 }): Decision {
   if (i.switchCount >= i.maxSwitches) return { action: "exhausted", reason: "switch_cap" }
   const quarantined = (m: string): boolean => {
@@ -205,11 +211,11 @@ export function walkFromTop(i: {
   for (const l of i.ladder) {
     if (typeof l !== "string") continue // find entries stay unresolved (discovery child #69)
     if (l === i.current || i.tried?.includes(l)) continue
-    if (!isHealthy(i.health[l], i.now)) continue
+    if (!isHealthy(i.health[l], i.now, (what) => i.onHealthExpiry?.(l, what))) continue
     candidates.push(l)
   }
   for (const model of candidates) if (quarantined(model)) i.onQuarantineSkip?.(model)
-   const pick = candidates.find((m) => !quarantined(m)) ?? candidates[0]
+  const pick = candidates.find((m) => !quarantined(m)) ?? candidates[0]
   return pick === undefined ? { action: "exhausted", reason: "no_candidates" } : { action: "switch", to: pick }
 }
 
@@ -220,6 +226,7 @@ export function walkCircular(i: {
   maxCircularFlows: number; circularFlows?: number
   resolveFind?: (entry: Exclude<LevelEntry, string>) => string | undefined
   onQuarantineSkip?: (model: string) => void
+  onHealthExpiry?: (model: string, what: HealthExpiry) => void
 }): Decision {
   if (i.switchCount >= i.maxSwitches || (i.circularFlows ?? 0) >= i.maxCircularFlows) return { action: "exhausted", reason: "switch_cap" }
   const levels = i.ladder.map((entry) => typeof entry === "string" ? entry : i.resolveFind?.(entry))
@@ -232,10 +239,10 @@ export function walkCircular(i: {
   for (const allowQuarantined of [false, true]) {
     for (let offset = 1; offset < levels.length; offset++) {
       const model = levels[(start + offset) % levels.length]
-      if (model !== undefined && model !== i.current && isHealthy(i.health[model], i.now)) {
-         if (quarantined(model)) { i.onQuarantineSkip?.(model); if (!allowQuarantined) continue }
-         return { action: "switch", to: model }
-       }
+      if (model !== undefined && model !== i.current && isHealthy(i.health[model], i.now, (what) => i.onHealthExpiry?.(model, what))) {
+        if (quarantined(model)) { i.onQuarantineSkip?.(model); if (!allowQuarantined) continue }
+        return { action: "switch", to: model }
+      }
     }
   }
   return { action: "exhausted", reason: "no_candidates" }
