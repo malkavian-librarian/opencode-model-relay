@@ -105,10 +105,10 @@ over with a structured summary. Design: `docs/superpowers/specs/2026-10-18-model
 
 ## Gotchas (max 15, newest at bottom)
 - Older guidance: [graduated development gotchas](docs/process.md#graduated-development-gotchas).
-- Real OpenCode tool parts reported unknown names and empty files/todos -> read validated `name`, collect paths/todos independently of tool name (2026-10-26)
 - Inflated failure counts from rejected/graced errors -> append at the accepted non-quality health mark after marker/dedup/grace guards, not after switch success (2026-10-26)
 - Stale purge snapshots, discarded readable rows and medianed daily medians -> rebuild on purge, catch each file read failure and median all window samples (2026-10-26)
 - Compaction anchored to wall-clock Date.now() or a malformed first line aged out/rewrote valid rows -> gate retention on the incoming row's ts clamped to the earlier of it and Date.now(), using the oldest valid row (2026-10-26)
+- Circular mode hit the existing deepest fallback after its cap -> stop cleanly before fallback to keep cycles bounded and repeatable (2026-10-27)
 
 ## Bugs - [open]/[fixed] + repro (max 10)
 

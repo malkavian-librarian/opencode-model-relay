@@ -75,6 +75,25 @@ describe("Controller.onSessionError", () => {
     expect(calls.prompt).toHaveLength(2)
     expect(calls.chat).toEqual([])
   })
+  it("completes three deterministic circular flows and then stops", async () => {
+    const { c, d, calls, messages } = setup({ cfg: { tiers: { primary: "a/1", secondary: ["b/2"], tertiary: ["c/3"] }, maxCircularFlows: 3, maxSwitchesPerSession: 20 } })
+    const sequence = ["b/2", "c/3", "a/1", "b/2", "c/3", "a/1", "b/2", "c/3", "a/1"]
+    for (const [index, target] of sequence.entries()) {
+      const clean = { ...d.state.get("s1") }; delete clean.quarantine
+      d.state.set("s1", clean)
+      for (const model of Object.keys(d.health)) delete d.health[model]
+      expect(await c.onSessionError("s1", err429)).toBe(true)
+      expect(calls.prompt.at(-1)?.body.model).toEqual({ providerID: target.split("/")[0], modelID: target.split("/")[1] })
+      const [providerID, modelID] = target.split("/")
+      messages.push(asst(`circle-${index}`, providerID!, modelID!))
+    }
+    expect(d.state.get("s1")).toMatchObject({ circularOrigin: "a/1", circularTransitions: 0, circularFlows: 3 })
+    const clean = { ...d.state.get("s1") }; delete clean.quarantine
+    d.state.set("s1", clean)
+    for (const model of Object.keys(d.health)) delete d.health[model]
+    expect(await c.onSessionError("s1", err429)).toBe(false)
+    expect(calls.prompt).toHaveLength(9)
+  })
   it("does not count a marker-rejected failure but retains both drop diagnostics", async () => {
     const { c, d, calls } = setup({ messages: [
       { info: { id: "h1", role: "user", model: { providerID: "b", modelID: "2" } }, parts: [{ type: "text", text: `${RELAY_MARKER}\ncontinue` }] },
@@ -1277,10 +1296,12 @@ describe("Controller.onRetryStatus", () => {
 describe("manual-pick adoption, crash windows and drops (#66)", () => {
   it("adoptPick merges under the lock, clears the pick's marks once, keeps every counter", () => {
     const { c, d } = setup()
-    d.state.set("s1", { pluginPinned: "b/2", switchCount: 3, helperCalls: 2, judgeCalls: 1, updated: 1 })
+    d.state.set("s1", { pluginPinned: "b/2", circularOrigin: "a/1", circularTransitions: 2, circularFlows: 1, switchCount: 3, helperCalls: 2, judgeCalls: 1, updated: 1 })
     d.health["z/9"] = { cooldownUntil: 2_000_000, failures: 5, permanent: true, permanentAt: 1_000_000 }
     c.adoptPick("s1", "z/9")
     expect(d.state.get("s1")).toMatchObject({ pluginPinned: "z/9", adoptedAt: 1_000_000, switchCount: 3, helperCalls: 2, judgeCalls: 1 })
+    expect(d.state.get("s1")).not.toHaveProperty("circularOrigin")
+    expect(d.state.get("s1")).not.toHaveProperty("circularFlows")
     expect(d.health["z/9"]).toBeUndefined()
   })
   it("adoptPick is a no-op while the failover lock is held (the re-read adopts, or the switch supersedes)", () => {

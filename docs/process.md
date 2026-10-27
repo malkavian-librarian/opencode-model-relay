@@ -146,6 +146,8 @@ Older guidance moved from `AGENTS.md` to keep its cap; these rules still apply.
 
 - Zero stats costs -> preserve V2 assistant USD cost and append known narrative spend for the original model before delivery guards; never rewrite immediate switch rows (2026-10-26)
 
+- Real OpenCode tool parts reported unknown names and empty files/todos -> read validated `name`, collect paths/todos independently of tool name (2026-10-26)
+
 - Tail-window reads hid ledger rows (malformed tails, oversized valid model refs) -> bound refs to 120 chars and validate rows in one shared zod schema, scanning backward to the requested valid count then reversing (2026-10-25)
 
 - OpenCode V2 command text lives in `CommandInvocation.prompt.text` -> test official host shapes and keep legacy `arguments` fallback-only (2026-10-24)

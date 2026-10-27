@@ -618,6 +618,7 @@ describe("v2 tools, commands and model list", () => {
     const statusTool = calls.tools.find((t) => t.name === "relay_status")
     const out = await statusTool!.execute(undefined, { sessionID: "s1" })
     expect(out).toEqual({ content: expect.stringContaining("chain: a/1 ->") })
+    expect(out).toEqual({ content: expect.stringContaining("circular: 0 (completed 0)") })
     const relayCmd = calls.commands.find((c) => c.name === "relay")
     for (const input of [
       { sessionID: "s1" },

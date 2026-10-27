@@ -25,6 +25,20 @@ describe("config", () => {
     expect(c.narrator.tone).toBe("plain")
     expect(c.tiers.secondary).toEqual([])
     expect(c.levels).toEqual([])
+    expect(c.maxCircularFlows).toBe(0)
+  })
+  it("accepts up to three circular flows and rejects larger values", () => {
+    const f = path.join(tmp(), "c.jsonc")
+    for (const value of [0, 1, 3]) {
+      fs.writeFileSync(f, JSON.stringify({ maxCircularFlows: value }))
+      expect(loadConfig(f).config.maxCircularFlows).toBe(value)
+      expect(loadConfig(f).warnings).toEqual([])
+    }
+    for (const value of [-1, 4, 1.5]) {
+      fs.writeFileSync(f, JSON.stringify({ maxCircularFlows: value }))
+      expect(loadConfig(f).config).toEqual(defaultConfig())
+      expect(loadConfig(f).warnings).toHaveLength(1)
+    }
   })
   it("missing file -> defaults, no warning", () => {
     const r = loadConfig(path.join(tmp(), "nope.jsonc"))
