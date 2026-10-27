@@ -3,6 +3,7 @@ import { FIND_CACHE_TTL_MS } from "./state"
 import type { Deps } from "./controller"
 import type { SwitchLogRow } from "./switchlog"
 
+/** Formats one model's current health without exposing provider content. */
 function healthStatus(d: Deps, model: string, now: number): string {
   const health = d.health[model]
   if (health?.permanent) return `blacklisted-until: ${health.permanentAt === undefined ? "unknown" : health.permanentAt + 24 * 60 * 60 * 1000}`
@@ -10,6 +11,7 @@ function healthStatus(d: Deps, model: string, now: number): string {
   return "healthy"
 }
 
+/** Formats one metadata-only switch row for the existing status surface. */
 function formatLedgerRow(row: SwitchLogRow): string {
   return [
     `ts=${row.ts}`, `session=${row.session}`, `kind=${row.kind}`,
@@ -21,6 +23,7 @@ function formatLedgerRow(row: SwitchLogRow): string {
   ].join(" ")
 }
 
+/** Builds the existing human-readable relay status output. */
 export function buildStatus(d: Deps, sessionID?: string): string {
   try {
     const now = d.now()

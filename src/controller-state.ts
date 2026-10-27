@@ -3,6 +3,7 @@ import type { Deps } from "./controller"
 
 const RETRY_STORM_MS = 30_000
 
+/** Reports whether a recent automatic switch should consume an old retry event. */
 export function stormActive(d: Deps, storm: Map<string, number>, sessionID: string, fromKey?: string): boolean {
   const at = storm.get(sessionID)
   if (at === undefined) return false
@@ -11,6 +12,7 @@ export function stormActive(d: Deps, storm: Map<string, number>, sessionID: stri
   return true
 }
 
+/** Drops persisted pins that no longer resolve in the configured ladder. */
 export function validatePersistedPins(d: Deps): void {
   const known = new Set(buildLadder(d.cfg).filter((l): l is string => typeof l === "string"))
   d.state.validatePinned(known)

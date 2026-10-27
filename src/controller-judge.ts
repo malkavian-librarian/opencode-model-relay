@@ -8,6 +8,7 @@ import type { EventInput } from "./ledger"
 
 const MAX_SESSION_ENTRIES = 500
 
+/** Runs the quality policy independently of switch orchestration while preserving persisted caps. */
 export async function runJudge(input: {
   d: Deps
   sessionID: string

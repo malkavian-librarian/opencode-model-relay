@@ -3,6 +3,7 @@ import { buildHandover, extractFromMessages } from "./handover"
 import { modelKey, parseModel, type ModelRef, type OcMessage } from "./types"
 import type { Deps, ManualSwitchResult } from "./controller"
 
+/** Executes the owner-requested switch workflow using the controller's existing seams. */
 export async function manualSwitch(input: {
   d: Deps
   sessionID: string

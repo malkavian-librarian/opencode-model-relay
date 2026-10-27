@@ -3,12 +3,14 @@ import type { V2Ctx, V2Message, V2SessionInfo } from "./v2-types"
 
 export interface V2AdapterSession { sid?: string }
 
+/** Converts a validated V2 session model to the controller's model shape. */
 function sessionModelOf(info: V2SessionInfo | undefined | null): { providerID: string; modelID: string } | undefined {
   const m = info?.model
   if (!m || typeof m !== "object" || typeof m.providerID !== "string" || typeof m.id !== "string") return undefined
   return { providerID: m.providerID, modelID: m.id }
 }
 
+/** Converts one V2 transcript row to a controller message, dropping unsupported rows. */
 function toOcMessage(row: unknown, sessionModel: { providerID: string; modelID: string } | undefined): OcMessage | undefined {
   if (!row || typeof row !== "object") return undefined
   const v = row as V2Message
@@ -29,6 +31,7 @@ function toOcMessage(row: unknown, sessionModel: { providerID: string; modelID: 
   }
 }
 
+/** Creates the minimal provider catalog shape required by the existing resolver. */
 function synthProviders(rows: unknown): { data: { providers: { id: string; models: Record<string, unknown> }[] } } {
   const byProvider = new Map<string, Record<string, unknown>>()
   for (const row of Array.isArray(rows) ? rows : []) {
@@ -44,6 +47,7 @@ function synthProviders(rows: unknown): { data: { providers: { id: string; model
   return { data: { providers: [...byProvider].map(([id, models]) => ({ id, models })) } }
 }
 
+/** Adapts V2 session/model APIs to the controller's existing ClientLike contract. */
 export function adaptV2Client(ctx: V2Ctx, lastSession: V2AdapterSession): ClientLike {
   const session = ctx.session as Required<V2Ctx>["session"]
   const model = ctx.model as NonNullable<V2Ctx["model"]>
