@@ -77,7 +77,7 @@ documentation spike.
 
 `src/openrouter.ts` does **not** currently use Zod. Its manual parsing is the
 current contract: it bounds response bodies
-(1 MiB for chat and 2 MiB for the public catalog), parses JSON, then manually
+(1,000,000 bytes (decimal 1 MB) for chat and 2 MiB for the public catalog), parses JSON, then manually
 projects only the expected catalog IDs/pricing and chat completion text/cost.
 It rejects invalid JSON, oversized bodies, empty completions, bad status and
 unsafe URLs with generic errors. Tests are in `tests/openrouter.test.ts`.
