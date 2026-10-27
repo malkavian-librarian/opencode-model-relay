@@ -21,6 +21,8 @@ const LADDER_MUSE = "opencode/muse-spark-1.3"
 const LADDER_OR_GLM = "openrouter/z-ai/glm-5.3"
 const LADDER_FIND_MATCH = "glm-5\\.[23]"
 const LADDER_GEMINI_RE = /^openrouter\/google\/gemini/i
+const LADDER_GEMINI_IMAGE_RE = /(?:image|banana|flash-tts|tts|transcrib)/i
+const LADDER_GEMINI_VERSION_RE = /gemini-(\d+)(?:\.(\d+))?/i
 
 /** Resolves an exact id or same-provider slug variant; returns null when unavailable. */
 function resolveLadderId(models: string[], target: string): string | null {
@@ -30,6 +32,20 @@ function resolveLadderId(models: string[], target: string): string | null {
   return models.find((m) => m.startsWith(`${provider}/`) && m.slice(provider.length + 1).startsWith(model)) ?? null
 }
 
+/** Keeps image-generation ids out and orders text Gemini candidates by numeric model version. */
+function newestTextGemini(models: string[]): string | null {
+  return models
+    .filter((m) => SAFE_MODEL_ID.test(m) && LADDER_GEMINI_RE.test(m) && !LADDER_GEMINI_IMAGE_RE.test(m))
+    .sort((a, b) => {
+      const av = a.match(LADDER_GEMINI_VERSION_RE)
+      const bv = b.match(LADDER_GEMINI_VERSION_RE)
+      const major = Number(bv?.[1] ?? -1) - Number(av?.[1] ?? -1)
+      if (major !== 0) return major
+      const minor = Number(bv?.[2] ?? -1) - Number(av?.[2] ?? -1)
+      return minor !== 0 ? minor : a.localeCompare(b)
+    })[0] ?? null
+}
+
 /** Builds a fully commented ladder, marking explicit targets absent from the live model list. */
 function buildLadderText(models: string[]): string {
   const sol = resolveLadderId(models, LADDER_SOL)
@@ -37,7 +53,7 @@ function buildLadderText(models: string[]): string {
   const oc52 = resolveLadderId(models, LADDER_OC_GLM52)
   const muse = resolveLadderId(models, LADDER_MUSE)
   const orGlm = resolveLadderId(models, LADDER_OR_GLM)
-  const gemini = models.find((m) => LADDER_GEMINI_RE.test(m) && /pro/i.test(m)) ?? null
+  const gemini = newestTextGemini(models)
   const j = (v: unknown): string => JSON.stringify(v)
   return [
     sol === null
@@ -58,8 +74,8 @@ function buildLadderText(models: string[]): string {
       ? `    // ${j(LADDER_OR_GLM)}, // #6 — not in your configured models; enable it or replace the id`
       : `    // ${j(orGlm)}, // #6 — resolved from your configured models`,
     gemini === null
-      ? `    // ${j("openrouter/google/<gemini-pro-id>")}, // #7 — add your OpenRouter Gemini Pro id (see \`opencode models\`)`
-      : `    // ${j(gemini)}, // #7 — resolved from your configured models`,
+       ? `    // ${j("openrouter/google/<gemini-text-id>")}, // #7 — latest Gemini text model; add one from \`opencode models\``
+       : `    // ${j(gemini)}, // #7 — latest Gemini text model, resolved from your configured models`,
   ].join("\n")
 }
 

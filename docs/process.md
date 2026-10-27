@@ -146,6 +146,10 @@ Older guidance moved from `AGENTS.md` to keep its cap; these rules still apply.
 
 - Zero stats costs -> preserve V2 assistant USD cost and append known narrative spend for the original model before delivery guards; never rewrite immediate switch rows (2026-10-26)
 
+- Inflated failure counts from rejected/graced errors -> append at the accepted non-quality health mark after marker/dedup/grace guards, not after switch success (2026-10-26)
+
+- Gemini slot matching bypassed direct-call validation and allowed speech/transcription ids -> apply SAFE_MODEL_ID and exclude non-chat variants (2026-10-27)
+
 - Real OpenCode tool parts reported unknown names and empty files/todos -> read validated `name`, collect paths/todos independently of tool name (2026-10-26)
 
 - Tail-window reads hid ledger rows (malformed tails, oversized valid model refs) -> bound refs to 120 chars and validate rows in one shared zod schema, scanning backward to the requested valid count then reversing (2026-10-25)
