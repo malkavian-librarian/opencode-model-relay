@@ -8,8 +8,8 @@ code, tests, configuration, or workflows.
 
 - `package.json` declares direct dev dependency `zod: ^3.23.8`.
 - `package-lock.json` resolves the direct `node_modules/zod` entry to **3.25.76**.
-- The lockfile also contains a separate nested `zod: 4.1.8` requirement from the
-  OpenTUI dependency tree. That is not the relay's direct Zod version and does
+- `@opencode-ai/plugin` declares the nested `zod: 4.1.8` requirement. This is
+  not an OpenTUI declaration, is not the relay's direct Zod version, and does
   not constitute a relay migration.
 - Clean install environment: Windows, Node **v24.13.0**, npm **11.6.2**.
   `npm ci` completed on 2026-10-27, adding 114 packages and auditing 115. npm
@@ -24,13 +24,17 @@ code, tests, configuration, or workflows.
   Zod **4.6.7** as a major-version fix and did not change package files.
   Therefore “0 with `--omit=dev`” and “2 without omission” are both exact
   current results; neither claims the advisory is fixed for Zod 3.
+- `dist/index.js` bundles the direct Zod **3.25.76** copy. `npm audit
+  --omit=dev` excludes that shipped copy because it is bundled from the dev
+  dependency tree, so the clean production-scope result does not establish
+  that the bundled code is outside the advisory.
 
 ## Validation boundary inventory
 
 ### Configuration: Zod 3 (`src/config.ts`)
 
 `ConfigSchema` is the trust boundary after bounded JSONC parsing. It uses strict
-nested objects, bounded arrays and strings, finite/non-negative numeric values,
+nested objects, selected bounds on arrays and strings, finite/non-negative numeric values,
 model-reference and URL constraints, and a `superRefine` HTTPS/OpenRouter-host
 policy. `loadConfig` calls `safeParse`; invalid or oversized user-level config
 falls back to defaults and a warning. The schema also supplies nested defaults
@@ -38,6 +42,13 @@ and supports the existing `tiers` to `levels` migration.
 
 Relevant tests are in `tests/config.test.ts`, including strict keys, defaults,
 size limits, URL policy, invalid input fallback, and path confinement.
+
+The 64 KiB limit is a cap on the JSONC file read by `loadConfig`, not a bound
+on every parsed field. The selected field bounds include at most 32 `levels`
+entries and at most 64 characters for a matcher source; `tiers.secondary`
+and `tiers.tertiary` use unbounded `z.array` schemas, and other arrays/strings
+are not thereby bounded. Consequently, the file cap does not prove that the
+advisory trigger is blocked: the advisory specifies no size threshold.
 
 **Compatibility concern:** this schema deliberately relies on nested
 `.default({})` behavior. The repository's process gotcha records that Zod 3
@@ -64,16 +75,18 @@ documentation spike.
 
 ### OpenRouter responses
 
-`src/openrouter.ts` does **not** currently use Zod. It bounds response bodies
+`src/openrouter.ts` does **not** currently use Zod. Its manual parsing is the
+current contract: it bounds response bodies
 (1 MiB for chat and 2 MiB for the public catalog), parses JSON, then manually
 projects only the expected catalog IDs/pricing and chat completion text/cost.
 It rejects invalid JSON, oversized bodies, empty completions, bad status and
 unsafe URLs with generic errors. Tests are in `tests/openrouter.test.ts`.
 
 This is an important migration distinction: a Zod 4 plan must not claim an
-OpenRouter Zod boundary exists. If a follow-up introduces one, it needs a
-separate contract decision and tests for bounded input, unknown fields,
-missing/invalid choices, numeric cost, and secret-safe errors.
+OpenRouter Zod boundary exists. Any future Zod schema requires a separate
+contract decision and tests that preserve the currently accepted response
+shape and secret-safe errors, including bounded input, unknown fields,
+missing/invalid choices, and numeric cost.
 
 Other existing Zod boundaries include the judge verdict, handover tool parts,
 stats persistence/query input, and the OpenCode v2 resolved-model event. They
