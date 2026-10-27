@@ -170,7 +170,7 @@ export class Controller {
         const text = buildHandover({ cfg: this.d.cfg, ex, from: current, to: target, reason: "quality", summary: null })
         const rec = this.d.state.get(sessionID)
         const next = { ...rec, pluginPinned: target, pendingHandover: { to: target, at: started }, updated: started }
-        delete next.circularOrigin; delete next.circularTransitions; delete next.circularFlows
+        delete next.circularOrigin; delete next.circularFindKey; delete next.circularTransitions; delete next.circularFlows
         this.d.state.set(sessionID, next)
         delete this.d.health[target]
         this.d.state.save()
@@ -226,10 +226,11 @@ export class Controller {
       // Explicit attribution must agree with the current turn, never poison a newer model.
       if (from && modelKey(from) !== current) return false
       const now = d.now()
-      const circularCurrentFind = d.cfg.maxCircularFlows > 0
-        ? buildLadder(d.cfg).find((level) => typeof level !== "string" && d.state.getFindCache(JSON.stringify(level), now) === current)
-        : undefined
       let rec = { ...d.state.get(sessionID) } // session records are merged, never whole-record overwritten (AC-01)
+      const ladder = buildLadder(d.cfg)
+      const circularCurrentFind = d.cfg.maxCircularFlows > 0
+        ? ladder.find((level) => typeof level !== "string" && (d.state.getFindCache(JSON.stringify(level), now) === current || rec.circularFindKey === JSON.stringify(level)))
+        : undefined
       // Marker guard (#56, AC-03): marker text is untrusted; a marker newest while the session is not
       // on the plugin-set model is a stale error, and the drop is logged, never silent (AC-06).
       if (hasRelayMarker(newest.parts) && rec.pluginPinned !== current) {
@@ -257,7 +258,6 @@ export class Controller {
         rec = { ...d.state.get(sessionID) }
       }
 
-      const ladder = buildLadder(d.cfg)
       const input = this.findInput(current, sessionID, now)
       const decision = d.cfg.maxCircularFlows > 0
         ? walkCircular({
@@ -305,10 +305,15 @@ export class Controller {
         switchCount: rec.switchCount + 1, helperCalls, updated: now,
       }
       if (d.cfg.maxCircularFlows > 0) {
-        const origin = rec.circularOrigin ?? current
+        const currentFindKey = circularCurrentFind ? JSON.stringify(circularCurrentFind) : rec.circularFindKey
+        const selectedFindEntry = ladder.find((level) => typeof level !== "string" && d.state.getFindCache(JSON.stringify(level), now) === to)
+        const selectedFindKey = selectedFindEntry === undefined ? undefined : JSON.stringify(selectedFindEntry)
+        const onLadder = circularCurrentFind !== undefined || ladder.some((level) => level === current)
+        const origin = rec.circularOrigin ?? (onLadder ? current : to)
         const transitions = (rec.circularTransitions ?? 0) + 1
         const completed = (rec.circularFlows ?? 0) + (to === origin && transitions >= 2 ? 1 : 0)
         next.circularOrigin = origin
+        if (selectedFindKey ?? currentFindKey) next.circularFindKey = selectedFindKey ?? currentFindKey
         next.circularTransitions = to === origin && transitions >= 2 ? 0 : transitions
         next.circularFlows = completed
       }
@@ -324,7 +329,7 @@ export class Controller {
           ...d.state.get(sessionID), pluginPinned: supersededBy, adoptedAt: d.now(),
           switchCount: rec.switchCount, updated: d.now(),
         }
-        delete adopted.circularOrigin; delete adopted.circularTransitions; delete adopted.circularFlows
+        delete adopted.circularOrigin; delete adopted.circularFindKey; delete adopted.circularTransitions; delete adopted.circularFlows
         delete adopted.pendingHandover // no switch was enacted; the intent is spent
         d.state.set(sessionID, adopted)
         delete d.health[supersededBy] // the owner chose it: cooldown, blacklist and failure count all clear, once
@@ -477,12 +482,12 @@ export class Controller {
         this.d.state.save()
       }
       if (rec.pendingHandover !== undefined) {
-        const { pendingHandover: _spent, circularOrigin: _origin, circularTransitions: _transitions, circularFlows: _flows, ...rest } = rec // the handover turn ended: the intent marker is spent
+        const { pendingHandover: _spent, circularOrigin: _origin, circularFindKey: _findKey, circularTransitions: _transitions, circularFlows: _flows, ...rest } = rec // the handover turn ended: the intent marker is spent
         this.d.state.set(sessionID, { ...rest, updated: this.d.now() })
         this.d.state.save()
       }
-      else if (rec.circularOrigin !== undefined || rec.circularTransitions !== undefined || rec.circularFlows !== undefined) {
-        const { circularOrigin: _origin, circularTransitions: _transitions, circularFlows: _flows, ...rest } = rec
+      else if (rec.circularOrigin !== undefined || rec.circularFindKey !== undefined || rec.circularTransitions !== undefined || rec.circularFlows !== undefined) {
+        const { circularOrigin: _origin, circularFindKey: _findKey, circularTransitions: _transitions, circularFlows: _flows, ...rest } = rec
         this.d.state.set(sessionID, { ...rest, updated: this.d.now() })
         this.d.state.save()
       }
@@ -508,7 +513,7 @@ export class Controller {
       if (!locked) return
       const now = d.now()
       const adopted = { ...d.state.get(sessionID), pluginPinned: pick, adoptedAt: now, updated: now }
-      delete adopted.circularOrigin; delete adopted.circularTransitions; delete adopted.circularFlows
+      delete adopted.circularOrigin; delete adopted.circularFindKey; delete adopted.circularTransitions; delete adopted.circularFlows
       d.state.set(sessionID, adopted)
       delete d.health[pick] // the owner chose it: cooldown, blacklist and failure count all clear, once
       d.state.save()

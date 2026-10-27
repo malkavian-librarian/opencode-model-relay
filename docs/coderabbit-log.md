@@ -26,6 +26,11 @@ Record of `@coderabbitai` exchanges, so agents do not repeat past mistakes.
 - Minor, `src/strategy.ts`: a resolved find entry could return the current model and waste a switch -> fixed by skipping same-model circular candidates and adding coverage.
 - Minor, `src/controller.ts`: invalidating a failed resolved find cache could erase its authored circular position -> fixed by retaining the failed current entry's slot for the active walk; local focused tests and typecheck pass.
 
+### 2026-10-27 - PR #123 (issue #122), repair round 3
+
+- Minor, `src/controller.ts`: an expired find cache could erase the current authored slot -> fixed by persisting the bounded find-entry key with circular progress and reusing it after cache invalidation.
+- Minor, `src/controller.ts`: an off-ladder starting model could remain the circular origin forever -> fixed by rebasing the first circular origin to the selected ladder target; persisted progress remains bounded.
+
 ### 2026-10-27 - PR #119 (issue #117)
 
 - Three actionable findings on the original head: prioritize the real OpenCode tool field with metadata fallbacks, document the hand-written ToolPart-shaped fixture, and record the zero-stats-cost Gotcha -> fixed in `62f66f3`; the branch was then merged forward with `origin/main` as `42a879c` after #116 landed. Fresh CI and CodeRabbit checks passed on the final head; PR merged as `fea213b`.

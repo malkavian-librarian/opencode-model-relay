@@ -13,6 +13,7 @@ export interface SessionRecord {
   quarantine?: Record<string, number>
   pendingHandover?: { to: string; at: number }
   circularOrigin?: string
+  circularFindKey?: string
   circularTransitions?: number
   circularFlows?: number
   switchCount: number
@@ -71,6 +72,7 @@ function sanitize(v: unknown): SessionRecord | undefined {
   const out: SessionRecord = { switchCount: r.switchCount, updated: r.updated }
   if (isModelKey(r.pluginPinned)) out.pluginPinned = r.pluginPinned
   if (isModelKey(r.circularOrigin)) out.circularOrigin = r.circularOrigin
+  if (typeof r.circularFindKey === "string" && r.circularFindKey.length <= 512) out.circularFindKey = r.circularFindKey
   if (isNum(r.circularTransitions) && Number.isInteger(r.circularTransitions) && r.circularTransitions >= 0 && r.circularTransitions <= 64) out.circularTransitions = r.circularTransitions
   if (isNum(r.circularFlows) && Number.isInteger(r.circularFlows) && r.circularFlows >= 0 && r.circularFlows <= 3) out.circularFlows = r.circularFlows
   if (isNum(r.adoptedAt) && r.adoptedAt >= 0) out.adoptedAt = Math.floor(r.adoptedAt)

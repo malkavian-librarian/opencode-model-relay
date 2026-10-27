@@ -14,9 +14,9 @@ describe("StateStore", () => {
   it("persists pluginPinned, adoption and circular progress across instances", () => {
     const f = file()
     const a = new StateStore(f); a.load()
-    a.set("s1", { pluginPinned: "b/2", adoptedAt: 123, quarantine: { "a/1": 99 }, circularOrigin: "a/1", circularTransitions: 2, circularFlows: 1, switchCount: 1, updated: Date.now() }); a.save()
+    a.set("s1", { pluginPinned: "b/2", adoptedAt: 123, quarantine: { "a/1": 99 }, circularOrigin: "a/1", circularFindKey: '{"find":{"match":"glm"}}', circularTransitions: 2, circularFlows: 1, switchCount: 1, updated: Date.now() }); a.save()
     const b = new StateStore(f); b.load()
-    expect(b.get("s1")).toMatchObject({ pluginPinned: "b/2", adoptedAt: 123, quarantine: { "a/1": 99 }, circularOrigin: "a/1", circularTransitions: 2, circularFlows: 1, switchCount: 1 })
+    expect(b.get("s1")).toMatchObject({ pluginPinned: "b/2", adoptedAt: 123, quarantine: { "a/1": 99 }, circularOrigin: "a/1", circularFindKey: '{"find":{"match":"glm"}}', circularTransitions: 2, circularFlows: 1, switchCount: 1 })
   })
   it("expires entries older than 14 days and caps at 500 sessions", () => {
     const f = file(); let t = 0
