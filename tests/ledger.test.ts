@@ -43,7 +43,7 @@ describe("EventLog", () => {
       expect(l.append(row as never)).toBe(false)
       fs.appendFileSync(path.join(d, "events-4243.jsonl"), JSON.stringify({ ...row, session: "0123456789abcdef" }) + "\n")
     }
-    expect(l.read(30, 2)).toEqual([])
+    expect(l.read(30, 0)).toEqual([])
   })
   it("keeps historical event kinds readable with and without optional costs and retains refinements", () => {
     const l = new EventLog(dir(), true, nextPid())
@@ -51,6 +51,15 @@ describe("EventLog", () => {
     for (const row of old) for (const costs of [{}, { cost: 0.2, helperCostUsd: 0.02 }]) expect(l.append({ ...base, ...row, ...costs } as never)).toBe(true)
     expect(l.read(30, 2)).toHaveLength(8)
     for (const event of ["failure", "judge", "switch"]) expect(l.append({ ...base, event } as never)).toBe(false)
+  })
+  it("round-trips validated health transitions and rejects invalid timing fields", () => {
+    const l = new EventLog(dir(), true, nextPid())
+    expect(l.append({ ...base, event: "health", model: "prov/a", what: "cooldown_start", untilMs: 101 } as never)).toBe(true)
+    expect(l.append({ ...base, event: "health", model: "prov/a", what: "cooldown_end", untilMs: 101 } as never)).toBe(false)
+    expect(l.append({ ...base, event: "health", model: "prov/a", what: "quarantine_skip", untilMs: 101 } as never)).toBe(false)
+    expect(l.append({ ...base, event: "health", model: "prov/a", what: "exhausted", cost: 1 } as never)).toBe(false)
+    expect(l.read(30, 0)).toEqual([])
+    expect(l.read(30, 101)).toMatchObject([{ event: "health", model: "prov/a", what: "cooldown_start", untilMs: 101 }])
   })
   it("appends a metadata-only row with an HMAC session and 0600 mode", () => {
     const d = dir(); const l = new EventLog(d, true, nextPid())
@@ -72,6 +81,7 @@ describe("EventLog", () => {
       { ...base, event: "judge", verdict: "maybe" },
       { ...base, event: "switch", sw: { kind: "switch_dropped" } },
       { ...base, event: "turn", latencyMs: -5 },
+      { ...base, event: "turn", model: "prov/a", what: "exhausted" },
     ]
     for (const b of bad) expect(l.append(b as never), JSON.stringify(b).slice(0, 40)).toBe(false)
     expect(fs.existsSync(path.join(d, `events-4243.jsonl`))).toBe(false)

@@ -4,9 +4,9 @@ import os from "node:os"
 import path from "node:path"
 import { defaultConfig } from "../src/config"
 import {
-  buildLadder, clearSuccess, effectiveMaxSwitches, hasRelayMarker, resolveFindLevel, walkCircular, walkFromTopAsync,
+  buildLadder, clearSuccess, effectiveMaxSwitches, hasRelayMarker, isHealthy, resolveFindLevel, walkCircular, walkFromTopAsync,
   parseResetCooldown, recordFailure, triedThisTurn, walkFromTop,
-  QUARANTINE_MS, RESET_COOLDOWN_MAX_MS,
+  PERMANENT_HEALTH_TTL_MS, QUARANTINE_MS, RESET_COOLDOWN_MAX_MS,
   type Decision, type ModelHealth,
 } from "../src/strategy"
 import { StateStore } from "../src/state"
@@ -101,6 +101,27 @@ describe("recordFailure", () => {
     recordFailure(h, "a/1", c({}), 10, 60000)
     expect(h["a/1"]?.cooldownUntil).toBe(10 + 3_600_000)
   })
+  it("emits one transition for a new mark, not for repeated failures during the same cooldown", () => {
+    const h: Record<string, ModelHealth> = {}
+    const events: unknown[] = []
+    const emit = (what: string, untilMs?: number) => events.push({ what, untilMs })
+    recordFailure(h, "a/1", c({}), 1000, 60000, undefined, emit)
+    recordFailure(h, "a/1", c({}), 1000, 60000, undefined, emit)
+    expect(events).toEqual([{ what: "cooldown_start", untilMs: 61000 }, { what: "cooldown_start", untilMs: 121000 }])
+  })
+  it("reports cooldown and permanent expiry when a health read observes it", () => {
+    const events: string[] = []
+    expect(isHealthy({ cooldownUntil: 100 }, 100, (what) => events.push(what))).toBe(true)
+    expect(isHealthy({ permanent: true, permanentAt: 0 }, PERMANENT_HEALTH_TTL_MS, (what) => events.push(what))).toBe(false)
+    expect(events).toEqual(["cooldown_end", "permanent_expire"])
+  })
+  it("reports every permanent deadline renewal", () => {
+    const events: Array<[string, number | undefined]> = []
+    const c = { kind: "quota", retryable: false, permanent: true, switchable: true } as const
+    recordFailure({}, "a/1", c, 1000, 60000, undefined, (what, untilMs) => events.push([what, untilMs]))
+    recordFailure({ "a/1": { permanent: true, permanentAt: 1000 } }, "a/1", c, 2000, 60000, undefined, (what, untilMs) => events.push([what, untilMs]))
+    expect(events).toEqual([["permanent_mark", 1000 + PERMANENT_HEALTH_TTL_MS], ["permanent_mark", 2000 + PERMANENT_HEALTH_TTL_MS]])
+  })
 })
 
 describe("buildLadder (#64)", () => {
@@ -124,6 +145,11 @@ describe("walkFromTop (#64)", () => {
     expect(
       walkFromTop({ ladder: ["x/9", { find: { match: "glm" } }, "y/1"], current: "x/9", health: {}, now: 1000, switchCount: 0, maxSwitches: 6 } as any),
     ).toEqual(sw("y/1"))
+  })
+  it("reports quarantined candidates that are skipped without changing the selected model", () => {
+    const skipped: string[] = []
+    expect(walkFromTop({ ladder, current: "a/1", health: {}, quarantine: { "b/2": 900 }, now: 1000, switchCount: 0, maxSwitches: 6, onQuarantineSkip: (m) => skipped.push(m) })).toEqual(sw("c/3"))
+    expect(skipped).toEqual(["b/2"])
   })
   it("a quarantined model is skipped while a healthy alternative exists, chosen when it is the only candidate", () => {
     expect(w({ current: "b/2", quarantine: { "a/1": 950 } })).toEqual(sw("c/3"))

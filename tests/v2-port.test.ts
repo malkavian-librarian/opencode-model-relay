@@ -885,9 +885,9 @@ describe("v2 stats and purge surfaces (#103)", () => {
       const relayCmd = calls.commands.find((c) => c.name === "relay")!
       await relayCmd.execute({ sessionID: "s1", prompt: { text: "stats --kinds --days 1" }, delivery: "steer" })
       expect(calls.synthetic.at(-1)?.text).toBe(toolText)
-      expect(toolText).toContain("a/1 | 2 | 3 | – | 0 | 100% | 200ms | 0/0 | $0.00 | $0.00")
+      expect(toolText).toContain("a/1 | 2 | 3 | – | 0 | 0 | 0% | 100% | 200ms | 0/0 | $0.00 | $0.00")
       expect(toolText).toContain("a/1 failure kinds: quota 2, timeout 1") // lexicographic, sums to the fails column
-      expect(toolText).toContain("b/2 | 1 | 0 | – | 0 | – | 50ms | 0/0 | $0.00 | $0.00")
+      expect(toolText).toContain("b/2 | 1 | 0 | – | 0 | 0 | 0% | – | 50ms | 0/0 | $0.00 | $0.00")
       expect(toolText).toContain("b/2 failure kinds: none")
     } finally { teardown?.() }
   })
@@ -904,7 +904,7 @@ describe("v2 stats and purge surfaces (#103)", () => {
     try {
       const statsTool = calls.tools.find((t) => t.name === "relay_stats")!
       const text = (await statsTool.execute(undefined, {})).content
-      expect(text).toContain("a/1 | 4 | 0 | – | 0 | 100% | 25ms | 0/0 | $0.00 | $0.00")
+      expect(text).toContain("a/1 | 4 | 0 | – | 0 | 0 | 0% | 100% | 25ms | 0/0 | $0.00 | $0.00")
     } finally { teardown?.() }
   })
 
@@ -1026,7 +1026,7 @@ describe("v2 stats and purge surfaces (#103)", () => {
     try {
       const statsTool = calls.tools.find((t) => t.name === "relay_stats")!
       const bare = (await statsTool.execute(undefined, {})).content
-      expect(bare).toContain("a/1 | 1 | 1 | – | 0 | – | 100ms | 0/0 | $0.00 | $0.00")
+      expect(bare).toContain("a/1 | 1 | 1 | – | 0 | 0 | 0% | – | 100ms | 0/0 | $0.00 | $0.00")
       expect((await statsTool.execute({}, {})).content).toBe(bare) // {} keeps defaults
       expect((await statsTool.execute({ days: 30 }, {})).content).toBe(bare) // explicit default window
       const relayCmd = calls.commands.find((c) => c.name === "relay")!

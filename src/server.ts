@@ -7,7 +7,7 @@ import { StateStore } from "./state"
 import { SessionLock } from "./session-lock"
 import { SwitchLog } from "./switchlog"
 import { EventLog } from "./ledger"
-import { buildStats, writeStats } from "./stats"
+import { buildStats, DEFAULT_STATS_DAYS, writeStats } from "./stats"
 import { createNarrator } from "./narrator"
 import { fetchOpenRouterModels, orChat } from "./openrouter"
 import { modelKey, parseModel, type ClientLike } from "./types"
@@ -78,7 +78,12 @@ export function createRelay(env: Env, client: ClientLike): RelayParts {
     openCodeModels: () => listProviderModels(client),
   })
   // Startup rebuild (#7): stats.json is derived from the metadata-only ledger; best effort, never throws.
-  try { writeStats(buildStats(ledger.read(), Date.now()), ledgerDir) } catch { /* stats are best effort */ }
+  try {
+    const now = Date.now()
+    const events = ledger.read(DEFAULT_STATS_DAYS, now)
+    const healthHistory = ledger.read(DEFAULT_STATS_DAYS + 1, now)
+    writeStats(buildStats(events, now, DEFAULT_STATS_DAYS, healthHistory), ledgerDir)
+  } catch { /* stats are best effort */ }
   return { controller, state, warnings, narrate, ledger, ledgerDir }
 }
 

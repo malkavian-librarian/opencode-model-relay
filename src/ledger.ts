@@ -14,7 +14,8 @@ const SWITCH_KINDS = [
   "overflow", "user_abort", "unknown", "quality", "switch_dropped", "manual",
 ] as const
 const DROP_REASONS = ["lock_held", "marker_guard", "superseded"] as const
-const EVENT_KINDS = ["turn", "failure", "judge", "switch", "narrative"] as const
+const EVENT_KINDS = ["turn", "failure", "judge", "switch", "narrative", "health"] as const
+const HEALTH_WHATS = ["cooldown_start", "cooldown_end", "permanent_mark", "permanent_expire", "quarantine_skip", "exhausted", "cap_hit"] as const
 const MAX_MODEL_CHARS = 120
 const MODEL_REF = /^[A-Za-z0-9._:-]+(?:\/[A-Za-z0-9._:-]+)+$/
 const MAX_LINES = 20000
@@ -41,10 +42,17 @@ export const ledgerEventSchema = z.object({
   verdict: z.enum(["switch", "stay"]).optional(),
   sw: swSchema.optional(),
   helperCostUsd: z.number().finite().nonnegative().optional(),
+  what: z.enum(HEALTH_WHATS).optional(),
+  untilMs: z.number().finite().nonnegative().optional(),
 }).refine((e) => (e.event === "failure") === (e.errorKind !== undefined), { message: "failure events need an errorKind" })
   .refine((e) => (e.event === "judge") === (e.verdict !== undefined), { message: "judge events need a verdict" })
   .refine((e) => (e.event === "switch") === (e.sw !== undefined), { message: "switch events need their sw detail" })
   .refine((e) => e.event !== "narrative" || (e.model !== undefined && e.helperCostUsd !== undefined), { message: "narrative events need model and helperCostUsd" })
+  .refine((e) => (e.event === "health") === (e.what !== undefined && e.model !== undefined), { message: "health events need what and model" })
+  .refine((e) => e.event === "health" || e.what === undefined, { message: "what is health metadata" })
+  .refine((e) => e.untilMs === undefined || e.event === "health", { message: "untilMs is health metadata" })
+  .refine((e) => e.event !== "health" || e.what === "cooldown_start" || e.what === "permanent_mark" || e.untilMs === undefined, { message: "untilMs only applies to health start events" })
+  .refine((e) => e.event !== "health" || (e.latencyMs === undefined && e.tokens === undefined && e.cost === undefined && e.errorKind === undefined && e.verdict === undefined && e.sw === undefined && e.helperCostUsd === undefined), { message: "health rows contain only health metadata" })
 
 export type LedgerEvent = z.infer<typeof ledgerEventSchema>
 export type EventInput = Omit<LedgerEvent, "session"> & { sessionID: string }
