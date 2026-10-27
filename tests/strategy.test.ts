@@ -156,6 +156,7 @@ describe("walkCircular (#122)", () => {
   it("retains resolved find positions while walking", () => {
     expect(w("b/2", { ladder: ["a/1", { find: { match: "glm" } }, "b/2", "c/3"], resolveFind: () => "x/9" })).toEqual(sw("c/3"))
     expect(w("x/9", { ladder: ["a/1", { find: { match: "glm" } }, "b/2"], resolveFind: () => "x/9" })).toEqual(sw("b/2"))
+    expect(w("b/2", { ladder: ["a/1", { find: { match: "b" } }, "b/2", "c/3"], resolveFind: () => "b/2" })).toEqual(sw("c/3"))
   })
   it("stops after the configured number of completed flows", () => {
     expect(w("a/1", { circularFlows: 2 })).toEqual(sw("b/2"))

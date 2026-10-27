@@ -212,7 +212,7 @@ export function walkCircular(i: {
   for (const allowQuarantined of [false, true]) {
     for (let offset = 1; offset < levels.length; offset++) {
       const model = levels[(start + offset) % levels.length]
-      if (model !== undefined && isHealthy(i.health[model], i.now) && (allowQuarantined || !quarantined(model))) return { action: "switch", to: model }
+      if (model !== undefined && model !== i.current && isHealthy(i.health[model], i.now) && (allowQuarantined || !quarantined(model))) return { action: "switch", to: model }
     }
   }
   return { action: "exhausted", reason: "no_candidates" }

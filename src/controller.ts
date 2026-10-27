@@ -226,6 +226,9 @@ export class Controller {
       // Explicit attribution must agree with the current turn, never poison a newer model.
       if (from && modelKey(from) !== current) return false
       const now = d.now()
+      const circularCurrentFind = d.cfg.maxCircularFlows > 0
+        ? buildLadder(d.cfg).find((level) => typeof level !== "string" && d.state.getFindCache(JSON.stringify(level), now) === current)
+        : undefined
       let rec = { ...d.state.get(sessionID) } // session records are merged, never whole-record overwritten (AC-01)
       // Marker guard (#56, AC-03): marker text is untrusted; a marker newest while the session is not
       // on the plugin-set model is a stale error, and the drop is logged, never silent (AC-06).
@@ -257,7 +260,12 @@ export class Controller {
       const ladder = buildLadder(d.cfg)
       const input = this.findInput(current, sessionID, now)
       const decision = d.cfg.maxCircularFlows > 0
-        ? walkCircular({ ...input, ladder, switchCount: rec.switchCount, maxSwitches: effectiveMaxSwitches(d.cfg), maxCircularFlows: d.cfg.maxCircularFlows, circularFlows: rec.circularFlows, resolveFind: (entry) => d.state.getFindCache(JSON.stringify(entry), now) })
+        ? walkCircular({
+          ...input, ladder, switchCount: rec.switchCount, maxSwitches: effectiveMaxSwitches(d.cfg), maxCircularFlows: d.cfg.maxCircularFlows,
+          circularFlows: rec.circularFlows,
+          resolveFind: (entry) => circularCurrentFind && JSON.stringify(entry) === JSON.stringify(circularCurrentFind)
+            ? current : d.state.getFindCache(JSON.stringify(entry), now),
+        })
         : await walkFromTopAsync({ ...input, ladder, tried: triedThisTurn(msgs), switchCount: rec.switchCount, maxSwitches: effectiveMaxSwitches(d.cfg) })
       let to: string
       if (decision.action === "switch") to = decision.to
