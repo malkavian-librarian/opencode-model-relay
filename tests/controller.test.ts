@@ -548,6 +548,81 @@ describe("Controller.onSessionError", () => {
     expect(calls.toast.join(" ")).toMatch(/limit/i)
     expect(calls.toast.join(" ")).toMatch(/relay next/)
   })
+
+  it("drop reason is exhausted when the local ladder finds nothing healthy, regardless of consent", async () => {
+    for (const consent of [false, true]) {
+      const a = setup({ cfg: { privacy: { consent } } })
+      a.d.health["b/2"] = { cooldownUntil: 2_000_000 }
+      await a.c.onSessionError("s1", err429)
+      expect(a.calls.logs).toEqual([expect.objectContaining({ kind: "switch_dropped", reason: "exhausted", from: "a/1" })])
+    }
+  })
+
+  it("drop reason is cap_hit at the switch cap with nothing healthy, regardless of consent", async () => {
+    for (const consent of [false, true]) {
+      const b = setup({ cfg: { maxSwitchesPerSession: 1, privacy: { consent } } })
+      b.d.state.set("s1", { pluginPinned: "a/1", switchCount: 1, updated: 1 })
+      b.d.health["b/2"] = { cooldownUntil: 2_000_000 }
+      await b.c.onSessionError("s1", err429)
+      expect(b.calls.logs).toEqual([expect.objectContaining({ kind: "switch_dropped", reason: "cap_hit", from: "a/1" })])
+    }
+  })
+
+  it("drop reason is no_consent only when consent gated a discovery destination", async () => {
+    const entry = { find: { match: "glm-5", free: true, via: "openrouter" as const } }
+    const n = setup({ cfg: { levels: ["a/1", entry, "b/2"], privacy: { consent: false } } })
+    n.d.health["b/2"] = { cooldownUntil: 2_000_000 }
+    await n.c.onSessionError("s1", err429)
+    expect(n.calls.logs).toEqual([expect.objectContaining({ kind: "switch_dropped", reason: "no_consent", from: "a/1" })])
+  })
+
+  it("an abort timeout continues enactment: no drop row, the switch is still enacted", async () => {
+    vi.useFakeTimers()
+    try {
+      const { c, d, calls } = setup()
+      d.switchOpts = { abortTimeoutMs: 20, abortDelayMs: 0 }
+      ;(d.client.session as any).abort = async (a: any) => { calls.abort.push(a); return new Promise<void>(() => {}) }
+      const switched = c.onSessionError("s1", err429)
+      await vi.advanceTimersByTimeAsync(20)
+      await expect(switched).resolves.toBe(true)
+      expect(calls.prompt).toHaveLength(1)
+      expect(calls.logs.filter((r) => r.kind === "switch_dropped")).toEqual([])
+      expect(calls.events.filter((e) => e.event === "switch" && e.sw?.kind !== "switch_dropped")).toHaveLength(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("an abort rejection continues enactment: no drop row, the switch is still enacted", async () => {
+    const { c, d, calls } = setup()
+    ;(d.client.session as any).abort = async () => { throw new Error("down") }
+    await expect(c.onSessionError("s1", err429)).resolves.toBe(true)
+    expect(calls.prompt).toHaveLength(1)
+    expect(calls.logs.filter((r) => r.kind === "switch_dropped")).toEqual([])
+    expect(calls.events.filter((e) => e.event === "switch" && e.sw?.kind !== "switch_dropped")).toHaveLength(1)
+  })
+
+  it("a prompt that never fires stops the attempt: prompt_failed drop and no enacted row", async () => {
+    const { c, d, calls } = setup()
+    ;(d.client.session as any).prompt = () => { throw new Error("down") }
+    await expect(c.onSessionError("s1", err429)).resolves.toBe(false)
+    expect(calls.logs).toEqual([expect.objectContaining({ kind: "switch_dropped", reason: "prompt_failed", from: "a/1", to: "b/2" })])
+    expect(calls.events.filter((e) => e.event === "switch")).toEqual([
+      expect.objectContaining({ sw: { kind: "switch_dropped", reason: "prompt_failed", from: "a/1", to: "b/2" } }),
+    ])
+  })
+
+  it("a late prompt rejection after enactment is a turn failure, not another switch drop", async () => {
+    const { c, d, calls } = setup()
+    let rejectPrompt!: (error: Error) => void
+    ;(d.client.session as any).prompt = () => new Promise((_resolve, reject) => { rejectPrompt = reject })
+    await expect(c.onSessionError("s1", err429)).resolves.toBe(true)
+    expect(calls.events.filter((e) => e.event === "switch" && e.sw?.kind !== "switch_dropped")).toHaveLength(1)
+    rejectPrompt(new Error("turn failed"))
+    await new Promise<void>((r) => { setImmediate(r) })
+    expect(calls.logs.filter((r) => r.kind === "switch_dropped")).toEqual([])
+    expect(calls.events.filter((e) => e.event === "switch")).toHaveLength(1)
+  })
   it("never throws even if the client misbehaves", async () => {
     const { c, d } = setup()
     ;(d.client.session as any).messages = async () => { throw new Error("down") }
@@ -970,6 +1045,17 @@ describe("Controller.manualSwitch (#67)", () => {
     expect(calls.events.filter((e) => e.event === "switch").at(-1)).toMatchObject({ sw: { kind: "manual", from: "b/2", regret: true } })
   })
 
+  it("does not mark regret when the manual switch moves on to a third model", async () => {
+    const { c, calls, messages } = setup({ cfg: { tiers: { primary: "a/1", secondary: ["b/2", "c/3"] } } })
+    await c.onSessionError("s1", err429) // automatic a/1 -> b/2
+    messages.splice(0, messages.length, ...msgs({ providerID: "b", modelID: "2" }, "b1"))
+    await expect(c.manualSwitch("s1", "c/3")).resolves.toMatchObject({ status: "switched", to: "c/3" })
+    expect(calls.logs.at(-1)).toMatchObject({ kind: "manual", from: "b/2", to: "c/3" })
+    expect(calls.logs.at(-1).regret).toBeUndefined()
+    expect(calls.events.filter((e) => e.event === "switch").at(-1)).toMatchObject({ sw: { kind: "manual", from: "b/2", to: "c/3" } })
+    expect(calls.events.filter((e) => e.event === "switch").at(-1)?.sw?.regret).toBeUndefined()
+  })
+
   it("next resolves a find level before falling through to a static model", async () => {
     const entry = { find: { match: "glm-5", free: true, via: "openrouter" as const } }
     const { c, d, calls, messages } = setup({
@@ -1055,6 +1141,15 @@ describe("Controller quality judge (#26)", () => {
       expect.objectContaining({ outcome, heuristicReasons: outcome === "skipped_no_heuristic" ? [] : ["no_output"] }),
     ])
     expect(calls.events.filter((e) => e.event === "judge")).toHaveLength(1)
+  })
+
+  it("does not emit another skipped_cap row when the same assistant message is re-processed", async () => {
+    const { c, calls } = judgeSetup({ cfg: { judge: { enabled: true, maxCallsPerSession: 0 } }, messages: judgedTurn("replayed") })
+    await c.onSessionIdle("s1")
+    await c.onSessionIdle("s1") // the same assistant message id returns before the cap checks
+    const rows = calls.events.filter((e) => e.event === "judge")
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({ outcome: "skipped_cap" })
   })
 
   it("no consent or no key: the judge never runs", async () => {

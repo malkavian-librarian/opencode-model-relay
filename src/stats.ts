@@ -143,7 +143,8 @@ export function buildStats(events: LedgerEvent[], now: number, days = DEFAULT_ST
     } else if (e.event === "failure" && e.errorKind) {
       b.failures[e.errorKind] = (b.failures[e.errorKind] ?? 0) + 1
     } else if (e.event === "judge") {
-      b.judgeCalls++
+      // Only verdict rows count the rejection share; skip/error outcomes carry no verdict and must not dilute it.
+      if (e.verdict !== undefined) b.judgeCalls++
       if (e.verdict === "switch") b.judgeRejects++
     } else if (e.event === "switch" && e.sw && e.sw.kind !== "manual" && e.sw.kind !== "switch_dropped") {
       b.switchAway++ // an effective auto switch IS the model being switched away from
@@ -151,7 +152,7 @@ export function buildStats(events: LedgerEvent[], now: number, days = DEFAULT_ST
     if ((e.event === "judge" || e.event === "narrative") && e.helperCostUsd !== undefined) b.helperCostUsd += e.helperCostUsd
   }
 
-  // Manual recovery shortly after an automatic switch is a bounded regret signal.
+  // A manual switch that reverses the latest automatic switch (back to its source model) shortly after is a bounded regret signal.
   for (const seq of bySession.values()) {
     for (let i = 0; i < seq.length; i++) {
       const manual = seq[i]
@@ -159,7 +160,7 @@ export function buildStats(events: LedgerEvent[], now: number, days = DEFAULT_ST
       const manualBucket = bucketFor(manual.sw.from, manual.ts)
       manualBucket.regret ??= 0
       const prior = seq.slice(0, i).reverse().find((e) => e.event === "switch" && e.sw?.kind !== "manual" && e.sw?.kind !== "switch_dropped")
-      const inferred = prior !== undefined && prior.sw?.to === manual.sw.from && manual.ts - prior.ts >= 0 && manual.ts - prior.ts <= 5 * 60 * 1000
+      const inferred = prior !== undefined && prior.sw?.to === manual.sw.from && prior.sw?.from === manual.sw.to && manual.ts - prior.ts >= 0 && manual.ts - prior.ts <= 5 * 60 * 1000
       if (manual.sw.regret !== true && !inferred) continue
       manualBucket.regret = (manualBucket.regret ?? 0) + 1
     }

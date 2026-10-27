@@ -43,8 +43,10 @@ export async function runJudge(input: {
       d.state.set(sessionID, { ...d.state.get(sessionID), lastJudgeMessageId: last.info.id, updated: now })
       saveState()
     }
+    // A re-processed assistant message returns before the cap checks: its already-logged skip must not log another skipped_cap row.
+    if (last.info.id === rec.lastJudgeMessageId) return
     if ((rec.judgeCalls ?? 0) >= cfg.maxCallsPerSession) { emit({ outcome: "skipped_cap" }); markSkipped(); return }
-    if (now < (rec.lastJudgeAt ?? 0) + cfg.minIntervalMs || last.info.id === rec.lastJudgeMessageId) return
+    if (now < (rec.lastJudgeAt ?? 0) + cfg.minIntervalMs) return
     const daily = d.state.judgeDaily
     const today = new Date(now).toISOString().slice(0, 10)
     if (daily.date !== today) { daily.calls = undefined; daily.costUsd = undefined; daily.date = today }

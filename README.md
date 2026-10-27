@@ -122,9 +122,17 @@ Each `switches.jsonl` row is metadata-only and uses these fields:
 | `from` / `to` | The source and destination `provider/model` identifiers, when known. |
 | `kind` | An enum: failure kind, `quality`, `manual`, or `switch_dropped`. |
 | `reason` | For `switch_dropped` only: the bounded drop enum (`duplicate`, `child_session`, `abort_timeout`, `abort_rejected`, `prompt_failed`, `exhausted`, `cap_hit`, `no_consent`, `lock_held`, `marker_guard`, or `superseded`). |
-| `regret` | Optional `true` on a manual row when it returns from an automatic switch within five minutes on the same session. |
+| `regret` | Optional `true` on a manual row when it reverses the latest automatic switch (returning to that switch's source model) within five minutes on the same session. |
 | `elapsedMs` | Finite, non-negative numeric duration for the operation. |
 | `helperCostUsd` | Optional finite, non-negative helper-call cost. |
+
+A drop row reflects the attempt's final outcome only: `prompt_failed` is recorded
+only when the handover prompt never fired (a late turn failure after enactment is a
+normal failure, not a drop), `cap_hit` marks switch-cap stops regardless of consent,
+`exhausted` a ladder with nothing healthy left, and `no_consent` only a stop where
+consent off gated a discovery (`find`) destination. `abort_timeout` and
+`abort_rejected` remain readable on older rows; the enactment continues past abort
+races and no longer records them.
 
 Rows never contain prompts, responses, provider free text, raw session ids, API keys,
 or other secrets. `from` and `to` are accepted only as identifier-shaped
@@ -193,7 +201,8 @@ Unmatched end transitions do not create or extend downtime.
 `/relay stats [--days N] [--kinds]` (OpenCode v2 only; the `relay_stats` tool is
 the same surface with optional `days` (integer 1-30, default 30) and `kinds`
 (boolean)) prints a per-model table over the selected rolling window: turns,
-failures, the share of tier-2/3 judge verdicts that said `switch`, how often the
+failures, the share of tier-2/3 judge verdict rows that said `switch` (skip and
+error outcomes carry no verdict and are excluded), how often the
 model was switched away from, survival (the share of turns followed by another
 turn on the same model in the same session within 30 minutes or 5 turns with no
 effective switch in between; turns with no observable outcome are censored and
