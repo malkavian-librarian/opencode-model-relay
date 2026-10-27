@@ -30,6 +30,7 @@ Record of `@coderabbitai` exchanges, so agents do not repeat past mistakes.
 
 - Minor, `src/controller.ts`: an expired find cache could erase the current authored slot -> fixed by persisting the bounded find-entry key with circular progress and reusing it after cache invalidation.
 - Minor, `src/controller.ts`: an off-ladder starting model could remain the circular origin forever -> fixed by rebasing the first circular origin to the selected ladder target; persisted progress remains bounded.
+- Minor, `src/controller.ts`: a previous find key could persist after selecting a non-find destination -> fixed by clearing the key unless the selected destination is backed by a find entry.
 
 ### 2026-10-27 - PR #119 (issue #117)
 

@@ -305,7 +305,6 @@ export class Controller {
         switchCount: rec.switchCount + 1, helperCalls, updated: now,
       }
       if (d.cfg.maxCircularFlows > 0) {
-        const currentFindKey = circularCurrentFind ? JSON.stringify(circularCurrentFind) : rec.circularFindKey
         const selectedFindEntry = ladder.find((level) => typeof level !== "string" && d.state.getFindCache(JSON.stringify(level), now) === to)
         const selectedFindKey = selectedFindEntry === undefined ? undefined : JSON.stringify(selectedFindEntry)
         const onLadder = circularCurrentFind !== undefined || ladder.some((level) => level === current)
@@ -313,7 +312,8 @@ export class Controller {
         const transitions = (rec.circularTransitions ?? 0) + 1
         const completed = (rec.circularFlows ?? 0) + (to === origin && transitions >= 2 ? 1 : 0)
         next.circularOrigin = origin
-        if (selectedFindKey ?? currentFindKey) next.circularFindKey = selectedFindKey ?? currentFindKey
+        if (selectedFindKey) next.circularFindKey = selectedFindKey
+        else delete next.circularFindKey
         next.circularTransitions = to === origin && transitions >= 2 ? 0 : transitions
         next.circularFlows = completed
       }
