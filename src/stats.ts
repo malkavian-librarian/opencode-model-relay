@@ -294,15 +294,21 @@ export function purgeAndRefreshStats(ledger: EventLog, dir: string, now = Date.n
 export function renderStatsTable(stats: StatsDoc, events: readonly LedgerEvent[], kinds = false): string {
   const rows: string[] = ["model | turns | fails | judgeRej | switchAway | downMs | offPrimary | survival | medianLat | tok in/out | cost$ | helper$"]
   const samples = new Map<string, number[]>()
+  const tieredTurns = new Map<string, [number, number]>()
   for (const e of events) {
-    if (e.event !== "turn" || e.model === undefined || e.latencyMs === undefined) continue
-    ;(samples.get(e.model) ?? samples.set(e.model, []).get(e.model)!).push(e.latencyMs)
+    if (e.event !== "turn" || e.model === undefined) continue
+    if (e.tier !== undefined) {
+      const counts = tieredTurns.get(e.model) ?? [0, 0]
+      counts[0]++; if (e.tier > 1) counts[1]++
+      tieredTurns.set(e.model, counts)
+    }
+    if (e.latencyMs !== undefined) (samples.get(e.model) ?? samples.set(e.model, []).get(e.model)!).push(e.latencyMs)
   }
   for (const [model, days] of Object.entries(stats.models)) {
-    let turns = 0, fails = 0, jc = 0, jr = 0, sw = 0, down = 0, offPrimary = 0, ok = 0, fail = 0, tokIn = 0, tokOut = 0, cost = 0, helper = 0
+    let turns = 0, fails = 0, jc = 0, jr = 0, sw = 0, down = 0, ok = 0, fail = 0, tokIn = 0, tokOut = 0, cost = 0, helper = 0
     for (const b of Object.values(days)) {
       turns += b.turns; jc += b.judgeCalls; jr += b.judgeRejects; sw += b.switchAway
-      down += b.down; offPrimary = Math.max(offPrimary, b.offPrimary)
+      down += b.down
       ok += b.survivalOk; fail += b.survivalFail
       tokIn += b.tokensIn; tokOut += b.tokensOut; cost += b.costUsd; helper += b.helperCostUsd
       fails += Object.values(b.failures).reduce((a, c) => a + c, 0)
@@ -310,6 +316,8 @@ export function renderStatsTable(stats: StatsDoc, events: readonly LedgerEvent[]
     const pct = (n: number, d: number): string => (d > 0 ? `${Math.round((100 * n) / d)}%` : "–")
     const lats = samples.get(model)
     const med = lats && lats.length ? `${Math.round(median(lats)!)}ms` : "–"
+    const [knownTurns, offPrimaryTurns] = tieredTurns.get(model) ?? [0, 0]
+    const offPrimary = knownTurns > 0 ? offPrimaryTurns / knownTurns : 0
     rows.push(`${model} | ${turns} | ${fails} | ${pct(jr, jc)} | ${sw} | ${down} | ${pct(offPrimary, 1)} | ${pct(ok, ok + fail)} | ${med} | ${tokIn}/${tokOut} | $${cost.toFixed(2)} | $${helper.toFixed(2)}`)
     if (kinds) {
       const counts = new Map<string, number>()

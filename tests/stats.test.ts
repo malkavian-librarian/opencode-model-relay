@@ -173,6 +173,20 @@ describe("stats.json write", () => {
 })
 
 describe("renderStatsTable", () => {
+  it("uses all known-tier turns in the window instead of the highest daily off-primary share", () => {
+    const ev = [
+      turn(NOW - DAY, "prov/a", { tier: 2 }),
+      turn(NOW - 3, "prov/a", { tier: 1 }),
+      turn(NOW - 2, "prov/a", { tier: 1 }),
+      turn(NOW - 1, "prov/a", { tier: 1 }),
+      turn(NOW, "prov/a"),
+      turn(NOW, "prov/unknown"),
+    ]
+    const rows = renderStatsTable(buildStats(ev, NOW), ev).split("\n")
+    expect(rows.find((row) => row.startsWith("prov/a |"))?.split(" | ")[6]).toBe("25%")
+    expect(rows.find((row) => row.startsWith("prov/unknown |"))?.split(" | ")[6]).toBe("0%")
+  })
+
   it("renders per-model rows with overhead $ and no free text", () => {
     const ev = [turn(NOW - DAY, "prov/a", { cost: 0.2 }), { ts: NOW - DAY, session: S, event: "judge", verdict: "switch", tier: 2, model: "prov/a", helperCostUsd: 0.02 } as LedgerEvent]
     const txt = renderStatsTable(buildStats(ev, NOW), ev)

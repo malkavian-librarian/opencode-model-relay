@@ -137,7 +137,7 @@ export class Controller {
   /** Owner escape hatch: the same abort/switchModel seam as failover, but plain-tail and cap-exempt. */
   async manualSwitch(sessionID: string, requested?: string): Promise<ManualSwitchResult> {
     return runManualSwitch({
-      d: this.d, sessionID, requested,
+      d: this.d, sessionID, requested, healthEvents: this.healthEvents,
       fetchMessages: (id) => this.fetchMessages(id),
       findInput: (current, sid, now) => this.findInput(current, sid, now),
       enactSwitch: (sid, current, options) => this.enactSwitch(sid, current, options),
@@ -303,6 +303,7 @@ export class Controller {
         delete adopted.circularOrigin; delete adopted.circularFindKey; delete adopted.circularTransitions; delete adopted.circularFlows
         delete adopted.pendingHandover // no switch was enacted; the intent is spent
         d.state.set(sessionID, adopted)
+        this.healthEvents.clearSuccess(sessionID, supersededBy, d.health, d.now())
         delete d.health[supersededBy] // the owner chose it: cooldown, blacklist and failure count all clear, once
         d.state.save()
         d.switchLog.append({ ts: d.now(), sessionID, from: current, to: supersededBy, kind: "switch_dropped", reason: "superseded", elapsedMs: Math.max(0, d.now() - started) })
@@ -447,6 +448,7 @@ export class Controller {
       const adopted = { ...d.state.get(sessionID), pluginPinned: pick, adoptedAt: now, updated: now }
       delete adopted.circularOrigin; delete adopted.circularFindKey; delete adopted.circularTransitions; delete adopted.circularFlows
       d.state.set(sessionID, adopted)
+      this.healthEvents.clearSuccess(sessionID, pick, d.health, now)
       delete d.health[pick] // the owner chose it: cooldown, blacklist and failure count all clear, once
       d.state.save()
     } catch {

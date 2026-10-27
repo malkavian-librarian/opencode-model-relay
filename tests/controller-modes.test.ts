@@ -50,6 +50,40 @@ function setup(levels: unknown[] = ["a/1", "b/2", "c/3"], extra: object = {}) {
 }
 
 describe("health telemetry paths (#108)", () => {
+  it.each(["adoption", "manual command", "supersession"])("closes health marks before %s clears them", async (mode) => {
+    const { c, d, messages } = setup(["a/1", "b/2", "c/3"])
+    d.health = d.state.health
+    const mark = { cooldownUntil: T0 + COOLDOWN, permanent: true, permanentAt: T0, failures: 3 }
+    d.health["b/2"] = { ...mark }
+    d.state.set("s1", { pluginPinned: "a/1", switchCount: 2, helperCalls: 1, updated: T0 })
+    d.state.save()
+    const events: EventInput[] = []; const marksAtEmission: Array<ModelHealth | undefined> = []
+    d.ledger = { append: (event) => {
+      if (event.event === "health" && event.model === "b/2") {
+        events.push(event); marksAtEmission.push(d.health["b/2"] && { ...d.health["b/2"] })
+      }
+      return true
+    } }
+    if (mode === "adoption") c.adoptPick("s1", "b/2")
+    else if (mode === "manual command") await expect(c.manualSwitch("s1", "b/2")).resolves.toMatchObject({ status: "switched", to: "b/2" })
+    else {
+      d.client.session.abort = async () => {
+        messages.push(user("u2", "picked", "b", "2"))
+        return {}
+      }
+      await expect(c.onSessionError("s1", err429())).resolves.toBe(false)
+    }
+    expect(events).toEqual([
+      { ts: T0, sessionID: "s1", event: "health", model: "b/2", tier: 2, what: "cooldown_end" },
+      { ts: T0, sessionID: "s1", event: "health", model: "b/2", tier: 2, what: "permanent_expire" },
+    ])
+    expect(marksAtEmission).toEqual([mark, mark])
+    expect(d.health["b/2"]).toBeUndefined()
+    expect(d.state.get("s1")).toMatchObject({ pluginPinned: "b/2", switchCount: 2, helperCalls: 1 })
+    c.adoptPick("s1", "b/2")
+    expect(events).toHaveLength(2)
+  })
+
   it.each([
     { name: "exhaustion", capped: false, blocked: true, circular: false, what: "exhausted" },
     { name: "cap without a fallback", capped: true, blocked: true, circular: false, what: "cap_hit" },

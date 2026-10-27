@@ -2,12 +2,14 @@ import { buildLadder, isValidDiscoveredModelId, triedThisTurn, walkFromTopAsync,
 import { buildHandover, extractFromMessages } from "./handover"
 import { modelKey, parseModel, type ModelRef, type OcMessage } from "./types"
 import type { Deps, ManualSwitchResult } from "./controller"
+import type { HealthEvents } from "./controller-health"
 
 /** Executes the owner-requested switch workflow using the controller's existing seams. */
 export async function manualSwitch(input: {
   d: Deps
   sessionID: string
   requested?: string
+  healthEvents: HealthEvents
   fetchMessages: (id: string) => Promise<OcMessage[]>
   findInput: (current: string, sessionID: string, now: number) => FindResolutionInput
   enactSwitch: (sessionID: string, current: string, options: { to: ModelRef; handoverText: string }) => Promise<string | undefined>
@@ -47,6 +49,7 @@ export async function manualSwitch(input: {
       const next = { ...rec, pluginPinned: target, pendingHandover: { to: target, at: started }, updated: started }
       delete next.circularOrigin; delete next.circularFindKey; delete next.circularTransitions; delete next.circularFlows
       d.state.set(sessionID, next)
+      input.healthEvents.clearSuccess(sessionID, target, d.health, started)
       delete d.health[target]
       d.state.save()
       const superseded = await enactSwitch(sessionID, current, { to: parseModel(target), handoverText: text })

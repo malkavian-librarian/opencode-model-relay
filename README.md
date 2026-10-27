@@ -205,8 +205,10 @@ input shape) print `Usage: /relay stats [--days N] [--kinds]` and change
 nothing. `--kinds` (tool: `kinds: true`) adds one breakdown line per model with
 its nonzero failure kinds and counts in lexicographic order, `none` when
 failure-free; the counts sum to the model's `fails` column. `downMs` is
-window-clipped cooldown/permanent downtime, and `offPrimary` is the fraction of
-that model's retained turns below ladder tier 1. These are not a
+window-clipped cooldown/permanent downtime; successful turns and manual model
+picks close any marks they clear. `offPrimary` is the fraction of that model's
+retained turns with a known tier that ran below ladder tier 1, over the whole
+selected window (zero when none have a known tier). These are not a
 complete provider invoice: absent/invalid costs are not estimated, and
 failed/null narrative results may have unknown spend.
 
