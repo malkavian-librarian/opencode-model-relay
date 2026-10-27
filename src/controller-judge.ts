@@ -19,8 +19,9 @@ export async function runJudge(input: {
   handle: (sessionID: string, kind: "quality") => Promise<boolean>
   led: (fields: EventInput) => void
   tierOf: (model: string) => number | undefined
+  saveState: () => void
 }): Promise<void> {
-  const { d, sessionID, current, msgs, judgeStreak, fetchMessages, handle, led, tierOf } = input
+  const { d, sessionID, current, msgs, judgeStreak, fetchMessages, handle, led, tierOf, saveState } = input
   try {
     const cfg = d.cfg.judge
     if (!cfg.enabled || buildLadder(d.cfg)[0] === current) return
@@ -46,13 +47,13 @@ export async function runJudge(input: {
     const judgeCalls = (rec.judgeCalls ?? 0) + 1
     daily.calls = (daily.calls ?? 0) + 1
     d.state.set(sessionID, { ...d.state.get(sessionID), judgeCalls, lastJudgeAt: now, lastJudgeMessageId: last.info.id, updated: now })
-    d.state.save()
+    saveState()
     const ex = extractFromMessages(msgs, d.cfg.handover)
     const { payload, call } = buildJudgeInput(ex, reasons)
     const r = await d.chat({ baseUrl: d.cfg.openrouter.baseUrl, key, model: cfg.model, system: cfg.prompt, user: payload, maxTokens: call.maxTokens, timeoutMs: call.timeoutMs, zdr: d.cfg.privacy.zdr })
     const cost = typeof r.costUsd === "number" && Number.isFinite(r.costUsd) && r.costUsd >= 0 ? r.costUsd : 0
     daily.costUsd = (daily.costUsd ?? 0) + cost
-    d.state.save()
+    saveState()
     const verdict = parseVerdict(r.text)
     if (!verdict) return
     led({ ts: d.now(), sessionID, event: "judge", verdict: verdict.switch ? "switch" : "stay", tier: tierOf(current), model: current, helperCostUsd: cost > 0 ? cost : undefined })

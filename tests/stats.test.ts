@@ -103,6 +103,16 @@ describe("buildStats", () => {
     const b = buildStats(ev, NOW).models["prov/a"]![new Date(NOW).toISOString().slice(0, 10)]!
     expect(b.down).toBe(200)
   })
+
+  it("uses the latest cooldown deadline when a renewal shortens an active cooldown", () => {
+    const ev = [
+      { ts: NOW - 1000, session: S, event: "health", model: "prov/a", what: "cooldown_start", untilMs: NOW + 1000 },
+      { ts: NOW - 500, session: S, event: "health", model: "prov/a", what: "cooldown_start", untilMs: NOW - 100 },
+      { ts: NOW, session: S, event: "health", model: "prov/a", what: "cooldown_end" },
+    ] as LedgerEvent[]
+    const b = buildStats(ev, NOW).models["prov/a"]![new Date(NOW).toISOString().slice(0, 10)]!
+    expect(b.down).toBe(900)
+  })
   it("uses health starts before the window and unions cooldown with permanent downtime", () => {
     const ev = [
       { ts: NOW - 2 * DAY, session: S, event: "health", model: "prov/a", what: "cooldown_start", untilMs: NOW - 500 } as LedgerEvent,

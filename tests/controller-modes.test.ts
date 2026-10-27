@@ -84,6 +84,32 @@ describe("health telemetry paths (#108)", () => {
     expect(events).toHaveLength(2)
   })
 
+  it("timestamps manual health clearing when the clear occurs", async () => {
+    const { c, d, calls, clock } = setup(["a/1", "b/2"])
+    d.health = d.state.health
+    d.health["b/2"] = { cooldownUntil: T0 + COOLDOWN }
+    d.state.set("s1", { pluginPinned: "a/1", switchCount: 0, updated: T0 })
+    d.state.save()
+    let reads = 0
+    d.now = () => T0 + (reads++ === 0 ? 0 : 100)
+
+    await expect(c.manualSwitch("s1", "b/2")).resolves.toMatchObject({ status: "switched", to: "b/2" })
+    expect(calls.events.find((e) => e.event === "health" && e.what === "cooldown_end")).toMatchObject({ ts: T0 + 100 })
+  })
+
+  it("emits expiry for an expired mark that the selected ladder does not visit before save pruning", async () => {
+    const { c, d, calls } = setup(["a/1", "b/2", "c/3"])
+    d.health = d.state.health
+    d.state.set("s1", { pluginPinned: "a/1", switchCount: 0, updated: T0 })
+    d.state.save()
+    d.health["c/3"] = { cooldownUntil: T0 }
+    calls.events.length = 0
+
+    await expect(c.onSessionError("s1", err429())).resolves.toBe(true)
+    expect(calls.events).toContainEqual({ ts: T0, sessionID: "s1", event: "health", model: "c/3", tier: 3, what: "cooldown_end" })
+    expect(d.health["c/3"]).toBeUndefined()
+  })
+
   it.each([
     { name: "exhaustion", capped: false, blocked: true, circular: false, what: "exhausted" },
     { name: "cap without a fallback", capped: true, blocked: true, circular: false, what: "cap_hit" },

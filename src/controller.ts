@@ -142,7 +142,14 @@ export class Controller {
       findInput: (current, sid, now) => this.findInput(current, sid, now),
       enactSwitch: (sid, current, options) => this.enactSwitch(sid, current, options),
       led: (fields) => this.led(fields),
+      clearSuccess: (sid, model, ts) => this.healthEvents.clearSuccess(sid, model, this.d.health, ts),
+      saveState: (sid) => this.saveState(sid),
     })
+  }
+
+  private saveState(sessionID: string): void {
+    this.healthEvents.observeExpired(sessionID, this.d.health, this.d.now())
+    this.d.state.save()
   }
   /**
    * Runs the switch decision. Returns whether a handover was enacted: the v2 retry hook may only veto
@@ -212,7 +219,7 @@ export class Controller {
         }
         // The per-session quarantine rides the record (#64 wiring): refreshed with every mark.
         d.state.set(sessionID, { ...d.state.get(sessionID), quarantine: { ...(d.state.get(sessionID).quarantine ?? {}), [current]: now }, updated: now })
-        d.state.save() // health (cooldowns, blacklists) is persisted together with the session record (#39)
+        this.saveState(sessionID) // health (cooldowns, blacklists) is persisted together with the session record (#39)
         rec = { ...d.state.get(sessionID) }
       }
 
@@ -290,7 +297,7 @@ export class Controller {
       }
       delete next.adoptedAt // the grace window belongs to an adopted pick, never to the plugin's own switch
       d.state.set(sessionID, next)
-      d.state.save()
+      this.saveState(sessionID)
 
       const supersededBy = await this.enactSwitch(sessionID, current, { to: parseModel(to), ...(agent ? { agent } : {}), handoverText: text })
       if (supersededBy !== undefined) {
@@ -305,7 +312,7 @@ export class Controller {
         d.state.set(sessionID, adopted)
         this.healthEvents.clearSuccess(sessionID, supersededBy, d.health, d.now())
         delete d.health[supersededBy] // the owner chose it: cooldown, blacklist and failure count all clear, once
-        d.state.save()
+        this.saveState(sessionID)
         d.switchLog.append({ ts: d.now(), sessionID, from: current, to: supersededBy, kind: "switch_dropped", reason: "superseded", elapsedMs: Math.max(0, d.now() - started) })
         this.led({ ts: d.now(), sessionID, event: "switch", sw: { kind: "switch_dropped", reason: "superseded", from: current, to: supersededBy } })
         return false
@@ -313,7 +320,7 @@ export class Controller {
       if (narrativeDeferred) {
         // Only an enacted switch spends an attempt; persist it under the lock before the writer starts.
         d.state.set(sessionID, { ...d.state.get(sessionID), helperCalls: helperCalls + 1, updated: d.now() })
-        d.state.save()
+        this.saveState(sessionID)
       }
       this.storm.set(sessionID, now) // AC-05: retry events for the old turn are consumed from here
       if (this.storm.size >= MAX_SESSION_ENTRIES) this.storm.clear() // bound the in-memory map
@@ -430,7 +437,7 @@ export class Controller {
   async onSessionIdle(sessionID: string): Promise<void> {
     await runSessionIdle(this.d, sessionID, (id) => this.fetchMessages(id), this.healthEvents,
       (fields) => this.led(fields), (model) => this.tierOf(model), (id, model, msgs) => this.runJudge(id, model, msgs),
-      () => this.storm.delete(sessionID))
+      () => this.storm.delete(sessionID), () => this.saveState(sessionID))
   }
   /**
    * Adopts the owner's manually picked model (AC-01): merges the record under the SessionLock (never
@@ -450,7 +457,7 @@ export class Controller {
       d.state.set(sessionID, adopted)
       this.healthEvents.clearSuccess(sessionID, pick, d.health, now)
       delete d.health[pick] // the owner chose it: cooldown, blacklist and failure count all clear, once
-      d.state.save()
+      this.saveState(sessionID)
     } catch {
       /* adoption never throws into the host */
     } finally {
@@ -467,6 +474,7 @@ export class Controller {
       handle: (sid) => this.handle(sid, { kind: "quality", retryable: false, permanent: false, switchable: true }),
       led: (fields) => this.led(fields),
       tierOf: (model) => this.tierOf(model),
+      saveState: () => this.saveState(sessionID),
     })
   }
   /**

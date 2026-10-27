@@ -14,8 +14,10 @@ export async function manualSwitch(input: {
   findInput: (current: string, sessionID: string, now: number) => FindResolutionInput
   enactSwitch: (sessionID: string, current: string, options: { to: ModelRef; handoverText: string }) => Promise<string | undefined>
   led: (fields: import("./ledger").EventInput) => void
+  clearSuccess: (sessionID: string, model: string, ts: number) => void
+  saveState: (sessionID: string) => void
 }): Promise<ManualSwitchResult> {
-  const { d, sessionID, requested, fetchMessages, findInput, enactSwitch, led } = input
+  const { d, sessionID, requested, fetchMessages, findInput, enactSwitch, led, clearSuccess, saveState } = input
   const started = d.now()
   let target: string | undefined
   try {
@@ -49,9 +51,9 @@ export async function manualSwitch(input: {
       const next = { ...rec, pluginPinned: target, pendingHandover: { to: target, at: started }, updated: started }
       delete next.circularOrigin; delete next.circularFindKey; delete next.circularTransitions; delete next.circularFlows
       d.state.set(sessionID, next)
-      input.healthEvents.clearSuccess(sessionID, target, d.health, started)
+      clearSuccess(sessionID, target, d.now())
       delete d.health[target]
-      d.state.save()
+      saveState(sessionID)
       const superseded = await enactSwitch(sessionID, current, { to: parseModel(target), handoverText: text })
       if (superseded !== undefined) return { status: "unavailable", from: current, to: superseded }
       d.switchLog.append({ ts: started, sessionID, from: current, to: target, kind: "manual", elapsedMs: Math.max(0, d.now() - started) })

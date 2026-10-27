@@ -6,7 +6,7 @@ import type { EventLog, LedgerEvent } from "./ledger"
 const DAY = 864e5
 const MIN_STATS_DAYS = 1
 const MAX_STATS_DAYS = 30
-const DEFAULT_STATS_DAYS = MAX_STATS_DAYS
+export const DEFAULT_STATS_DAYS = MAX_STATS_DAYS
 const SURVIVAL_WINDOW_MS = 30 * 60 * 1000
 const SURVIVAL_MAX_TURNS = 5
 
@@ -174,7 +174,7 @@ export function buildStats(events: LedgerEvent[], now: number, days = DEFAULT_ST
             activeStart = event.ts
             activeUntil = event.untilMs
           } else if (event.untilMs !== undefined) {
-            activeUntil = Math.max(activeUntil ?? event.untilMs, event.untilMs)
+            activeUntil = event.untilMs
           }
         } else if (event.what === endWhat && activeStart !== undefined) {
           intervals.push([activeStart, activeUntil === undefined ? event.ts : Math.min(activeUntil, event.ts)])

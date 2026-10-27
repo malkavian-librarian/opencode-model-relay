@@ -1,5 +1,5 @@
 import type { EventInput } from "./ledger"
-import { clearSuccess as clearHealthSuccess, isHealthy, type HealthExpiry, type ModelHealth } from "./strategy"
+import { clearSuccess as clearHealthSuccess, isHealthy, PERMANENT_HEALTH_TTL_MS, type HealthExpiry, type ModelHealth } from "./strategy"
 import type { Deps } from "./controller"
 import type { OcMessage } from "./types"
 
@@ -21,6 +21,15 @@ export class HealthEvents {
     } catch { /* health telemetry never changes the decision */ }
   }
 
+  observeExpired(sessionID: string, health: Record<string, ModelHealth>, ts: number): void {
+    for (const [model, entry] of Object.entries(health)) {
+      if (entry.cooldownUntil !== undefined && entry.cooldownUntil <= ts) this.expiry(sessionID, model, "cooldown_end", entry, ts)
+      if (entry.permanent === true && entry.permanentAt !== undefined && ts - entry.permanentAt >= PERMANENT_HEALTH_TTL_MS) {
+        this.expiry(sessionID, model, "permanent_expire", entry, ts)
+      }
+    }
+  }
+
   outcome(sessionID: string, model: string, what: "quarantine_skip" | "exhausted" | "cap_hit", ts: number, seen: Set<string>): void {
     if (seen.has(`${what}:${model}`)) return
     seen.add(`${what}:${model}`)
@@ -40,6 +49,7 @@ export async function runSessionIdle(
   d: Deps, sessionID: string, fetchMessages: (id: string) => Promise<OcMessage[]>,
   healthEvents: HealthEvents, led: (fields: EventInput) => void, tierOf: (model: string) => number | undefined,
   runJudge: (id: string, model: string, messages: OcMessage[]) => Promise<void>, clearStorm: () => void,
+  saveState: () => void,
 ): Promise<void> {
   try {
     const session = await d.client.session.get({ path: { id: sessionID } })
@@ -62,13 +72,13 @@ export async function runSessionIdle(
     const health = d.health[model]
     isHealthy(health, d.now(), (what) => healthEvents.expiry(sessionID, model, what, health, d.now()))
     healthEvents.clearSuccess(sessionID, model, d.health, d.now())
-    if (d.health[model] !== undefined) d.state.save()
+    if (d.health[model] !== undefined) saveState()
     if (rec.pendingHandover !== undefined) {
       const { pendingHandover: _spent, circularOrigin: _origin, circularFindKey: _findKey, circularTransitions: _transitions, circularFlows: _flows, ...rest } = rec
-      d.state.set(sessionID, { ...rest, updated: d.now() }); d.state.save()
+      d.state.set(sessionID, { ...rest, updated: d.now() }); saveState()
     } else if (rec.circularOrigin !== undefined || rec.circularFindKey !== undefined || rec.circularTransitions !== undefined || rec.circularFlows !== undefined) {
       const { circularOrigin: _origin, circularFindKey: _findKey, circularTransitions: _transitions, circularFlows: _flows, ...rest } = rec
-      d.state.set(sessionID, { ...rest, updated: d.now() }); d.state.save()
+      d.state.set(sessionID, { ...rest, updated: d.now() }); saveState()
     }
     await runJudge(sessionID, model, msgs)
   } catch (e) {
