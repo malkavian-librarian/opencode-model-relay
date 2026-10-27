@@ -1,5 +1,30 @@
 # opencode-model-relay
 
+```text
+              you
+               |
+               v
+          +----------+     fails: rate_limit, quota, auth,
+          | model A  |     free_tier_403, server_5xx, timeout ...
+          +----------+
+               |
+               |  session.error -> classified
+               v
+     +---------------------+     evidence (metadata only):
+     | opencode-model-relay |     switches.jsonl + event ledger ->
+     +---------------------+     /relay stats: downtime, off-primary,
+               |                unknown share, judge outcomes, regret
+               |
+               |  walk the levels: the first healthy, untried model wins
+               v
+          +----------+          the handover rides along:
+          | model B  |<-------- summary, tool calls with status,
+          +----------+          files touched, open todos, and
+               |                your last request verbatim
+               v
+        the work continues
+```
+
 > Status: v1.0.0 tagged but not yet on npm (publish owner-gated, [#5](https://github.com/malkavian-librarian/opencode-model-relay/issues/5)); build and copy locally per the Quick start.
 
 An [OpenCode](https://opencode.ai) plugin that keeps a session going when the current model fails: it classifies the failure, moves to the next model in your chain, hands the work over with a structured summary, and resumes.
