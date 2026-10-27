@@ -21,7 +21,7 @@ const LADDER_MUSE = "opencode/muse-spark-1.3"
 const LADDER_OR_GLM = "openrouter/z-ai/glm-5.3"
 const LADDER_FIND_MATCH = "glm-5\\.[23]"
 const LADDER_GEMINI_RE = /^openrouter\/google\/gemini/i
-const LADDER_GEMINI_IMAGE_RE = /(?:image|banana|flash-tts|tts)/i
+const LADDER_GEMINI_IMAGE_RE = /(?:image|banana|flash-tts|tts|transcrib)/i
 const LADDER_GEMINI_VERSION_RE = /gemini-(\d+)(?:\.(\d+))?/i
 
 /** Resolves an exact id or same-provider slug variant; returns null when unavailable. */

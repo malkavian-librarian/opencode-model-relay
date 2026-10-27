@@ -86,6 +86,18 @@ describe("buildDefaultConfigText", () => {
     expect(text).not.toContain("gemini-3.8-flash-tts\", // #7")
     expect(text).not.toContain("gemini-3.7-pro bad")
   })
+  it("U-02: excludes transcription models from mixed and transcription-only lists", () => {
+    const mixed = buildDefaultConfigText([
+      "openrouter/google/gemini-3.5-transcribe",
+      "openrouter/google/gemini-3.1-pro",
+    ])
+    expect(mixed).toContain('"openrouter/google/gemini-3.1-pro", // #7 — latest Gemini text model, resolved from your configured models')
+    expect(mixed).not.toContain("gemini-3.5-transcribe\", // #7")
+
+    const transcriptionOnly = buildDefaultConfigText(["openrouter/google/gemini-3.5-transcribe"])
+    expect(transcriptionOnly).toContain('"openrouter/google/<gemini-text-id>"')
+    expect(transcriptionOnly).not.toContain("gemini-3.5-transcribe\", // #7")
+  })
   it("U-03/U-04: keeps a placeholder when no safe text Gemini exists", () => {
     const text = buildDefaultConfigText(["openrouter/google/gemini-3-pro-image"])
     expect(text).toContain('"openrouter/google/<gemini-text-id>"')

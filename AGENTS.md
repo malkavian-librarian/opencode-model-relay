@@ -108,7 +108,7 @@ over with a structured summary. Design: `docs/superpowers/specs/2026-10-18-model
 - Compaction anchored to wall-clock Date.now() or a malformed first line aged out/rewrote valid rows -> gate retention on the incoming row's ts clamped to the earlier of it and Date.now(), using the oldest valid row (2026-10-26)
 - Circular mode hit the existing deepest fallback after its cap -> stop cleanly before fallback to keep cycles bounded and repeatable (2026-10-27)
 - Gemini slot matching accepted image ids as text -> exclude image/banana ids and sort remaining text candidates by numeric version (2026-10-27)
-- Gemini slot matching bypassed direct-call validation and allowed speech-only ids -> apply SAFE_MODEL_ID and exclude TTS variants (2026-10-27)
+- Gemini slot matching bypassed direct-call validation and allowed speech/transcription ids -> apply SAFE_MODEL_ID and exclude non-chat variants (2026-10-27)
 
 ## Bugs - [open]/[fixed] + repro (max 10)
 
