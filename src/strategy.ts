@@ -16,7 +16,7 @@ export type Decision =
 export function isHealthy(h: ModelHealth | undefined, now: number, onExpiry?: (what: HealthExpiry) => void): boolean {
   try {
     if (h?.cooldownUntil !== undefined && h.cooldownUntil <= now) onExpiry?.("cooldown_end")
-    if (h?.permanent === true && h.permanentAt !== undefined && now - h.permanentAt > PERMANENT_HEALTH_TTL_MS) onExpiry?.("permanent_expire")
+    if (h?.permanent === true && h.permanentAt !== undefined && now - h.permanentAt >= PERMANENT_HEALTH_TTL_MS) onExpiry?.("permanent_expire")
   } catch { /* health telemetry never changes the decision */ }
   if (h?.permanent) return false
   return !(h?.cooldownUntil !== undefined && h.cooldownUntil > now)
@@ -68,9 +68,8 @@ export function recordFailure(
 ): void {
   const h = (health[model] ??= {})
   if (c.permanent) {
-    const transition = !h.permanent
     h.permanent = true; h.permanentAt = now
-    if (transition) onTransition?.("permanent_mark", now + PERMANENT_HEALTH_TTL_MS)
+    onTransition?.("permanent_mark", now + PERMANENT_HEALTH_TTL_MS)
     return
   }
   h.failures = (h.failures ?? 0) + 1

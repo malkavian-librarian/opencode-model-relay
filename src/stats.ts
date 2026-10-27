@@ -111,7 +111,7 @@ export function parseStatsToolInput(input: unknown): StatsQuery | null {
  * switch in between, within 30 minutes or 5 turns; when the scan runs out of data instead, the turn
  * is censored and excluded from the survival denominator.
  */
-export function buildStats(events: LedgerEvent[], now: number, days = DEFAULT_STATS_DAYS): StatsDoc {
+export function buildStats(events: LedgerEvent[], now: number, days = DEFAULT_STATS_DAYS, healthHistory = events): StatsDoc {
   const floor = now - days * DAY
   const pruned = events.filter((e) => e.ts >= floor && e.ts <= now)
   const bySession = new Map<string, LedgerEvent[]>()
@@ -152,33 +152,21 @@ export function buildStats(events: LedgerEvent[], now: number, days = DEFAULT_ST
 
   // Health intervals are clipped to the selected event window and split at UTC midnight.
   const healthByModel = new Map<string, LedgerEvent[]>()
-  for (const e of pruned) if (e.event === "health" && e.model !== undefined) {
+  for (const e of healthHistory) if (e.event === "health" && e.model !== undefined && e.ts <= now) {
     const list = healthByModel.get(e.model) ?? []
     list.push(e)
     healthByModel.set(e.model, list)
   }
   for (const [model, healthEvents] of healthByModel) {
     healthEvents.sort((a, b) => a.ts - b.ts)
+    const intervals: Array<[number, number]> = []
     for (const [startWhat, endWhat] of [["cooldown_start", "cooldown_end"], ["permanent_mark", "permanent_expire"]] as const) {
       let activeStart: number | undefined
       let activeUntil: number | undefined
-      const addInterval = (start: number, rawEnd: number | undefined): void => {
-        const from = Math.max(start, floor)
-        const to = Math.min(rawEnd ?? now, now)
-        if (to <= from) return
-        let cursor = from
-        while (cursor < to) {
-          const date = new Date(cursor)
-          const dayEnd = Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate() + 1)
-          const segmentEnd = Math.min(to, dayEnd)
-          bucketFor(model, cursor).down += segmentEnd - cursor
-          cursor = segmentEnd
-        }
-      }
       for (const event of healthEvents) {
         if (event.what === startWhat) {
           if (activeStart !== undefined && activeUntil !== undefined && event.ts >= activeUntil) {
-            addInterval(activeStart, activeUntil)
+            intervals.push([activeStart, activeUntil])
             activeStart = undefined
             activeUntil = undefined
           }
@@ -186,27 +174,48 @@ export function buildStats(events: LedgerEvent[], now: number, days = DEFAULT_ST
             activeStart = event.ts
             activeUntil = event.untilMs
           } else if (event.untilMs !== undefined) {
-            activeUntil = event.untilMs
+            activeUntil = Math.max(activeUntil ?? event.untilMs, event.untilMs)
           }
         } else if (event.what === endWhat && activeStart !== undefined) {
-          addInterval(activeStart, activeUntil === undefined ? event.ts : Math.min(activeUntil, event.ts))
+          intervals.push([activeStart, activeUntil === undefined ? event.ts : Math.min(activeUntil, event.ts)])
           activeStart = undefined
           activeUntil = undefined
         }
       }
-      if (activeStart !== undefined) addInterval(activeStart, activeUntil)
+      if (activeStart !== undefined) intervals.push([activeStart, activeUntil ?? now])
+    }
+    intervals.sort((a, b) => a[0] - b[0])
+    const merged: Array<[number, number]> = []
+    for (const [start, end] of intervals) {
+      const from = Math.max(start, floor); const to = Math.min(end, now)
+      if (to <= from) continue
+      const previous = merged.at(-1)
+      if (previous && from <= previous[1]) previous[1] = Math.max(previous[1], to)
+      else merged.push([from, to])
+    }
+    for (const [from, to] of merged) {
+      let cursor = from
+      while (cursor < to) {
+        const date = new Date(cursor)
+        const dayEnd = Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate() + 1)
+        const segmentEnd = Math.min(to, dayEnd)
+        bucketFor(model, cursor).down += segmentEnd - cursor
+        cursor = segmentEnd
+      }
     }
   }
 
   // Off-primary is the fraction of this model's retained turns that ran below ladder tier 1.
   for (const [model, daysOfModel] of Object.entries(models)) {
-    let turns = 0
-    let offPrimary = 0
+    const turnsByDay = new Map<string, [number, number]>()
     for (const e of pruned) if (e.event === "turn" && e.model === model) {
-      turns++
-      if ((e.tier ?? 1) > 1) offPrimary++
+      if (e.tier === undefined) continue
+      const day = new Date(e.ts).toISOString().slice(0, 10)
+      const counts = turnsByDay.get(day) ?? [0, 0]
+      counts[0]++; if (e.tier > 1) counts[1]++
+      turnsByDay.set(day, counts)
     }
-    if (turns > 0) for (const b of Object.values(daysOfModel)) b.offPrimary = offPrimary / turns
+    for (const [day, [turns, offPrimary]] of turnsByDay) if (daysOfModel[day] && turns > 0) daysOfModel[day].offPrimary = offPrimary / turns
   }
 
   // Median latency per bucket from the turn samples in it.
@@ -268,7 +277,8 @@ export function writeStats(doc: StatsDoc, dir: string): boolean {
 export function statsText(ledger: EventLog, query: StatsQuery, now = Date.now()): string {
   try {
     const events = ledger.read(query.days, now)
-    return renderStatsTable(buildStats(events, now, query.days), events, query.kinds)
+    const healthHistory = ledger.read(query.days + 1, now)
+    return renderStatsTable(buildStats(events, now, query.days, healthHistory), events, query.kinds)
   } catch { return "Relay stats unavailable (ledger unreadable)." }
 }
 

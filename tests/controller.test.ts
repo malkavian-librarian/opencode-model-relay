@@ -619,7 +619,7 @@ describe("Controller.onSessionIdle", () => {
     else expect(turns[0]).not.toHaveProperty("cost")
   })
   it("lifts the failing model's blacklist on the next successful turn and persists the clear", async () => {
-    const { c, d } = setup({ cfg: { privacy: { consent: true } }, env: { OPENROUTER_API_KEY: "k" } })
+    const { c, d, calls } = setup({ cfg: { privacy: { consent: true } }, env: { OPENROUTER_API_KEY: "k" } })
     await c.onSessionError("s1", { name: "APIError", data: { statusCode: 402, responseBody: "insufficient credits" } })
     expect(d.health["a/1"]?.permanent).toBe(true)
     const f = (d.state as any).file as string
@@ -627,14 +627,16 @@ describe("Controller.onSessionIdle", () => {
     expect(reloaded.health["a/1"]?.permanent).toBe(true) // survives an OpenCode restart
     await c.onSessionIdle("s1")
     expect(d.health["a/1"]).toBeUndefined()
+    expect(calls.events.filter((e) => e.event === "health").at(-1)).toMatchObject({ model: "a/1", what: "permanent_expire" })
     reloaded = new StateStore(f, () => 1_000_000); reloaded.load()
     expect(reloaded.health["a/1"]).toBeUndefined()
   })
   it("clears cooldowns and failure counts too", async () => {
-    const { c, d } = setup()
+    const { c, d, calls } = setup()
     d.health["a/1"] = { cooldownUntil: 2_000_000, failures: 3 }
     await c.onSessionIdle("s1")
     expect(d.health["a/1"]).toBeUndefined()
+    expect(calls.events.filter((e) => e.event === "health").at(-1)).toMatchObject({ model: "a/1", what: "cooldown_end" })
   })
   it("skips subagent sessions and sessions with no assistant model both ways", async () => {
     const sub = setup({ parentID: "p" }); sub.d.health["a/1"] = { permanent: true, permanentAt: 1 }

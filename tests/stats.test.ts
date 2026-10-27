@@ -103,6 +103,28 @@ describe("buildStats", () => {
     const b = buildStats(ev, NOW).models["prov/a"]![new Date(NOW).toISOString().slice(0, 10)]!
     expect(b.down).toBe(200)
   })
+  it("uses health starts before the window and unions cooldown with permanent downtime", () => {
+    const ev = [
+      { ts: NOW - 2 * DAY, session: S, event: "health", model: "prov/a", what: "cooldown_start", untilMs: NOW - 500 } as LedgerEvent,
+      { ts: NOW - 900, session: S, event: "health", model: "prov/a", what: "permanent_mark", untilMs: NOW + 500 } as LedgerEvent,
+      { ts: NOW - 100, session: S, event: "health", model: "prov/a", what: "cooldown_end" } as LedgerEvent,
+      turn(NOW - 100, "prov/a", { tier: 1 }),
+      turn(NOW - 50, "prov/a"),
+    ]
+    const b = buildStats(ev, NOW, 1).models["prov/a"]![new Date(NOW).toISOString().slice(0, 10)]!
+    expect(b.down).toBe(DAY / 2)
+    expect(b.offPrimary).toBe(0)
+  })
+  it("excludes unknown tiers from the off-primary denominator per day", () => {
+    const ev = [
+      turn(NOW - DAY, "prov/a", { tier: 2 }),
+      turn(NOW - DAY, "prov/a"),
+      turn(NOW, "prov/a", { tier: 1 }),
+    ]
+    const s = buildStats(ev, NOW)
+    expect(s.models["prov/a"]!["2026-10-19"]!.offPrimary).toBe(1)
+    expect(s.models["prov/a"]!["2026-10-20"]!.offPrimary).toBe(0)
+  })
 })
 
 describe("stats.json write", () => {

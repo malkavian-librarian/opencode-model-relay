@@ -112,8 +112,15 @@ describe("recordFailure", () => {
   it("reports cooldown and permanent expiry when a health read observes it", () => {
     const events: string[] = []
     expect(isHealthy({ cooldownUntil: 100 }, 100, (what) => events.push(what))).toBe(true)
-    expect(isHealthy({ permanent: true, permanentAt: 0 }, PERMANENT_HEALTH_TTL_MS + 1, (what) => events.push(what))).toBe(false)
+    expect(isHealthy({ permanent: true, permanentAt: 0 }, PERMANENT_HEALTH_TTL_MS, (what) => events.push(what))).toBe(false)
     expect(events).toEqual(["cooldown_end", "permanent_expire"])
+  })
+  it("reports every permanent deadline renewal", () => {
+    const events: Array<[string, number | undefined]> = []
+    const c = { kind: "quota", retryable: false, permanent: true, switchable: true } as const
+    recordFailure({}, "a/1", c, 1000, 60000, undefined, (what, untilMs) => events.push([what, untilMs]))
+    recordFailure({ "a/1": { permanent: true, permanentAt: 1000 } }, "a/1", c, 2000, 60000, undefined, (what, untilMs) => events.push([what, untilMs]))
+    expect(events).toEqual([["permanent_mark", 1000 + PERMANENT_HEALTH_TTL_MS], ["permanent_mark", 2000 + PERMANENT_HEALTH_TTL_MS]])
   })
 })
 

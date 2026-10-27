@@ -4,8 +4,8 @@ import type { RelayConfig } from "./config"
 import { classify, classifyRetryMessage } from "./classifier"
 import type { Classified } from "./types"
 import {
-  buildLadder, clearSuccess, effectiveMaxSwitches, hasRelayMarker, recordFailure, triedThisTurn,
-  isHealthy, isValidDiscoveredModelId, walkCircular, walkFromTopAsync, type FindResolutionInput, type HealthExpiry, type ModelHealth,
+  buildLadder, effectiveMaxSwitches, hasRelayMarker, recordFailure, triedThisTurn,
+  isValidDiscoveredModelId, walkCircular, walkFromTopAsync, type FindResolutionInput, type ModelHealth,
 } from "./strategy"
 import { FIND_CACHE_TTL_MS } from "./state"
 import { heuristicReasons, observeTurn } from "./heuristics"
@@ -20,6 +20,7 @@ import type { EventInput } from "./ledger"
 import { manualSwitch as runManualSwitch } from "./controller-manual"
 import { runJudge as runQualityJudge } from "./controller-judge"
 import { buildStatus } from "./controller-status"
+import { HealthEvents, runSessionIdle } from "./controller-health"
 import { stormActive as isStormActive, validatePersistedPins as validatePins } from "./controller-state"
 
 // In-memory bounds for the per-session maps (judge streaks, retry-storm tokens): one entry per
@@ -73,8 +74,8 @@ export class Controller {
   // Retry-storm tokens: sessionID -> switch enacted at. In memory only: a restart is fail safe because
   // the transcript re-read and the attribution guard reject stale events on their own.
   private storm = new Map<string, number>()
-  private emittedExpiry = new Set<string>()
-  constructor(private d: Deps) {}
+  private readonly healthEvents: HealthEvents
+  constructor(private d: Deps) { this.healthEvents = new HealthEvents((fields) => this.led(fields), (model) => this.tierOf(model)) }
 
   private async toast(ev: NarrationEvent, v?: Parameters<Deps["narrate"]>[1], variant: "info" | "warning" = "info", suffix = "") {
     try {
@@ -126,17 +127,6 @@ export class Controller {
   /** Metadata-only ledger append (best effort, #7): never throws and never changes session behavior. */
   private led(fields: EventInput): void {
     try { this.d.ledger?.append(fields) } catch { /* hooks never throw */ }
-  }
-
-  private healthExpiry(sessionID: string, model: string, what: HealthExpiry, h: ModelHealth | undefined, ts: number): void {
-    try {
-      const marker = what === "cooldown_end" ? h?.cooldownUntil : h?.permanentAt
-      const key = `${sessionID}:${model}:${what}:${marker ?? "unknown"}`
-      if (this.emittedExpiry.has(key)) return
-      if (this.emittedExpiry.size >= MAX_SESSION_ENTRIES) this.emittedExpiry.clear()
-      this.emittedExpiry.add(key)
-      this.led({ ts, sessionID, event: "health", model, tier: this.tierOf(model), what })
-    } catch { /* health telemetry never changes the decision */ }
   }
 
   private tierOf(model: string): number | undefined {
@@ -239,11 +229,11 @@ export class Controller {
           ...input, ladder, switchCount: rec.switchCount, maxSwitches: effectiveMaxSwitches(d.cfg), maxCircularFlows: d.cfg.maxCircularFlows,
           circularFlows: rec.circularFlows,
           onQuarantineSkip: (model) => healthEvent(model, "quarantine_skip"),
-          onHealthExpiry: (model, what) => this.healthExpiry(sessionID, model, what, d.health[model], now),
+          onHealthExpiry: (model, what) => this.healthEvents.expiry(sessionID, model, what, d.health[model], now),
           resolveFind: (entry) => circularCurrentFind && JSON.stringify(entry) === JSON.stringify(circularCurrentFind)
             ? current : d.state.getFindCache(JSON.stringify(entry), now),
         })
-        : await walkFromTopAsync({ ...input, ladder, tried: triedThisTurn(msgs), switchCount: rec.switchCount, maxSwitches: effectiveMaxSwitches(d.cfg), onQuarantineSkip: (model) => healthEvent(model, "quarantine_skip"), onHealthExpiry: (model, what) => this.healthExpiry(sessionID, model, what, d.health[model], now) })
+        : await walkFromTopAsync({ ...input, ladder, tried: triedThisTurn(msgs), switchCount: rec.switchCount, maxSwitches: effectiveMaxSwitches(d.cfg), onQuarantineSkip: (model) => healthEvent(model, "quarantine_skip"), onHealthExpiry: (model, what) => this.healthEvents.expiry(sessionID, model, what, d.health[model], now) })
       let to: string
       if (decision.action === "switch") to = decision.to
       else {
@@ -257,7 +247,7 @@ export class Controller {
         const fallback = await walkFromTopAsync({
           ...input, ladder: [...ladder].reverse(), switchCount: 0, maxSwitches: Infinity, allowQuarantined: false,
           onQuarantineSkip: (model) => healthEvent(model, "quarantine_skip"),
-          onHealthExpiry: (model, what) => this.healthExpiry(sessionID, model, what, d.health[model], now),
+          onHealthExpiry: (model, what) => this.healthEvents.expiry(sessionID, model, what, d.health[model], now),
         })
         if (fallback.action !== "switch") {
           healthEvent(current, decision.reason === "switch_cap" ? "cap_hit" : "exhausted")
@@ -437,49 +427,9 @@ export class Controller {
    * are spent. Never throws. The quality judge (#26) runs fire-and-forget after the health mark.
    */
   async onSessionIdle(sessionID: string): Promise<void> {
-    try {
-      const session = await this.d.client.session.get({ path: { id: sessionID } })
-      if (session.data?.parentID) return // failures are recorded on top-level sessions only; keep success symmetric
-      const msgs = await this.fetchMessages(sessionID)
-      const newest = [...msgs].reverse().find((m) => m.info.role === "assistant" && m.info.providerID && m.info.modelID)
-      if (!newest) return
-      const model = `${newest.info.providerID}/${newest.info.modelID}`
-      // Turn metadata is defensive: only fields the host actually provides survive the zod schema (rule 8).
-      const src = newest.info as typeof newest.info & { tokens?: { input?: unknown; output?: unknown }; time?: { running?: unknown } }
-      const int = (v: unknown): number | undefined => (typeof v === "number" && Number.isInteger(v) && v >= 0 ? v : undefined)
-      const ms = (v: unknown): number | undefined => (typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : undefined)
-      const tin = int(src.tokens?.input); const tout = int(src.tokens?.output)
-      const lat = ms(src.time?.running)
-      this.led({
-        ts: this.d.now(), sessionID, event: "turn", model, tier: this.tierOf(model),
-        ...(tin !== undefined && tout !== undefined ? { tokens: { input: tin, output: tout } } : {}),
-        ...(lat !== undefined ? { latencyMs: lat } : {}),
-        ...(ms(src.cost) !== undefined ? { cost: src.cost } : {}),
-      })
-      this.storm.delete(sessionID) // the turn is over: the retry storm is spent
-      const rec = this.d.state.get(sessionID)
-      const h = this.d.health[model]
-      isHealthy(h, this.d.now(), (what) => this.healthExpiry(sessionID, model, what, h, this.d.now()))
-      if (this.d.health[model] !== undefined) {
-        clearSuccess(this.d.health, model)
-        this.d.state.save()
-      }
-      if (rec.pendingHandover !== undefined) {
-        const { pendingHandover: _spent, circularOrigin: _origin, circularFindKey: _findKey, circularTransitions: _transitions, circularFlows: _flows, ...rest } = rec // the handover turn ended: the intent marker is spent
-        this.d.state.set(sessionID, { ...rest, updated: this.d.now() })
-        this.d.state.save()
-      }
-      else if (rec.circularOrigin !== undefined || rec.circularFindKey !== undefined || rec.circularTransitions !== undefined || rec.circularFlows !== undefined) {
-        const { circularOrigin: _origin, circularFindKey: _findKey, circularTransitions: _transitions, circularFlows: _flows, ...rest } = rec
-        this.d.state.set(sessionID, { ...rest, updated: this.d.now() })
-        this.d.state.save()
-      }
-      // The judge runs after the health mark and never delays it; the event hook calls onSessionIdle
-      // fire-and-forget, so the idle handling itself is never blocked by the judge's OpenRouter call.
-      await this.runJudge(sessionID, model, msgs)
-    } catch (e) {
-      try { this.d.log(`onSessionIdle failed: ${e instanceof Error ? e.message : String(e)}`) } catch { /* ignore */ }
-    }
+    await runSessionIdle(this.d, sessionID, (id) => this.fetchMessages(id), this.healthEvents,
+      (fields) => this.led(fields), (model) => this.tierOf(model), (id, model, msgs) => this.runJudge(id, model, msgs),
+      () => this.storm.delete(sessionID))
   }
   /**
    * Adopts the owner's manually picked model (AC-01): merges the record under the SessionLock (never
