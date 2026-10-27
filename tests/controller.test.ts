@@ -1517,6 +1517,17 @@ describe("Controller.onRetryStatus", () => {
       { ts: 1_000_000, sessionID: "s1", event: "failure", model: "a/1", tier: 1, errorKind: "unknown" },
     ])
   })
+  it("recording an unknown retry never suppresses a later switch for the same failing message (#107 CodeRabbit)", async () => {
+    const { c, calls } = setup()
+    await c.onRetryStatus("s1", 2, "something odd happened") // measurement-only: one unknown row, no switch
+    expect(calls.events.filter((e) => e.event === "failure")).toEqual([
+      { ts: 1_000_000, sessionID: "s1", event: "failure", model: "a/1", tier: 1, errorKind: "unknown", attempt: 2 },
+    ])
+    await c.onRetryStatus("s1", 3, "Rate limit exceeded, retrying") // the same failing message must still switch
+    expect(calls.prompt).toHaveLength(1)
+    expect(calls.logs[0]).toMatchObject({ kind: "rate_limit" })
+    expect(calls.events.filter((e) => e.event === "failure")).toHaveLength(2) // the switchable mark is its own row
+  })
   it("repeated retry events for the same failing message switch once; the later session.error is deduped", async () => {
     const { c, calls } = setup()
     await Promise.all([c.onRetryStatus("s1", 2, "rate limit"), c.onRetryStatus("s1", 3, "rate limit")])

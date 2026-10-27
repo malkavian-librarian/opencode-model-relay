@@ -454,8 +454,10 @@ export class Controller {
       const rec = d.state.get(sessionID)
       // Marker guard (#56): a marker newest while the session is not on the plugin-set model is a stale error.
       if (hasRelayMarker(parts) && rec.pluginPinned !== current) return false
-      // Count once, after the guards: a repeated identical error adds no second row.
-      if (d.lock.isDuplicate(`${sessionID}:${msgID}`)) return false
+      // Count once, after the guards: a repeated identical error adds no second row. The `record`
+      // scope keeps this namespace apart from handle's switch key, so measuring an unknown/overflow
+      // failure can never consume the message's once-only switch slot (#107).
+      if (d.lock.isDuplicate(`${sessionID}:record:${msgID}`)) return false
       // Adoption grace (AC-01): failures of a just-adopted pick within the window are graced, not counted.
       if (rec.adoptedAt !== undefined && rec.pluginPinned === current && now - rec.adoptedAt < ADOPTION_GRACE_MS) return false
       this.led(this.failureRow(now, sessionID, c, current, attempt))
