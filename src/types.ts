@@ -13,12 +13,18 @@ export type FailureKind =
   // Not a real failure: the switch that a quality-judge verdict triggers is logged with this kind too.
   | "quality"
 
+// Bounded HTTP status range for the classifier surface and failure ledger rows (#107):
+// only a finite integer inside it is ever surfaced, never coerced.
+export const HTTP_STATUS_MIN = 100
+export const HTTP_STATUS_MAX = 599
+
 export interface Classified {
   kind: FailureKind
   retryable: boolean
   retryAfterMs?: number
   permanent: boolean
   switchable: boolean
+  httpStatus?: number
 }
 
 export type OcPart =

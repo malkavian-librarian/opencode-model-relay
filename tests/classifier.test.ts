@@ -102,6 +102,33 @@ describe("classify", () => {
     expect(classify(api(429, "x", "", { "retry-after": "-5" })).retryAfterMs ?? 0).toBe(0)
     expect(classify(api(429, "x", "", { "retry-after": "soon" })).retryAfterMs).toBeUndefined()
   })
+  it("surfaces the error's HTTP status as httpStatus on every verdict, when a finite 100-599 integer (#107)", () => {
+    for (const [c, httpStatus] of [
+      [classify(api(429, "slow down", "", { "retry-after": "12" })), 429],
+      [classify(api(401, "bad key")), 401],
+      [classify(api(403, "forbidden")), 403],
+      [classify(api(402, "insufficient credits")), 402],
+      [classify(api(404, "")), 404],
+      [classify(api(503, "overloaded")), 503],
+      [classify(api(400, "This model's maximum context length is 128000 tokens")), 400],
+      [classify(api(418, "teapot")), 418],
+    ] as const) expect(c.httpStatus).toBe(httpStatus)
+    // the verdicts themselves are unchanged: unknown and overflow stay non-switchable
+    expect(classify(api(418, "teapot"))).toMatchObject({ kind: "unknown", switchable: false, httpStatus: 418 })
+    expect(classify(api(400, "This model's maximum context length is 128000 tokens"))).toMatchObject({ kind: "overflow", switchable: false, httpStatus: 400 })
+  })
+  it("omits httpStatus when no finite 100-599 integer status exists; never coerced (#107)", () => {
+    for (const statusCode of [undefined, 99, 600, 1000, 418.5, NaN, Infinity, -Infinity, "418", true]) {
+      expect(classify({ name: "APIError", data: { statusCode } as never }).httpStatus).toBeUndefined()
+    }
+    expect(classify({ name: "UnknownError", data: { message: "prompt is too long" } }).httpStatus).toBeUndefined()
+    expect(classify(null).httpStatus).toBeUndefined()
+    expect(classify({ name: "ProviderAuthError", data: {} }).httpStatus).toBeUndefined()
+    // retry status text carries no status code at all
+    for (const m of ["rate limit exceeded", "weird", "context length exceeded"]) {
+      expect(classifyRetryMessage(m).httpStatus).toBeUndefined()
+    }
+  })
 })
 
 describe("classifyRetryMessage", () => {

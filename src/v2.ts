@@ -234,10 +234,13 @@ function onRetryHook(controller: Controller, ev: unknown): Promise<void> {
       const attempt = typeof e.attempt === "number" && Number.isFinite(e.attempt) && e.attempt >= 1 ? Math.floor(e.attempt) : 1
       const raw = toV1Error(e.error)
       const c = classify(raw)
-      if (!c.switchable || !(c.permanent || attempt >= SWITCH_MIN_ATTEMPT)) return
+      // Permanent failures flow at once; transient switchable kinds and non-switchable unknown/overflow
+      // (#107) only from the second attempt: the controller records the latter, which never enact a
+      // switch and so never veto OpenCode's own retry.
+      if (!(c.permanent || attempt >= SWITCH_MIN_ATTEMPT)) return
       // A switch can take seconds (abort, handover, helper); veto only once it is actually enacted,
       // otherwise the turn would fail with neither OpenCode's retry nor a handover.
-      const enacted = await controller.onSessionError(sessionID, raw, from)
+      const enacted = await controller.onSessionError(sessionID, raw, from, attempt)
       if (!enacted) return
       try { if (e.decision) e.decision.retry = false } catch { /* the veto is best effort */ }
     } catch { /* hooks never throw into the host */ }

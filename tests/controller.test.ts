@@ -61,7 +61,7 @@ describe("Controller.onSessionError", () => {
     expect(await c.onSessionError("s1", err429)).toBe(true)
     expect(await c.onSessionError("s1", err429)).toBe(false)
     expect(calls.events.filter((e) => e.event === "failure")).toEqual([
-      { ts: 1_000_000, sessionID: "s1", event: "failure", model: "a/1", tier: 1, errorKind: "rate_limit" },
+      { ts: 1_000_000, sessionID: "s1", event: "failure", model: "a/1", tier: 1, errorKind: "rate_limit", httpStatus: 429 },
     ])
     expect(calls.events.filter((e) => e.event === "health")).toEqual([
       { ts: 1_000_000, sessionID: "s1", event: "health", model: "a/1", tier: 1, what: "cooldown_start", untilMs: 1_060_000 },
@@ -72,7 +72,7 @@ describe("Controller.onSessionError", () => {
     expect(await c.onSessionError("s1", err429, { providerID: "b", modelID: "2" })).toBe(true)
     expect(calls.events.filter((e) => e.event === "failure")).toHaveLength(2)
     expect(calls.events.filter((e) => e.event === "failure")[1]).toEqual(
-      { ts: 1_000_000, sessionID: "s1", event: "failure", model: "b/2", tier: 2, errorKind: "rate_limit" },
+      { ts: 1_000_000, sessionID: "s1", event: "failure", model: "b/2", tier: 2, errorKind: "rate_limit", httpStatus: 429 },
     )
     expect(d.health["b/2"]?.failures).toBe(1)
     expect(calls.prompt).toHaveLength(2)
@@ -140,7 +140,7 @@ describe("Controller.onSessionError", () => {
     d.state.set("s1", { pluginPinned, adoptedAt: 1_000_000 - elapsed, switchCount: 0, updated: 1_000_000 })
     expect(await c.onSessionError("s1", err429)).toBe(true)
     expect(calls.events.filter((e) => e.event === "failure")).toEqual([
-      { ts: 1_000_000, sessionID: "s1", event: "failure", model: "a/1", tier: 1, errorKind: "rate_limit" },
+      { ts: 1_000_000, sessionID: "s1", event: "failure", model: "a/1", tier: 1, errorKind: "rate_limit", httpStatus: 429 },
     ])
     expect(d.health["a/1"]?.failures).toBe(1)
     expect(d.state.get("s1").quarantine).toEqual({ "a/1": 1_000_000 })
@@ -165,7 +165,7 @@ describe("Controller.onSessionError", () => {
     const message = "synthetic-credential-DO-NOT-LOG"
     await c.onSessionError("s1", { ...err429, data: { ...err429.data, message } })
     expect(calls.events.filter((e) => e.event === "failure")).toEqual([
-      { ts: 1_000_000, sessionID: "s1", event: "failure", model: "a/1", tier: 1, errorKind: "rate_limit" },
+      { ts: 1_000_000, sessionID: "s1", event: "failure", model: "a/1", tier: 1, errorKind: "rate_limit", httpStatus: 429 },
     ])
     expect(JSON.stringify(calls.events)).not.toContain(message)
   })
@@ -211,7 +211,7 @@ describe("Controller.onSessionError", () => {
       expect(d.state.get("s1").switchCount).toBe(stale ? 1 : 2)
       expect(d.health["a/1"]).toBeUndefined()
       expect(calls.events.filter((e) => e.event === "failure")).toEqual(stale ? [] : [
-        { ts: 1_000_000, sessionID: "s1", event: "failure", model: "b/2", tier: 2, errorKind: "rate_limit" },
+        { ts: 1_000_000, sessionID: "s1", event: "failure", model: "b/2", tier: 2, errorKind: "rate_limit", httpStatus: 429 },
       ])
       if (stale) {
         expect(d.health["b/2"]).toBeUndefined()
@@ -394,16 +394,88 @@ describe("Controller.onSessionError", () => {
     await new Promise<void>((r) => setImmediate(r))
     expect(calls.toast.join(" ")).toMatch(/summary failed/i)
   })
-  it("ignores user aborts, plugin-caused aborts and unknown errors; never switches", async () => {
-    const { c, d, calls } = setup()
+  it("user aborts never record; an unclassifiable 418 records exactly one unknown failure, never switches (#107)", async () => {
+    const { c, d, calls, messages } = setup()
     await c.onSessionError("s1", { name: "MessageAbortedError", data: {} })
     d.lock.markPluginAbort("s1")
     await c.onSessionError("s1", { name: "MessageAbortedError", data: {} })
-    await c.onSessionError("s1", null)
-    await c.onSessionError("s1", { name: "APIError", data: { statusCode: 418 } })
+    expect(calls.events).toEqual([])
+    expect(await c.onSessionError("s1", { name: "APIError", data: { statusCode: 418 } })).toBe(false)
+    expect(calls.events).toEqual([
+      { ts: 1_000_000, sessionID: "s1", event: "failure", model: "a/1", tier: 1, errorKind: "unknown", httpStatus: 418 },
+    ])
     expect(calls.prompt).toHaveLength(0)
     expect(calls.abort).toHaveLength(0)
-    expect(calls.events).toEqual([])
+    expect(d.health).toEqual({}) // measured, never marked: recording must not change switching decisions
+    expect(d.state.get("s1").switchCount).toBe(0)
+    // a distinct failing message records again; the repeated identical one adds no second row
+    messages.push(asst("b1", "a", "1"))
+    await c.onSessionError("s1", { name: "APIError", data: { statusCode: 418 } })
+    expect(calls.events.filter((e) => e.event === "failure")).toHaveLength(2)
+    await c.onSessionError("s1", { name: "APIError", data: { statusCode: 418 } })
+    expect(calls.events.filter((e) => e.event === "failure")).toHaveLength(2)
+  })
+  it("a null error fail-safes to one unknown row without httpStatus, and never switches (#107)", async () => {
+    const { c, calls } = setup()
+    await c.onSessionError("s1", null)
+    expect(calls.events).toEqual([
+      { ts: 1_000_000, sessionID: "s1", event: "failure", model: "a/1", tier: 1, errorKind: "unknown" },
+    ])
+    expect(calls.prompt).toHaveLength(0)
+    expect(calls.abort).toHaveLength(0)
+  })
+  it("records a non-switchable overflow failure once, with its httpStatus when known; never takes the lock (#107)", async () => {
+    const a = setup()
+    expect(await a.c.onSessionError("s1", { name: "UnknownError", data: { message: "prompt is too long" } })).toBe(false)
+    expect(a.calls.events).toEqual([{ ts: 1_000_000, sessionID: "s1", event: "failure", model: "a/1", tier: 1, errorKind: "overflow" }])
+    const b = setup()
+    await b.c.onSessionError("s1", { name: "APIError", data: { statusCode: 400, responseBody: "This model's maximum context length is 128000 tokens" } })
+    expect(b.calls.events).toEqual([{ ts: 1_000_000, sessionID: "s1", event: "failure", model: "a/1", tier: 1, errorKind: "overflow", httpStatus: 400 }])
+    for (const s of [a, b]) {
+      expect(s.calls.prompt).toHaveLength(0)
+      expect(s.calls.abort).toHaveLength(0)
+      expect(s.d.health).toEqual({})
+      expect(s.d.state.get("s1").switchCount).toBe(0)
+      await s.c.onSessionError("s1", { name: "APIError", data: { statusCode: 400, responseBody: "This model's maximum context length is 128000 tokens" } })
+      expect(s.calls.events.filter((e) => e.event === "failure")).toHaveLength(1) // deduped by the failing message id
+      expect(s.d.lock.tryAcquire("s1")).toBe(true) // no lock was taken: nothing to switch
+      s.d.lock.release("s1")
+    }
+  })
+  it("non-switchable recording follows the switchable guards: unattributable, child, stale, marker, dedup and grace add no row (#107)", async () => {
+    const empty = setup({ messages: [] })
+    await empty.c.onSessionError("s1", { name: "APIError", data: { statusCode: 418 } })
+    expect(empty.calls.events).toEqual([])
+    const child = setup({ parentID: "parent" })
+    await child.c.onSessionError("s1", { name: "APIError", data: { statusCode: 418 } })
+    expect(child.calls.events).toEqual([]) // subagent sessions are skipped, with no drop row: no switch was attempted
+    const title = setup({ messages: [
+      { info: { id: "u1", role: "user" }, parts: [] },
+      { info: { id: "t1", role: "assistant" }, parts: [] },
+    ] })
+    await title.c.onSessionError("s1", { name: "APIError", data: { statusCode: 418 } })
+    expect(title.calls.events).toEqual([])
+    const stale = setup()
+    await stale.c.onSessionError("s1", { name: "APIError", data: { statusCode: 418 } }, { providerID: "b", modelID: "2" })
+    expect(stale.calls.events).toEqual([]) // explicit attribution must agree with the current turn
+    const marker = setup({ messages: [
+      { info: { id: "h1", role: "user", model: { providerID: "b", modelID: "2" } }, parts: [{ type: "text", text: `${RELAY_MARKER}\ncontinue` }] },
+    ] })
+    marker.d.state.set("s1", { pluginPinned: "c/3", switchCount: 1, updated: 1_000_000 })
+    await marker.c.onSessionError("s1", { name: "APIError", data: { statusCode: 418 } })
+    expect(marker.calls.events).toEqual([]) // a marker newest on a non-pinned model is a stale error
+    const grace = setup()
+    grace.d.state.set("s1", { pluginPinned: "a/1", adoptedAt: 999_999, switchCount: 0, updated: 1_000_000 })
+    await grace.c.onSessionError("s1", { name: "APIError", data: { statusCode: 418 } })
+    expect(grace.calls.events).toEqual([]) // failures of a just-adopted pick are graced
+  })
+  it("non-switchable recording never throws when the client fails (#107)", async () => {
+    const a = setup()
+    ;(a.d.client.session as any).get = async () => { throw new Error("down") }
+    await expect(a.c.onSessionError("s1", { name: "APIError", data: { statusCode: 418 } })).resolves.toBe(false)
+    const b = setup()
+    ;(b.d.client.session as any).messages = async () => { throw new Error("down") }
+    await expect(b.c.onSessionError("s1", { name: "APIError", data: { statusCode: 418 } })).resolves.toBe(false)
   })
   it("consumes the plugin-abort mark exactly once; a later unmarked abort is a plain user cancel", async () => {
     const { c, d, calls } = setup()
@@ -516,7 +588,7 @@ describe("Controller.onSessionError", () => {
     d.health["b/2"] = { cooldownUntil: 2_000_000 }
     expect(await c.onSessionError("s1", err429)).toBe(false)
     expect(calls.events.filter((e) => e.event === "failure")).toEqual([
-      { ts: 1_000_000, sessionID: "s1", event: "failure", model: "a/1", tier: 1, errorKind: "rate_limit" },
+      { ts: 1_000_000, sessionID: "s1", event: "failure", model: "a/1", tier: 1, errorKind: "rate_limit", httpStatus: 429 },
     ])
     expect(d.health["a/1"]?.failures).toBe(1)
     expect(d.state.get("s1").quarantine).toEqual({ "a/1": 1_000_000 })
@@ -1418,14 +1490,43 @@ describe("Controller.onRetryStatus", () => {
     await c.onRetryStatus("s1", 2, "Rate limit exceeded, retry-after: 300")
     expect(d.health["a/1"]?.cooldownUntil).toBe(1_000_000 + 300_000)
   })
-  it("unknown and overflow text never switch", async () => {
-    const { c, calls } = setup()
-    for (const m of ["something odd happened", "", "context length exceeded"]) {
-      await c.onRetryStatus("s1", 5, m)
+  it("unknown and overflow retry text never switches; it is recorded from attempt 2 with its attempt (#107)", async () => {
+    for (const [m, kind] of [["something odd happened", "unknown"], ["context length exceeded", "overflow"], ["", "unknown"]] as const) {
+      const { c, calls } = setup()
       await c.onRetryStatus("s1", 1, m)
+      expect(calls.events).toEqual([]) // the first attempt is left to OpenCode's own retry
+      await c.onRetryStatus("s1", 2, m)
+      expect(calls.events.filter((e) => e.event === "failure")).toEqual([
+        { ts: 1_000_000, sessionID: "s1", event: "failure", model: "a/1", tier: 1, errorKind: kind, attempt: 2 },
+      ])
+      expect(calls.prompt).toHaveLength(0)
+      expect(calls.abort).toHaveLength(0)
+      await c.onRetryStatus("s1", 5, m) // the same failing message adds no second row
+      expect(calls.events.filter((e) => e.event === "failure")).toHaveLength(1)
     }
-    expect(calls.prompt).toHaveLength(0)
-    expect(calls.abort).toHaveLength(0)
+  })
+  it("switchable retry failures carry their attempt; an invalid host attempt is omitted, never rejecting the row (#107)", async () => {
+    const { c, calls } = setup()
+    await c.onRetryStatus("s1", 2, "Rate limit exceeded, retrying")
+    expect(calls.events.filter((e) => e.event === "failure")).toEqual([
+      { ts: 1_000_000, sessionID: "s1", event: "failure", model: "a/1", tier: 1, errorKind: "rate_limit", attempt: 2 },
+    ])
+    const { c: c2, calls: calls2 } = setup()
+    await c2.onRetryStatus("s1", 2.5, "something odd happened") // non-integer host value: omitted, the row survives
+    expect(calls2.events.filter((e) => e.event === "failure")).toEqual([
+      { ts: 1_000_000, sessionID: "s1", event: "failure", model: "a/1", tier: 1, errorKind: "unknown" },
+    ])
+  })
+  it("recording an unknown retry never suppresses a later switch for the same failing message (#107 CodeRabbit)", async () => {
+    const { c, calls } = setup()
+    await c.onRetryStatus("s1", 2, "something odd happened") // measurement-only: one unknown row, no switch
+    expect(calls.events.filter((e) => e.event === "failure")).toEqual([
+      { ts: 1_000_000, sessionID: "s1", event: "failure", model: "a/1", tier: 1, errorKind: "unknown", attempt: 2 },
+    ])
+    await c.onRetryStatus("s1", 3, "Rate limit exceeded, retrying") // the same failing message must still switch
+    expect(calls.prompt).toHaveLength(1)
+    expect(calls.logs[0]).toMatchObject({ kind: "rate_limit" })
+    expect(calls.events.filter((e) => e.event === "failure")).toHaveLength(2) // the switchable mark is its own row
   })
   it("repeated retry events for the same failing message switch once; the later session.error is deduped", async () => {
     const { c, calls } = setup()

@@ -103,12 +103,12 @@ over with a structured summary. Design: `docs/superpowers/specs/2026-10-18-model
 - **Suggest, do not gold-plate:** stop after the diff unless asked for more.
 
 ## Gotchas (max 15, newest at bottom)
-- Stale purge snapshots, discarded readable rows and medianed daily medians -> rebuild on purge, catch each file read failure and median all window samples (2026-10-26)
-- Compaction anchored to wall-clock Date.now() or a malformed first line aged out/rewrote valid rows -> gate retention on the incoming row's ts clamped to the earlier of it and Date.now(), using the oldest valid row (2026-10-26)
 - Circular mode hit the existing deepest fallback after its cap -> stop cleanly before fallback to keep cycles bounded and repeatable (2026-10-27)
 - Gemini slot matching accepted image ids as text -> exclude image/banana ids, sort text candidates by numeric version, apply SAFE_MODEL_ID, and exclude non-chat variants (2026-10-27)
 - Repeated live preflights on unchanged summaries wasted turns -> cache one snapshot per resumed turn and recheck only on concrete change signals or irreversible actions (2026-10-27)
 - Judge/switch outcome rows contradicted each other (skip rows diluted the judge share, abort-race drops landed while enactment continued, regret fired without a return to the source) -> one truthful row per attempt: verdict-only denominators, drops only when the attempt stops, exact-reversal regret (2026-10-27)
+- An invalid optional field made the ledger schema reject the whole append, silently losing the failure record -> sanitize optionals (httpStatus/attempt) at the call site before append (2026-10-27)
+- Measurement-only recording shared handle's dedup key namespace and silently suppressed a later switch for the same message -> namespace the non-switchable dedup key apart from the switch key (2026-10-27)
 
 ## Bugs - [open]/[fixed] + repro (max 10)
 

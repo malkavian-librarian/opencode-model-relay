@@ -23,7 +23,7 @@ Models are written `providerID/modelID`; only the first `/` splits them (`openro
 
 ## How it works
 
-1. A `session.error` event arrives. The failure is classified: `rate_limit`, `quota`, `auth`, `free_tier_403`, `model_not_found`, `server_5xx` or `timeout` can trigger a switch. `overflow`, `user_abort` (pressing Esc) and `unknown` never do.
+1. A `session.error` event arrives. The failure is classified: `rate_limit`, `quota`, `auth`, `free_tier_403`, `model_not_found`, `server_5xx` or `timeout` can trigger a switch. `overflow`, `user_abort` (pressing Esc) and `unknown` never do; `overflow` and `unknown` failures are still recorded on the event ledger.
 2. The plugin walks `levels` from the top, skipping the failed, unhealthy, already-tried and recently quarantined models. A find level resolves lazily at failover time. If the walk is exhausted, it tries the deepest healthy level; if none exists, it explains the failure and suggests `/relay next`.
 3. It builds a structured handover: a summary, the tool calls so far (with DONE / FAILED / UNKNOWN status), files touched, open todos, and your last request verbatim. Tool names and tool parts follow the OpenCode message shape, while file and todo extraction remains independent of the tool name. The summary is written by a helper model through OpenRouter only if you opted in (see Privacy); otherwise the handover carries the plain tail of the redacted transcript.
 4. The plugin aborts the failed turn, sends the handover to the next model, and the work resumes there.
@@ -174,6 +174,7 @@ Each event row is metadata-only and uses these fields:
 | `model` / `tier` | The affected `provider/model` and its 1-based ladder position, when known. |
 | `latencyMs`, `tokens`, `cost` | Optional turn measurements; only fields the host actually provides are recorded. `cost` is the selected assistant message's finite non-negative USD spend, including explicit zero, not an estimate or sum of all assistant steps. |
 | `errorKind` | For `failure` rows: the failure-kind enum. |
+| `httpStatus` / `attempt` | Optional on `failure` rows only: the error's bounded HTTP status (an integer 100-599) when one is known, and the retry attempt (an integer >= 0) when the failure was observed on a retry event. Never error text. |
 | `verdict` / `outcome` | Judge verdicts are `switch` or `stay`; non-verdict outcomes are `error`, `timeout`, `unparseable`, `skipped_cap`, or `skipped_no_heuristic`. Only bounded values are recorded. |
 | `reason` / `confidence` / `latencyMs` | Optional judge metadata: an existing reason enum, confidence from 0 to 1, and finite non-negative latency. |
 | `heuristicReasons` | Ordered local evidence only: `loop`, `repeated_tool_errors`, and/or `no_output`; never tool input/output. |
@@ -184,8 +185,13 @@ Each event row is metadata-only and uses these fields:
 `failure` counts accepted non-quality health marks, not every raw provider error.
 Marker-rejected and message-dedup-rejected errors, and errors whose re-marking is
 suppressed by adoption grace, add no failure row. An accepted mark counts even
-when no healthy destination exists and no switch is enacted. Existing dedup TTL
-semantics remain; historical rows are not corrected or backfilled.
+when no healthy destination exists and no switch is enacted. Non-switchable
+`unknown` and `overflow` errors are recorded too: they never enact a switch,
+take no lock and add no health mark, but follow the same newest-message
+attribution and marker/dedup/adoption-grace guards, so a repeated identical
+error adds no second row; `user_abort` is never recorded. Retry-observed
+failures carry their `attempt`; `session.error` rows omit it. Existing dedup
+TTL semantics remain; historical rows are not corrected or backfilled.
 
 Narrative spend belongs to the original switched-from model and completion-time UTC
 day, even if the result is stale or cannot be delivered. A narrative row has no
@@ -216,7 +222,10 @@ flags, `--days=7`, a value after `--kinds`, stray tokens, or any wrong tool
 input shape) print `Usage: /relay stats [--days N] [--kinds]` and change
 nothing. `--kinds` (tool: `kinds: true`) adds one breakdown line per model with
 its nonzero failure kinds and counts in lexicographic order, `none` when
-failure-free; the counts sum to the model's `fails` column. `downMs` is
+failure-free; the counts sum to the model's `fails` column, and each line ends
+with the model's `unknown share` — unknown failures over all its recorded
+failures in the window, rounded like every other share and shown as `–` when
+the model has no failures (never a misleading `0%`). `downMs` is
 window-clipped cooldown/permanent downtime; successful turns and manual model
 picks close any marks they clear. `offPrimary` is the fraction of that model's
 retained turns with a known tier that ran below ladder tier 1, over the whole

@@ -1,5 +1,5 @@
-import type { ClientLike, ModelRef, OcMessage } from "./types"
-import { modelKey, parseModel } from "./types"
+import type { ClientLike, ModelRef, OcMessage, OcPart } from "./types"
+import { HTTP_STATUS_MAX, HTTP_STATUS_MIN, modelKey, parseModel } from "./types"
 import type { RelayConfig } from "./config"
 import { classify, classifyRetryMessage } from "./classifier"
 import type { Classified } from "./types"
@@ -99,9 +99,10 @@ export class Controller {
     }
   }
 
-  async onSessionError(sessionID: string, rawError: unknown, from?: ModelRef): Promise<boolean> {
+  /** `attempt` (#107) is present only on retry-observed failures; the session.error paths omit it. */
+  async onSessionError(sessionID: string, rawError: unknown, from?: ModelRef, attempt?: number): Promise<boolean> {
     try {
-      return await this.handle(sessionID, classify(rawError), from, errorText(rawError))
+      return await this.handle(sessionID, classify(rawError), from, errorText(rawError), attempt)
     } catch (e) {
       try { this.d.log(`onSessionError failed: ${e instanceof Error ? e.message : String(e)}`) } catch { /* ignore */ }
       return false
@@ -117,9 +118,10 @@ export class Controller {
     try {
       if (this.stormActive(sessionID)) return // AC-05: the old turn's retries are consumed, not re-handled
       const c = classifyRetryMessage(message)
-      if (!c.switchable) return
+      // Permanent failures flow at once; transient switchable kinds and non-switchable unknown/overflow
+      // (#107) only from the second attempt: the latter are recorded by handle, never switched.
       if (!c.permanent && !(attempt >= 2)) return
-      await this.handle(sessionID, c, undefined, message)
+      await this.handle(sessionID, c, undefined, message, attempt)
     } catch (e) {
       try { this.d.log(`onRetryStatus failed: ${e instanceof Error ? e.message : String(e)}`) } catch { /* ignore */ }
     }
@@ -141,6 +143,30 @@ export class Controller {
   private tierOf(model: string): number | undefined {
     const i = buildLadder(this.d.cfg).indexOf(model)
     return i >= 0 ? i + 1 : undefined
+  }
+
+  /** The newest message identifies the failing turn: an assistant message carries the model that ran; if the
+   *  error came before any assistant reply (first turn, model resolution), the user message carries the model.
+   *  The title/summary agent produces assistant messages without provider/model: undefined (ignored). */
+  private failingTurn(msgs: OcMessage[]): { current: string; msgID: string; parts: OcPart[] } | undefined {
+    const newest = msgs[msgs.length - 1]
+    if (!newest) return undefined
+    const ni = newest.info
+    const m = ni.role === "assistant" ? (ni.providerID && ni.modelID ? { providerID: ni.providerID, modelID: ni.modelID } : undefined) : ni.model
+    if (!m?.providerID || !m.modelID) return undefined
+    return { current: `${m.providerID}/${m.modelID}`, msgID: ni.id, parts: newest.parts }
+  }
+
+  /** Failure rows stay metadata-only; the optional ints are re-validated here (#107) so an invalid host
+   *  value can never make the schema reject the whole row and lose the failure record. */
+  private failureRow(ts: number, sessionID: string, c: Classified, model: string, attempt?: number): EventInput {
+    const httpStatus = c.httpStatus !== undefined && Number.isInteger(c.httpStatus)
+      && c.httpStatus >= HTTP_STATUS_MIN && c.httpStatus <= HTTP_STATUS_MAX ? c.httpStatus : undefined
+    const bounded = attempt !== undefined && Number.isInteger(attempt) && attempt >= 0 ? attempt : undefined
+    return {
+      ts, sessionID, event: "failure", errorKind: c.kind, model, tier: this.tierOf(model),
+      ...(httpStatus !== undefined ? { httpStatus } : {}), ...(bounded !== undefined ? { attempt: bounded } : {}),
+    }
   }
 
   /** Owner escape hatch: the same abort/switchModel seam as failover, but plain-tail and cap-exempt. */
@@ -185,14 +211,17 @@ export class Controller {
    * OpenCode's own retry when the relay actually took the turn over (#56). `from` (optional) is the model
    * the failure is attributed to (v2 retry events carry it); it must agree with the current turn, never
    * poison a newer model. `resetText` is the raw provider message: reset wording in it becomes a
-   * reset-aware cooldown (#64 wiring).
+   * reset-aware cooldown (#64 wiring). `attempt` (#107) is the retry attempt the failure was observed on;
+   * it is only recorded on the failure row, never a switching input.
    */
-  private async handle(sessionID: string, c: Classified, from?: ModelRef, resetText?: string): Promise<boolean> {
+  private async handle(sessionID: string, c: Classified, from?: ModelRef, resetText?: string, attempt?: number): Promise<boolean> {
     const d = this.d
     const started = d.now()
     // A plugin-caused abort is consumed here; an unmarked abort is the user pressing Esc. Neither switches.
     if (c.kind === "user_abort") { d.lock.consumePluginAbort(sessionID); return false }
-    if (!c.switchable) return false
+    // Non-switchable kinds (unknown, overflow) never enact a switch: they are only measured (#107),
+    // through the same attribution and guard discipline, lock-free and with no drop rows.
+    if (!c.switchable) return this.recordNonSwitchable(sessionID, c, from, attempt)
 
     const session = await d.client.session.get({ path: { id: sessionID } })
     if (session.data?.parentID) { this.dropSwitch(sessionID, "child_session", started); return false }
@@ -204,15 +233,9 @@ export class Controller {
       // The transcript is read under the lock (#40): a user message arriving while a switch runs must not
       // make this failure handler blame the freshly switched (recovered) model.
       const msgs = await this.fetchMessages(sessionID)
-      // The newest message identifies the failing turn: an assistant message carries the model that ran; if the
-      // error came before any assistant reply (first turn, model resolution), the user message carries the model.
-      const newest = msgs[msgs.length - 1]
-      if (!newest) return false
-      const ni = newest.info
-      // The title/summary agent produces assistant messages without provider/model: ignore.
-      const m = ni.role === "assistant" ? (ni.providerID && ni.modelID ? { providerID: ni.providerID, modelID: ni.modelID } : undefined) : ni.model
-      if (!m?.providerID || !m.modelID) return false
-      const current = `${m.providerID}/${m.modelID}`
+      const turn = this.failingTurn(msgs)
+      if (!turn) return false
+      const { current, msgID, parts } = turn
       // Explicit attribution must agree with the current turn, never poison a newer model.
       if (from && modelKey(from) !== current) return false
       const now = d.now()
@@ -223,12 +246,12 @@ export class Controller {
         : undefined
       // Marker guard (#56, AC-03): marker text is untrusted; a marker newest while the session is not
       // on the plugin-set model is a stale error, and the drop is logged, never silent (AC-06).
-      if (hasRelayMarker(newest.parts) && rec.pluginPinned !== current) {
+      if (hasRelayMarker(parts) && rec.pluginPinned !== current) {
         this.dropSwitch(sessionID, "marker_guard", started, current)
         return false
       }
 
-      if (d.lock.isDuplicate(`${sessionID}:${ni.id}`)) { this.dropSwitch(sessionID, "duplicate", started, current); return false }
+      if (d.lock.isDuplicate(`${sessionID}:${msgID}`)) { this.dropSwitch(sessionID, "duplicate", started, current); return false }
 
       // Adoption grace (AC-01): failures of a just-adopted pick within the window do not re-mark it.
       const inGrace = rec.adoptedAt !== undefined && rec.pluginPinned === current && now - rec.adoptedAt < ADOPTION_GRACE_MS
@@ -239,7 +262,7 @@ export class Controller {
           this.led({ ts: now, sessionID, event: "health", model: current, tier: this.tierOf(current), what, ...(untilMs !== undefined ? { untilMs } : {}) })
         })
         // Count accepted marks, not rejected/graced errors or only successfully enacted switches.
-        this.led({ ts: now, sessionID, event: "failure", errorKind: c.kind, model: current, tier: this.tierOf(current) })
+        this.led(this.failureRow(now, sessionID, c, current, attempt))
         for (const [key, cached] of Object.entries(d.state.findCache)) {
           if (cached.model === current) d.state.invalidateFindCache(key)
         }
@@ -407,6 +430,40 @@ export class Controller {
       return true
     } finally {
       d.lock.release(sessionID)
+    }
+  }
+
+  /**
+   * Non-switchable kinds (unknown, overflow) never enact a switch: they are only measured (#107). One
+   * failure row, through the same newest-message attribution and marker/dedup/grace guards as the
+   * switchable path — but lock-free (no switch exists to serialize), with no drop rows (no switch was
+   * attempted) and no health marks (recording must not change later switching decisions). Unattributable
+   * or guarded errors record nothing, matching the switchable guards. Never throws; always false.
+   */
+  private async recordNonSwitchable(sessionID: string, c: Classified, from?: ModelRef, attempt?: number): Promise<boolean> {
+    try {
+      const d = this.d
+      const session = await d.client.session.get({ path: { id: sessionID } })
+      if (session.data?.parentID) return false // subagent sessions are skipped outright
+      const turn = this.failingTurn(await this.fetchMessages(sessionID))
+      if (!turn) return false
+      const { current, msgID, parts } = turn
+      // Explicit attribution must agree with the current turn, never poison a newer model.
+      if (from && modelKey(from) !== current) return false
+      const now = d.now()
+      const rec = d.state.get(sessionID)
+      // Marker guard (#56): a marker newest while the session is not on the plugin-set model is a stale error.
+      if (hasRelayMarker(parts) && rec.pluginPinned !== current) return false
+      // Count once, after the guards: a repeated identical error adds no second row. The `record`
+      // scope keeps this namespace apart from handle's switch key, so measuring an unknown/overflow
+      // failure can never consume the message's once-only switch slot (#107).
+      if (d.lock.isDuplicate(`${sessionID}:record:${msgID}`)) return false
+      // Adoption grace (AC-01): failures of a just-adopted pick within the window are graced, not counted.
+      if (rec.adoptedAt !== undefined && rec.pluginPinned === current && now - rec.adoptedAt < ADOPTION_GRACE_MS) return false
+      this.led(this.failureRow(now, sessionID, c, current, attempt))
+      return false
+    } catch {
+      return false // hooks never throw: an unrecordable failure just goes unmeasured
     }
   }
 
