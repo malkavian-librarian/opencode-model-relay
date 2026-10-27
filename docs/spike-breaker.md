@@ -16,7 +16,7 @@ this document (§8); they require owner approval first (epic #102).
 | `downMs` | merged `cooldown_start→cooldown_end` / `permanent_mark→permanent_expire` intervals, renewals fold into one interval, clipped to the window, split at UTC day (src/stats.ts:169-222; health history read at days+1, src/stats.ts:296) | per-model summed ms over the window; duration, no denominator | only cooldown/permanent intervals count: quarantine skips, `unknown`/`overflow` failures (no health mark) and `exhausted` instants produce no downtime; restarts truncate cooldowns (§6, #136) |
 | `offPrimary` | fraction of a model's retained turns with a known tier that ran below ladder tier 1 (`tier > 1`) (src/stats.ts:224-235; window rollup src/stats.ts:313-336) | per model over the window; denominator = turns with a defined `tier` | turns without a tier (model not on the ladder) leave the denominator; no per-session join, so a "stuck on fallback" session is inferred, not measured |
 | Unknown share | `unknown` failures / all the model's recorded failures in the window; `–` at zero failures (src/stats.ts:338-345) | per model over the window | denominator = recorded rows only (marker/dedup/adoption-grace-suppressed errors invisible; `user_abort` never recorded); no cause separation (provider vs client) |
-| Failure kinds | `failure` rows: `errorKind` enum + bounded `httpStatus` (100-599, src/types.ts:18-19) + `attempt` (≥ 0, retry-observed only) (src/ledger.ts:12-15,46-48,58-59) | per model per UTC day | counts accepted non-quality marks, not raw errors (README); #134: a v1 late non-switchable error can be attributed to the freshly-switched model |
+| Failure kinds | `failure` rows: `errorKind` enum + bounded `httpStatus` (100-599, src/types.ts:18-19) + `attempt` (≥ 0, retry-observed only) (src/ledger.ts:12-15,46-48,58-59) | per model per UTC day | counts accepted non-quality marks, not raw errors (README); #134 fixed: non-switchable recording holds the session lock, so a late v1 error mid-failover is skipped, never attributed to the freshly-switched model |
 | Survival | next same-model turn in the same session within 30 min or 5 turns, no effective (non-`switch_dropped`) switch away in between; else censored (src/stats.ts:10-11,250-271) | per turn; denominator = ok+fail, censored excluded | manual switches away count as fail; heavy censoring in short sessions shrinks the denominator |
 | `switchAway` | effective auto switches (kind ∉ {`manual`,`switch_dropped`}) attributed to `sw.from` (src/stats.ts:149-151) | per model per day | sees only enacted switches; drops are visible only as switch-log/health rows |
 | Regret | manual switch reversing the latest auto switch back to its source within 5 min, or `sw.regret: true`; attributed to the model the manual pick abandoned (`sw.from`) (src/stats.ts:155-167; src/ledger.ts:33-34) | per model per day | catches only prompt reversals; silent dissatisfaction, later picks or new sessions are invisible |
@@ -186,8 +186,8 @@ Order = confidence. Defaults are off unless justified.
   `unknownSwitch.windowMs`: switch after N `unknown` failures in a window.
 - **Why reject.** `unknown` is by definition unclassified — possibly
   client-side, user-adjacent or transient. #107 (PR #133 `33ec967`)
-  deliberately made `unknown`/`overflow` recorded-but-non-switchable: no lock,
-  no health mark, no switch. Switching on repeats inverts that evidence order:
+  deliberately made `unknown`/`overflow` recorded-but-non-switchable: no health
+  mark, no switch (recording serialized under the session lock since #134). Switching on repeats inverts that evidence order:
   it reacts to noise with the most expensive action the plugin has. The
   unknown share exists precisely to *watch* whether unknowns cluster per model.
 - **Rejected alternative:** count-based unknown breaker — same noise failure

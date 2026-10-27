@@ -220,7 +220,7 @@ export class Controller {
     // A plugin-caused abort is consumed here; an unmarked abort is the user pressing Esc. Neither switches.
     if (c.kind === "user_abort") { d.lock.consumePluginAbort(sessionID); return false }
     // Non-switchable kinds (unknown, overflow) never enact a switch: they are only measured (#107),
-    // through the same attribution and guard discipline, lock-free and with no drop rows.
+    // through the same attribution and guard discipline, under the session lock (#134), with no drop rows.
     if (!c.switchable) return this.recordNonSwitchable(sessionID, c, from, attempt)
 
     const session = await d.client.session.get({ path: { id: sessionID } })
@@ -436,13 +436,21 @@ export class Controller {
   /**
    * Non-switchable kinds (unknown, overflow) never enact a switch: they are only measured (#107). One
    * failure row, through the same newest-message attribution and marker/dedup/grace guards as the
-   * switchable path — but lock-free (no switch exists to serialize), with no drop rows (no switch was
-   * attempted) and no health marks (recording must not change later switching decisions). Unattributable
-   * or guarded errors record nothing, matching the switchable guards. Never throws; always false.
+   * switchable path, recorded under the session lock: while a failover handle (or the deferred
+   * narrative) holds the lock the newest message may already be the switched-to pick, so a late v1
+   * error straddling that window is skipped — never attributed to the freshly-switched model (#134).
+   * No drop rows (no switch was attempted) and no health marks (recording must not change later
+   * switching decisions). Unattributable or guarded errors record nothing, matching the switchable
+   * guards. Never throws; always false.
    */
   private async recordNonSwitchable(sessionID: string, c: Classified, from?: ModelRef, attempt?: number): Promise<boolean> {
+    const d = this.d
+    let locked = false
     try {
-      const d = this.d
+      // A held lock is a live failover (or the deferred narrative): the newest message may already be
+      // the switched-to pick, so the old model's late error is skipped, never attributed to it (#134).
+      locked = d.lock.tryAcquire(sessionID)
+      if (!locked) return false
       const session = await d.client.session.get({ path: { id: sessionID } })
       if (session.data?.parentID) return false // subagent sessions are skipped outright
       const turn = this.failingTurn(await this.fetchMessages(sessionID))
@@ -464,6 +472,8 @@ export class Controller {
       return false
     } catch {
       return false // hooks never throw: an unrecordable failure just goes unmeasured
+    } finally {
+      if (locked) d.lock.release(sessionID)
     }
   }
 
