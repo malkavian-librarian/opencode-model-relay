@@ -106,22 +106,18 @@ It establishes a real v4 behavioral difference and identifies the first
 required migration fix, but does not claim that every source schema and test
 passes under Zod 4.
 
-### Proposed exact AC-02 amendment
+### Amended AC-02 result
 
-Because the current “test ... against the candidate Zod 4 version” wording can
-be read as requiring a full source/runtime substitution that this docs-only
-issue forbids, the owner/PM should amend AC-02 to:
+The amended AC-02 is satisfied by this documented non-committed compatibility
+probe: it inventories the config, switchlog/ledger, and OpenRouter response
+boundaries; compares equivalent schema expressions with representative
+valid/invalid fixtures under the installed Zod 3.25.76 and candidate Zod 4.1.8
+APIs; records the observed behavioral difference; and identifies that
+OpenRouter response handling is not Zod-backed.
 
-> **AC-02 (proposed):** Inventory the existing Zod boundaries in config,
-> switchlog/ledger, and OpenRouter response handling. Run a non-committed
-> compatibility probe against an installed candidate Zod 4 API using equivalent
-> schema expressions and representative valid/invalid fixtures; record any
-> behavioral differences. For boundaries that are not Zod-backed, document
-> that fact and assess them separately. Full source substitution and migration
-> tests are required in the separate implementation issue.
-
-Until that amendment is accepted, the full-runtime portion of AC-02 remains an
-explicit contract gap rather than an unverified claim.
+The probe is intentionally not a full runtime substitution. Production
+TypeScript modules still import direct Zod 3, and full source substitution plus
+migration tests remain deferred to the separate implementation issue.
 
 ## Zod 4 assessment and decision
 
@@ -165,7 +161,7 @@ names the affected schemas and expected outputs. In that PR:
 
 1. install and lock the selected supported Zod 4 version deliberately;
 2. add/update focused RED tests for config defaults, ledger/switchlog malformed
-   and oversized input, all existing Zod boundaries, and any newly proposed
+   and oversized input, all existing Zod boundaries, and any newly introduced
    OpenRouter schema;
 3. run `npm run typecheck`;
 4. run `npm test`;
