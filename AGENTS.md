@@ -67,7 +67,7 @@ over with a structured summary. Design: `docs/superpowers/specs/2026-10-18-model
 
 ## Quality gates and ticket workflow (details: `docs/process.md`)
 
-1. GitHub issues are the source of truth; before any status claim or gate/merge action, fetch live GitHub state and ignore historical reports; keep the "Relay" project board (project 7)
+1. GitHub issues are the source of truth. At a resumed turn, run one live preflight, record the exact SHA/check snapshot, and reuse it; recheck only before irreversible actions or when a tool/user reports a concrete change. New summaries alone are not change signals; never repeat stale-report disclaimers.
    card statuses current at every lifecycle step (owner directive - paramount;
    details: `docs/process.md` Conventions). One issue at a time:
    **PM** grooms (`docs/team/pm.md`, `docs/task-template.md`) then **Engineer**
@@ -86,8 +86,7 @@ over with a structured summary. Design: `docs/superpowers/specs/2026-10-18-model
    OWNER-ONLY, never done by an agent: npm publish / release tags, repository
    secrets, repository settings and branch protection, force-pushes, deleting any
    branch other than the merged PR branch, installing GitHub apps.
-6. CodeRabbit is installed and reviews every PR (`docs/coderabbit.md`): its findings
-   feed the reviewer loop, but merge needs the QA/Reviewer PASS + CI green.
+6. CodeRabbit reviews runtime PRs (`docs/coderabbit.md`); docs-only PRs skip it per owner instruction. Its findings feed the reviewer loop; runtime merge needs QA/Reviewer PASS, CI green, and CodeRabbit pass.
 
 ## Self-learning loop
 
@@ -107,8 +106,8 @@ over with a structured summary. Design: `docs/superpowers/specs/2026-10-18-model
 - Stale purge snapshots, discarded readable rows and medianed daily medians -> rebuild on purge, catch each file read failure and median all window samples (2026-10-26)
 - Compaction anchored to wall-clock Date.now() or a malformed first line aged out/rewrote valid rows -> gate retention on the incoming row's ts clamped to the earlier of it and Date.now(), using the oldest valid row (2026-10-26)
 - Circular mode hit the existing deepest fallback after its cap -> stop cleanly before fallback to keep cycles bounded and repeatable (2026-10-27)
-- Gemini slot matching accepted image ids as text -> exclude image/banana ids and sort remaining text candidates by numeric version (2026-10-27)
-- Gemini slot matching bypassed direct-call validation and allowed speech/transcription ids -> apply SAFE_MODEL_ID and exclude non-chat variants (2026-10-27)
+- Gemini slot matching accepted image ids as text -> exclude image/banana ids, sort text candidates by numeric version, apply SAFE_MODEL_ID, and exclude non-chat variants (2026-10-27)
+- Repeated live preflights on unchanged summaries wasted turns -> cache one snapshot per resumed turn and recheck only on concrete change signals or irreversible actions (2026-10-27)
 
 ## Bugs - [open]/[fixed] + repro (max 10)
 
