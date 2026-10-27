@@ -65,6 +65,10 @@ issue (latest comments first), then the matching handoff entry.
 
 ## Reviewer loop
 
+- QA runs as three parallel subagents with different prompts on the exact PR head: an
+  adversarial-security reviewer, a behavioral-correctness reviewer, and a ponytail
+  review of the changed code (`docs/team/qa-engineer.md`); PASS needs both QA PASS
+  verdicts plus ponytail SHIP.
 - Findings are rated Critical, Important or Minor.
 - Critical and Important findings must be fixed in code. A fix round is: Engineer
   fixes, pushes, local gates re-run, Reviewer re-reviews.
@@ -79,9 +83,11 @@ issue (latest comments first), then the matching handoff entry.
 
 On 2026-10-18 the repository owner delegated merge authority to the orchestrator (the
 main agent session). The orchestrator, never the Engineer or QA/Reviewer subagents, may
-run `gh pr merge <n> --squash --delete-branch` only when: CI is green,
-the QA/Reviewer verdict is PASS, no Critical/Important finding is unresolved, the PR
-links its issue, and (if CodeRabbit is installed) its checks are green. Always squash.
+run `gh pr merge <n> --squash --delete-branch` only when: CI is green, the QA verdicts
+are PASS (two differently-prompted QA subagents plus a ponytail review of the changed
+code, per `docs/team/qa-engineer.md`), no Critical/Important finding is unresolved, and
+the PR links its issue. Always squash. CodeRabbit is suspended (trial credits exhausted,
+2026-10-27, owner directive; `docs/coderabbit.md`) and is not a merge gate.
 
 OWNER-ONLY, never done by an agent: npm publish / pushing release tags, creating or
 changing repository secrets, changing repository settings or branch protection,
@@ -117,7 +123,7 @@ Publishing is an owner action; agents never publish or push tags.
 | `docs/handoff.md` | Newest-first cross-agent handoff log. |
 | `docs/testing.md` | Gates, test rules, fixtures and flaky-timing rule. |
 | `docs/publish-and-install.md` | Owner runbook for npm publishing and local machine install for testing. |
-| `docs/coderabbit.md` | Installed CodeRabbit reviewer (first review PR #53); update loop. |
+| `docs/coderabbit.md` | Suspended CodeRabbit reviewer (trial credits exhausted 2026-10-27); files kept for re-enable. |
 | `docs/coderabbit-log.md` | Log of CodeRabbit exchanges. |
 | `docs/superpowers/specs/2026-10-18-model-relay-design.md` | Design spec and hard constraints. |
 | `docs/superpowers/plans/2026-10-18-v1.0-failover-handover.md` | v1.0 implementation plan. |

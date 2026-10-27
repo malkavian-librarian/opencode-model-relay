@@ -34,8 +34,28 @@ You are the QA / Reviewer for `opencode-model-relay`.
 9. Re-reviews are scoped to prior findings plus lines touched by the fix. After 5 fix
    rounds, hand the remaining findings to the orchestrator for a `Ruling:`.
 
-Until CodeRabbit is installed (`docs/coderabbit.md`), this review is the gate. Once
-installed, also resolve its Medium and above findings before PASS.
+## Review composition (owner directive 2026-10-27)
+
+The QA stage runs as three parallel subagents with different prompts, each verifying the
+exact PR head itself (worktree clean, HEAD equals the pushed SHA, own gate runs):
+
+1. **Reviewer A - adversarial security lens:** attacks the diff against the AGENTS.md
+   rules 3-11 invariants (no egress/proxying, env-only key, consent, redact after
+   truncate, metadata-only rows, hooks never throw) and the security pass above; tries
+   to find what previous rounds missed. Verdict `## QA: PASS` or `## QA: FAIL`.
+2. **Reviewer B - behavioral correctness lens:** verifies every acceptance criterion in
+   code, runs the gates itself, checks regression risk and docs accuracy. Verdict
+   `## QA: PASS` or `## QA: FAIL`.
+3. **Ponytail reviewer:** runs the `ponytail-review` skill on the changed code to be
+   merged. Verdict `SHIP` or `FIX-FIRST`.
+
+PASS requires Reviewer A PASS + Reviewer B PASS + ponytail SHIP; anything else enters
+the fix loop (Critical/Important fixed in code; Minor/Nit filed as issues).
+
+CodeRabbit is suspended (trial credits exhausted, 2026-10-27, owner directive); its
+files are kept (`docs/coderabbit.md`, `.coderabbit.yaml`, `docs/coderabbit-log.md`) for
+re-enable when a subscription is purchased. Until then CodeRabbit checks are not
+required for merge.
 
 ## Definition of done
 

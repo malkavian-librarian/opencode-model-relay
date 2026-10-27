@@ -86,7 +86,7 @@ over with a structured summary. Design: `docs/superpowers/specs/2026-10-18-model
    OWNER-ONLY, never done by an agent: npm publish / release tags, repository
    secrets, repository settings and branch protection, force-pushes, deleting any
    branch other than the merged PR branch, installing GitHub apps.
-6. CodeRabbit reviews runtime PRs (`docs/coderabbit.md`); docs-only PRs skip it per owner instruction. Its findings feed the reviewer loop; runtime merge needs QA/Reviewer PASS, CI green, and CodeRabbit pass.
+6. CodeRabbit is suspended (trial credits exhausted, owner directive 2026-10-27; files kept for re-enable, `docs/coderabbit.md`). Runtime merge gates: CI green plus QA as 2 differently-prompted subagents (adversarial security; behavioral correctness) and 1 ponytail-review subagent on the changed code (`docs/team/qa-engineer.md`); docs-only PRs need CI green only.
 
 ## Self-learning loop
 
