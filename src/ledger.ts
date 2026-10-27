@@ -13,7 +13,10 @@ const SWITCH_KINDS = [
   "rate_limit", "quota", "auth", "free_tier_403", "server_5xx", "timeout", "model_not_found",
   "overflow", "user_abort", "unknown", "quality", "switch_dropped", "manual",
 ] as const
-const DROP_REASONS = ["lock_held", "marker_guard", "superseded"] as const
+const DROP_REASONS = ["duplicate", "child_session", "abort_timeout", "abort_rejected", "prompt_failed", "exhausted", "cap_hit", "no_consent", "lock_held", "marker_guard", "superseded"] as const
+const JUDGE_OUTCOMES = ["error", "timeout", "unparseable", "skipped_cap", "skipped_no_heuristic"] as const
+const JUDGE_REASONS = ["none", "loop", "ignored_instructions", "repeated_tool_errors", "no_output", "other"] as const
+const HEURISTIC_REASONS = ["loop", "repeated_tool_errors", "no_output"] as const
 const EVENT_KINDS = ["turn", "failure", "judge", "switch", "narrative", "health"] as const
 const HEALTH_WHATS = ["cooldown_start", "cooldown_end", "permanent_mark", "permanent_expire", "quarantine_skip", "exhausted", "cap_hit"] as const
 const MAX_MODEL_CHARS = 120
@@ -26,7 +29,9 @@ const swSchema = z.object({
   reason: z.enum(DROP_REASONS).optional(),
   from: z.string().regex(MODEL_REF).max(MAX_MODEL_CHARS).optional(),
   to: z.string().regex(MODEL_REF).max(MAX_MODEL_CHARS).optional(),
+  regret: z.boolean().optional(),
 }).refine((s) => (s.kind === "switch_dropped") === (s.reason !== undefined), { message: "dropped switches must carry a reason" })
+  .refine((s) => s.regret === undefined || s.kind === "manual", { message: "regret belongs to manual switches" })
 
 /** One schema is the single validation source for every ledger boundary (append and read), like the switch log. */
 export const ledgerEventSchema = z.object({
@@ -40,12 +45,19 @@ export const ledgerEventSchema = z.object({
   cost: z.number().finite().nonnegative().optional(),
   errorKind: z.enum(SWITCH_KINDS).optional(),
   verdict: z.enum(["switch", "stay"]).optional(),
+  outcome: z.enum(JUDGE_OUTCOMES).optional(),
+  reason: z.enum(JUDGE_REASONS).optional(),
+  confidence: z.number().min(0).max(1).optional(),
+  heuristicReasons: z.array(z.enum(HEURISTIC_REASONS)).max(3).optional(),
   sw: swSchema.optional(),
   helperCostUsd: z.number().finite().nonnegative().optional(),
   what: z.enum(HEALTH_WHATS).optional(),
   untilMs: z.number().finite().nonnegative().optional(),
 }).refine((e) => (e.event === "failure") === (e.errorKind !== undefined), { message: "failure events need an errorKind" })
-  .refine((e) => (e.event === "judge") === (e.verdict !== undefined), { message: "judge events need a verdict" })
+  .refine((e) => e.event !== "judge" || ((e.verdict !== undefined) !== (e.outcome !== undefined)), { message: "judge events need a verdict or outcome" })
+  .refine((e) => e.event === "judge" || e.verdict === undefined, { message: "verdict metadata belongs to judge events" })
+  .refine((e) => e.event === "judge" || e.outcome === undefined, { message: "outcome metadata belongs to judge events" })
+  .refine((e) => e.event === "judge" || (e.outcome === undefined && e.reason === undefined && e.confidence === undefined && e.heuristicReasons === undefined), { message: "judge metadata belongs to judge events" })
   .refine((e) => (e.event === "switch") === (e.sw !== undefined), { message: "switch events need their sw detail" })
   .refine((e) => e.event !== "narrative" || (e.model !== undefined && e.helperCostUsd !== undefined), { message: "narrative events need model and helperCostUsd" })
   .refine((e) => (e.event === "health") === (e.what !== undefined && e.model !== undefined), { message: "health events need what and model" })

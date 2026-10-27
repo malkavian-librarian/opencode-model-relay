@@ -187,7 +187,7 @@ describe("Controller.onSessionError", () => {
       const error = { name: "APIError", data: { message } } // synthetic, no captured status
       expect(await c.onSessionError("s1", error)).toBe(true)
       expect(await c.onSessionError("s1", error)).toBe(false)
-      expect(calls.logs).toEqual([expect.objectContaining({ from: "a/1", to: "b/2", kind })])
+      expect(calls.logs.filter((row) => row.kind === kind)).toEqual([expect.objectContaining({ from: "a/1", to: "b/2", kind })])
       expect(d.health["a/1"]?.permanent).toBe(true)
       const reloaded = new StateStore((d.state as any).file, () => 1_000_000); reloaded.load()
       expect(reloaded.get("s1").switchCount).toBe(1)
@@ -243,7 +243,7 @@ describe("Controller.onSessionError", () => {
     expect(calls.prompt.filter((p) => /summary unavailable/i.test(p.body.parts[0].text)).map((p) => p.body.model)).toEqual([{ providerID: "b", modelID: "2" }, { providerID: "c", modelID: "3" }])
     expect(d.state.get("s1")).toMatchObject({ switchCount: 2, helperCalls: 1, pluginPinned: "c/3" })
     expect(calls.chat).toHaveLength(1)
-    expect(calls.logs).toHaveLength(2)
+    expect(calls.logs.filter((row) => row.kind !== "switch_dropped")).toHaveLength(2)
     expect(calls.toast.join(" ")).toMatch(/limit/i)
   })
   it("marker text alone cannot supply a missing or conflicting current model", async () => {
@@ -419,7 +419,7 @@ describe("Controller.onSessionError", () => {
     const { c, calls } = setup({ parentID: "parent" })
     await c.onSessionError("s1", err429)
     expect(calls.prompt).toHaveLength(0)
-    expect(calls.events).toEqual([])
+    expect(calls.events).toEqual([{ ts: 1_000_000, sessionID: "s1", event: "switch", sw: { kind: "switch_dropped", reason: "child_session" } }])
   })
   it("ignores assistant messages without provider/model (title/summary agent)", async () => {
     const { c, calls } = setup({
@@ -749,7 +749,7 @@ describe("deferred narrative freshness", () => {
       await new Promise<void>((r) => setImmediate(r))
       expect(calls.chat).toEqual([])
       expect(events.filter((e) => e.event === "narrative")).toEqual([])
-      if (guard === "child") expect(events).toEqual([])
+      if (guard === "child") expect(events).toEqual([{ ts: 1_000_000, sessionID: "s1", event: "switch", sw: { kind: "switch_dropped", reason: "child_session" } }])
     })
   }
   for (const costUsd of [0, undefined, null, "0.03", -1, NaN, Infinity, -Infinity]) {
@@ -961,6 +961,15 @@ describe("Controller.manualSwitch (#67)", () => {
     expect(calls.logs[0]).toMatchObject({ kind: "manual" })
   })
 
+  it("marks a manual return within five minutes as regret in both metadata logs", async () => {
+    const { c, calls, messages } = setup()
+    await c.onSessionError("s1", err429)
+    messages.splice(0, messages.length, ...msgs({ providerID: "b", modelID: "2" }, "b1"))
+    await expect(c.manualSwitch("s1", "a/1")).resolves.toMatchObject({ status: "switched" })
+    expect(calls.logs.at(-1)).toMatchObject({ kind: "manual", from: "b/2", regret: true })
+    expect(calls.events.filter((e) => e.event === "switch").at(-1)).toMatchObject({ sw: { kind: "manual", from: "b/2", regret: true } })
+  })
+
   it("next resolves a find level before falling through to a static model", async () => {
     const entry = { find: { match: "glm-5", free: true, via: "openrouter" as const } }
     const { c, d, calls, messages } = setup({
@@ -1016,6 +1025,36 @@ describe("Controller quality judge (#26)", () => {
     expect(d.state.judgeDaily).toMatchObject({ calls: 1 })
     expect(d.state.judgeDaily.costUsd).toBe(0.01) // spend counts even though the verdict failed to parse
     expect(calls.prompt).toHaveLength(0) // one switch:true is not enough
+  })
+
+  it.each([
+    ["error", new Error("helper unavailable")],
+    ["timeout", new Error("OpenRouter request timed out")],
+  ] as const)("records helper %s without throwing or switching", async (outcome, error) => {
+    const { c, calls } = judgeSetup({ messages: judgedTurn("outcome"), chat: async () => { throw error } })
+    await expect(c.onSessionIdle("s1")).resolves.toBeUndefined()
+    expect(calls.events.filter((e) => e.event === "judge")).toEqual([
+      expect.objectContaining({ outcome, heuristicReasons: ["no_output"], latencyMs: expect.any(Number) }),
+    ])
+    expect(calls.prompt).toHaveLength(0)
+  })
+
+  it.each([
+    ["unparseable", async () => ({ text: "not json", costUsd: 0 })],
+    ["skipped_cap", async () => ({ text: verdict(true), costUsd: 0 })],
+    ["skipped_no_heuristic", async () => ({ text: verdict(true), costUsd: 0 })],
+  ] as const)("records judge outcome %s exactly once", async (outcome, chat) => {
+    const options = outcome === "skipped_cap" ? { judge: { enabled: true, maxCallsPerSession: 0 } } : {}
+    const messages = outcome === "skipped_no_heuristic" ? [
+      { info: { id: "u1", role: "user", agent: "build" }, parts: [{ type: "text", text: "work" }] },
+      { info: { id: "a1", role: "assistant", providerID: "b", modelID: "2", tokens: { output: 10 } }, parts: [{ type: "text", text: "done" }] },
+    ] as OcMessage[] : judgedTurn("outcome")
+    const { c, calls } = judgeSetup({ cfg: options, messages, chat })
+    await c.onSessionIdle("s1")
+    expect(calls.events.filter((e) => e.event === "judge")).toEqual([
+      expect.objectContaining({ outcome, heuristicReasons: outcome === "skipped_no_heuristic" ? [] : ["no_output"] }),
+    ])
+    expect(calls.events.filter((e) => e.event === "judge")).toHaveLength(1)
   })
 
   it("no consent or no key: the judge never runs", async () => {

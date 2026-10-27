@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { buildJudgeInput, parseVerdict } from "../src/judge"
+import { buildJudgeInput, parseVerdict, VerdictSchema } from "../src/judge"
 
 describe("parseVerdict", () => {
   it("accepts the strict JSON shape", () => {
@@ -16,6 +16,19 @@ describe("parseVerdict", () => {
     expect(parseVerdict(`{"switch":true,"reason":"none"}`)).toBeNull()
     expect(parseVerdict("")).toBeNull()
     expect(parseVerdict(`{"switch":true,"reason":"none","confidence":"high"}`)).toBeNull()
+    expect(parseVerdict(`{"switch":true,"reason":"none","confidence":1.1}`)).toBeNull()
+    expect(parseVerdict(`{"switch":true,"confidence":0.5}`)).toEqual({ switch: true, confidence: 0.5 })
+  })
+})
+
+describe("judge outcome metadata", () => {
+  it("validates bounded outcomes and heuristic evidence", () => {
+    for (const outcome of ["error", "timeout", "unparseable", "skipped_cap", "skipped_no_heuristic"]) {
+      expect(VerdictSchema.safeParse({ outcome }).success).toBe(true)
+    }
+    expect(VerdictSchema.safeParse({ outcome: "error", error: "provider leaked" }).success).toBe(false)
+    expect(VerdictSchema.safeParse({ switch: true, confidence: 0.5, latencyMs: 20, heuristicReasons: ["loop", "no_output"] }).success).toBe(true)
+    expect(VerdictSchema.safeParse({ switch: true, confidence: 0.5, latencyMs: -1 }).success).toBe(false)
   })
 })
 

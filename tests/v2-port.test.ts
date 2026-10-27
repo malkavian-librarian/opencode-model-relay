@@ -658,13 +658,13 @@ describe("v2 tools, commands and model list", () => {
       await until(() => ledger.read().some((r) => r.event === "turn"))
       const tool = calls.tools.find((t) => t.name === "relay_stats")
       const row = (text: string) => text.split("\n").find((line) => line.startsWith("a/1 |"))
-      expect(row((await tool.execute(undefined, {})).content)).toMatch(/\| \$0\.20 \| \$0\.00$/)
+      expect(row((await tool.execute(undefined, {})).content)).toMatch(/\| \$0\.20 \| \$0\.00 \| 0$/)
       expect(ledger.read().find((r) => r.event === "turn")).toMatchObject({ model: "a/1", cost: 0.20 })
       ledger.append({ ts: Date.now(), sessionID: "s1", event: "judge", model: "a/1", verdict: "stay", helperCostUsd: 0.02 })
       ledger.append({ ts: Date.now(), sessionID: "s1", event: "narrative", model: "a/1", helperCostUsd: 0.03 })
-      expect(row((await tool.execute(undefined, {})).content)).toMatch(/\| \$0\.20 \| \$0\.05$/)
+      expect(row((await tool.execute(undefined, {})).content)).toMatch(/\| \$0\.20 \| \$0\.05 \| 0$/)
       await calls.commands.find((c) => c.name === "relay").execute({ sessionID: "s1", prompt: { text: "stats" }, delivery: "steer" })
-      expect(row(calls.synthetic.at(-1).text)).toMatch(/\| \$0\.20 \| \$0\.05$/)
+      expect(row(calls.synthetic.at(-1).text)).toMatch(/\| \$0\.20 \| \$0\.05 \| 0$/)
     } finally { teardown?.() }
   })
   it.each([0, undefined, null, "0.2", -1, NaN, Infinity, -Infinity])("V2 records turns with known-cost-only metadata: %s", async (cost) => {

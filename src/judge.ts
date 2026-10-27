@@ -7,13 +7,18 @@ const ZWSP = "\u200b"
 const JUDGE_MAX_TOKENS = 300
 const JUDGE_TIMEOUT_MS = 30_000
 
-export const VerdictSchema = z
-  .object({
-    switch: z.boolean(),
-    reason: z.enum(["none", "loop", "ignored_instructions", "repeated_tool_errors", "no_output", "other"]),
-    confidence: z.number(),
-  })
-  .strict()
+const JUDGE_REASONS = ["none", "loop", "ignored_instructions", "repeated_tool_errors", "no_output", "other"] as const
+const JUDGE_OUTCOMES = ["error", "timeout", "unparseable", "skipped_cap", "skipped_no_heuristic"] as const
+const HEURISTIC_REASONS = ["loop", "repeated_tool_errors", "no_output"] as const
+
+const judgeMetadata = {
+  latencyMs: z.number().finite().nonnegative().optional(),
+  heuristicReasons: z.array(z.enum(HEURISTIC_REASONS)).max(HEURISTIC_REASONS.length).optional(),
+} as const
+export const VerdictSchema = z.union([
+  z.object({ switch: z.boolean(), reason: z.enum(JUDGE_REASONS).optional(), confidence: z.number().min(0).max(1), ...judgeMetadata }).strict(),
+  z.object({ outcome: z.enum(JUDGE_OUTCOMES), ...judgeMetadata }).strict(),
+])
 
 export type Verdict = z.infer<typeof VerdictSchema>
 

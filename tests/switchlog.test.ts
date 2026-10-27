@@ -11,6 +11,13 @@ const rows = (d: string) => fs.readFileSync(path.join(d, "switches.jsonl"), "utf
 const seeded = (ts: number) => JSON.stringify({ ts, session: "0123456789abcdef", from: "a/1", to: "b/2", kind: "quota", elapsedMs: 5 })
 
 describe("SwitchLog", () => {
+  it("accepts every bounded drop reason", () => {
+    const d = dir(); const l = new SwitchLog(d, true)
+    for (const reason of ["duplicate", "child_session", "abort_timeout", "abort_rejected", "prompt_failed", "exhausted", "cap_hit", "no_consent"]) {
+      l.append({ ts: 1, sessionID: "s", from: "prov/a", kind: "switch_dropped", reason: reason as never })
+    }
+    expect(l.recent(20).map((r) => r.reason)).toEqual(["duplicate", "child_session", "abort_timeout", "abort_rejected", "prompt_failed", "exhausted", "cap_hit", "no_consent"])
+  })
   it("writes JSONL with an HMAC'd, stable session id and no raw id", () => {
     const d = dir(); const l = new SwitchLog(d, true)
     l.append({ ts: 1, sessionID: "ses_abc", from: "a/1", to: "b/2", kind: "rate_limit", helperCostUsd: 0.01 })

@@ -15,6 +15,7 @@ export const bucketSchema = z.object({
   failures: z.record(z.number().int().nonnegative()),
   judgeCalls: z.number().int().nonnegative(),
   judgeRejects: z.number().int().nonnegative(),
+  regret: z.number().int().nonnegative().optional(),
   switchAway: z.number().int().nonnegative(),
   down: z.number().finite().nonnegative().default(0),
   offPrimary: z.number().finite().nonnegative().max(1).default(0),
@@ -148,6 +149,20 @@ export function buildStats(events: LedgerEvent[], now: number, days = DEFAULT_ST
       b.switchAway++ // an effective auto switch IS the model being switched away from
     }
     if ((e.event === "judge" || e.event === "narrative") && e.helperCostUsd !== undefined) b.helperCostUsd += e.helperCostUsd
+  }
+
+  // Manual recovery shortly after an automatic switch is a bounded regret signal.
+  for (const seq of bySession.values()) {
+    for (let i = 0; i < seq.length; i++) {
+      const manual = seq[i]
+      if (manual?.event !== "switch" || manual.sw?.kind !== "manual" || manual.sw.from === undefined) continue
+      const manualBucket = bucketFor(manual.sw.from, manual.ts)
+      manualBucket.regret ??= 0
+      const prior = seq.slice(0, i).reverse().find((e) => e.event === "switch" && e.sw?.kind !== "manual" && e.sw?.kind !== "switch_dropped")
+      const inferred = prior !== undefined && prior.sw?.to === manual.sw.from && manual.ts - prior.ts >= 0 && manual.ts - prior.ts <= 5 * 60 * 1000
+      if (manual.sw.regret !== true && !inferred) continue
+      manualBucket.regret = (manualBucket.regret ?? 0) + 1
+    }
   }
 
   // Health intervals are clipped to the selected event window and split at UTC midnight.
@@ -292,7 +307,7 @@ export function purgeAndRefreshStats(ledger: EventLog, dir: string, now = Date.n
  *  `events` are the same retained-window events `stats` was built from (statsText passes ledger.read's
  *  output): the latency column medians their turn samples directly, never the daily bucket medians. */
 export function renderStatsTable(stats: StatsDoc, events: readonly LedgerEvent[], kinds = false): string {
-  const rows: string[] = ["model | turns | fails | judgeRej | switchAway | downMs | offPrimary | survival | medianLat | tok in/out | cost$ | helper$"]
+  const rows: string[] = ["model | turns | fails | judgeRej | switchAway | downMs | offPrimary | survival | medianLat | tok in/out | cost$ | helper$ | regret"]
   const samples = new Map<string, number[]>()
   const tieredTurns = new Map<string, [number, number]>()
   for (const e of events) {
@@ -305,9 +320,9 @@ export function renderStatsTable(stats: StatsDoc, events: readonly LedgerEvent[]
     if (e.latencyMs !== undefined) (samples.get(e.model) ?? samples.set(e.model, []).get(e.model)!).push(e.latencyMs)
   }
   for (const [model, days] of Object.entries(stats.models)) {
-    let turns = 0, fails = 0, jc = 0, jr = 0, sw = 0, down = 0, ok = 0, fail = 0, tokIn = 0, tokOut = 0, cost = 0, helper = 0
+    let turns = 0, fails = 0, jc = 0, jr = 0, regret = 0, sw = 0, down = 0, ok = 0, fail = 0, tokIn = 0, tokOut = 0, cost = 0, helper = 0
     for (const b of Object.values(days)) {
-      turns += b.turns; jc += b.judgeCalls; jr += b.judgeRejects; sw += b.switchAway
+      turns += b.turns; jc += b.judgeCalls; jr += b.judgeRejects; regret += b.regret ?? 0; sw += b.switchAway
       down += b.down
       ok += b.survivalOk; fail += b.survivalFail
       tokIn += b.tokensIn; tokOut += b.tokensOut; cost += b.costUsd; helper += b.helperCostUsd
@@ -318,7 +333,7 @@ export function renderStatsTable(stats: StatsDoc, events: readonly LedgerEvent[]
     const med = lats && lats.length ? `${Math.round(median(lats)!)}ms` : "–"
     const [knownTurns, offPrimaryTurns] = tieredTurns.get(model) ?? [0, 0]
     const offPrimary = knownTurns > 0 ? offPrimaryTurns / knownTurns : 0
-    rows.push(`${model} | ${turns} | ${fails} | ${pct(jr, jc)} | ${sw} | ${down} | ${pct(offPrimary, 1)} | ${pct(ok, ok + fail)} | ${med} | ${tokIn}/${tokOut} | $${cost.toFixed(2)} | $${helper.toFixed(2)}`)
+    rows.push(`${model} | ${turns} | ${fails} | ${pct(jr, jc)} | ${sw} | ${down} | ${pct(offPrimary, 1)} | ${pct(ok, ok + fail)} | ${med} | ${tokIn}/${tokOut} | $${cost.toFixed(2)} | $${helper.toFixed(2)} | ${regret}`)
     if (kinds) {
       const counts = new Map<string, number>()
       for (const b of Object.values(days)) for (const [k, c] of Object.entries(b.failures)) counts.set(k, (counts.get(k) ?? 0) + c)

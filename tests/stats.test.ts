@@ -19,6 +19,16 @@ afterEach(() => { for (const d of tmpDirs) fs.rmSync(d, { recursive: true, force
 const NOW = Date.UTC(2026, 9, 20, 12) // 2026-10-20T12:00Z
 
 describe("buildStats", () => {
+  it("attributes manual regret only within five minutes to the switched-from model", () => {
+    const ev = [
+      { ts: NOW - 1000, session: S, event: "switch", sw: { kind: "timeout", from: "prov/a", to: "prov/b" } },
+      { ts: NOW - 500, session: S, event: "switch", sw: { kind: "manual", from: "prov/b", to: "prov/a" } },
+      { ts: NOW - 100, session: S, event: "switch", sw: { kind: "manual", from: "prov/a", to: "prov/b" } },
+    ] as LedgerEvent[]
+    const s = buildStats(ev, NOW)
+    expect(s.models["prov/b"]![new Date(NOW).toISOString().slice(0, 10)]!.regret).toBe(1)
+    expect(s.models["prov/a"]![new Date(NOW).toISOString().slice(0, 10)]!.regret).toBe(0)
+  })
   it("buckets per model per UTC day over the rolling 30-day window and prunes by ts", () => {
     const ev = [
       turn(NOW - 40 * DAY, "prov/old"),
@@ -233,7 +243,7 @@ describe("ledger->stats integration", () => {
     expect(Object.keys(stats.models)).toEqual(["prov/a"])
     expect(stats.models["prov/a"]!["2026-10-19"]).toEqual(baseline.models["prov/a"]!["2026-10-19"])
     expect(stats.models["prov/a"]!["2026-10-20"]).toEqual({ turns: 0, failures: {}, judgeCalls: 0, judgeRejects: 0, switchAway: 0, down: 0, offPrimary: 0, survivalOk: 0, survivalFail: 0, survivalCensored: 0, tokensIn: 0, tokensOut: 0, costUsd: 0, helperCostUsd: 0.03 })
-    expect(renderStatsTable(stats, events).split("\n").find((r) => r.startsWith("prov/a |"))).toBe("prov/a | 1 | 0 | 100% | 1 | 0 | 0% | 0% | 100ms | 1/2 | $0.20 | $0.05")
+    expect(renderStatsTable(stats, events).split("\n").find((r) => r.startsWith("prov/a |"))).toBe("prov/a | 1 | 0 | 100% | 1 | 0 | 0% | 0% | 100ms | 1/2 | $0.20 | $0.05 | 0")
     // buildStats also independently prunes future and expired events, without relying on EventLog.read.
     expect(buildStats(l.read(100, now + 1), now)).toEqual(stats)
   })
@@ -325,7 +335,7 @@ describe("stats window, kinds and sample median", () => {
     expect(txt).toContain("prov/a failure kinds: quota 2, timeout 1")
     expect(txt).toContain("prov/clean failure kinds: none")
     expect(renderStatsTable(buildStats(ev, NOW), ev, false).split("\n")).toHaveLength(3) // header + 2 rows, no breakdown
-    expect(renderStatsTable(buildStats([], NOW), [], true)).toBe("model | turns | fails | judgeRej | switchAway | downMs | offPrimary | survival | medianLat | tok in/out | cost$ | helper$")
+    expect(renderStatsTable(buildStats([], NOW), [], true)).toBe("model | turns | fails | judgeRej | switchAway | downMs | offPrimary | survival | medianLat | tok in/out | cost$ | helper$ | regret")
   })
   it("statsText renders a real ledger's mixed events inside the exact window with costs", () => {
     const d = dir()

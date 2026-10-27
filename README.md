@@ -121,7 +121,8 @@ Each `switches.jsonl` row is metadata-only and uses these fields:
 | `session` | The first 16 hexadecimal characters of the per-install HMAC of the OpenCode session id. |
 | `from` / `to` | The source and destination `provider/model` identifiers, when known. |
 | `kind` | An enum: failure kind, `quality`, `manual`, or `switch_dropped`. |
-| `reason` | For `switch_dropped` only: `lock_held`, `marker_guard`, or `superseded`. |
+| `reason` | For `switch_dropped` only: the bounded drop enum (`duplicate`, `child_session`, `abort_timeout`, `abort_rejected`, `prompt_failed`, `exhausted`, `cap_hit`, `no_consent`, `lock_held`, `marker_guard`, or `superseded`). |
+| `regret` | Optional `true` on a manual row when it returns from an automatic switch within five minutes on the same session. |
 | `elapsedMs` | Finite, non-negative numeric duration for the operation. |
 | `helperCostUsd` | Optional finite, non-negative helper-call cost. |
 
@@ -165,7 +166,9 @@ Each event row is metadata-only and uses these fields:
 | `model` / `tier` | The affected `provider/model` and its 1-based ladder position, when known. |
 | `latencyMs`, `tokens`, `cost` | Optional turn measurements; only fields the host actually provides are recorded. `cost` is the selected assistant message's finite non-negative USD spend, including explicit zero, not an estimate or sum of all assistant steps. |
 | `errorKind` | For `failure` rows: the failure-kind enum. |
-| `verdict` | For `judge` rows: `switch` or `stay`. Only valid verdicts are recorded; an errored judge call is not a `stay`. |
+| `verdict` / `outcome` | Judge verdicts are `switch` or `stay`; non-verdict outcomes are `error`, `timeout`, `unparseable`, `skipped_cap`, or `skipped_no_heuristic`. Only bounded values are recorded. |
+| `reason` / `confidence` / `latencyMs` | Optional judge metadata: an existing reason enum, confidence from 0 to 1, and finite non-negative latency. |
+| `heuristicReasons` | Ordered local evidence only: `loop`, `repeated_tool_errors`, and/or `no_output`; never tool input/output. |
 | `sw` | Required for `switch` rows: `kind`, plus `reason` for `switch_dropped` and `from`/`to` when known. |
 | `helperCostUsd` | Optional judge-call cost; required finite non-negative USD cost (including zero) for `narrative` rows, which also require `model`. |
 | `what` / `untilMs` | For `health` rows: the transition enum and an optional deadline for cooldown/permanent starts. |
@@ -195,7 +198,7 @@ model was switched away from, survival (the share of turns followed by another
 turn on the same model in the same session within 30 minutes or 5 turns with no
 effective switch in between; turns with no observable outcome are censored and
 excluded), median latency, token and known turn USD cost totals (`cost$`), and
-known judge plus narrative overhead (`helper$`). The window is exact event
+known judge plus narrative overhead (`helper$`), and manual regret count per switched-from model. The window is exact event
 timestamps: only events with `now - N*86400000 <= ts <= now` count, inclusive at
 both ends and never a UTC-day label. Median latency is the median of every
 retained turn sample in that window, not a median of daily medians. Invalid

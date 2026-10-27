@@ -6,7 +6,7 @@ import type { FailureKind } from "./types"
 
 const SALT_BYTES = 32
 
-export type SwitchDropReason = "lock_held" | "marker_guard" | "superseded"
+export type SwitchDropReason = "duplicate" | "child_session" | "abort_timeout" | "abort_rejected" | "prompt_failed" | "exhausted" | "cap_hit" | "no_consent" | "lock_held" | "marker_guard" | "superseded"
 
 /** A failure-switch logs its FailureKind; a judge switch logs "quality"; a dropped switch logs "switch_dropped" with its reason. */
 export type SwitchKind = FailureKind | "switch_dropped" | "manual"
@@ -15,7 +15,7 @@ const SWITCH_KINDS = [
   "rate_limit", "quota", "auth", "free_tier_403", "server_5xx", "timeout", "model_not_found",
   "overflow", "user_abort", "unknown", "quality", "switch_dropped", "manual",
 ] as const satisfies readonly SwitchKind[]
-const DROP_REASONS = ["lock_held", "marker_guard", "superseded"] as const satisfies readonly SwitchDropReason[]
+const DROP_REASONS = ["duplicate", "child_session", "abort_timeout", "abort_rejected", "prompt_failed", "exhausted", "cap_hit", "no_consent", "lock_held", "marker_guard", "superseded"] as const satisfies readonly SwitchDropReason[]
 const MAX_RECENT_ROWS = 10
 const MAX_TAIL_BYTES = 64 * 1024
 const MODEL_REF_MAX_CHARS = 120
@@ -31,9 +31,11 @@ const switchRowSchema = z.object({
   to: z.string().regex(MODEL_REF).max(MODEL_REF_MAX_CHARS).optional(),
   kind: z.enum(SWITCH_KINDS),
   reason: z.enum(DROP_REASONS).optional(),
+  regret: z.boolean().optional(),
   elapsedMs: z.number().finite().nonnegative(),
   helperCostUsd: z.number().finite().nonnegative().optional(),
 }).refine((row) => (row.kind === "switch_dropped") === (row.reason !== undefined), { message: "switch_dropped requires a reason" })
+  .refine((row) => row.regret === undefined || row.kind === "manual", { message: "regret belongs to manual switches" })
 
 export type SwitchLogRow = z.infer<typeof switchRowSchema>
 
@@ -116,7 +118,7 @@ export class SwitchLog {
   }
 
   /** Appends metadata with an HMAC session ID and finite non-negative duration; ledger failures never escape. */
-  append(r: { ts: number; sessionID: string; from?: string; to?: string; kind: SwitchKind; reason?: SwitchDropReason; elapsedMs?: number; helperCostUsd?: number }): void {
+  append(r: { ts: number; sessionID: string; from?: string; to?: string; kind: SwitchKind; reason?: SwitchDropReason; regret?: boolean; elapsedMs?: number; helperCostUsd?: number }): void {
     if (!this.enabled) return
     try {
       const session = createHmac("sha256", this.getSalt()).update(r.sessionID).digest("hex").slice(0, 16)
@@ -126,6 +128,7 @@ export class SwitchLog {
         ...(r.from !== undefined ? { from: MODEL_REF.test(r.from) && r.from.length <= MODEL_REF_MAX_CHARS ? r.from : OMITTED_MODEL_REF } : {}),
         ...(r.to !== undefined ? { to: MODEL_REF.test(r.to) && r.to.length <= MODEL_REF_MAX_CHARS ? r.to : OMITTED_MODEL_REF } : {}),
         ...(r.reason !== undefined ? { reason: r.reason } : {}),
+        ...(r.regret !== undefined ? { regret: r.regret } : {}),
         elapsedMs: r.elapsedMs ?? 0,
         ...(r.helperCostUsd !== undefined ? { helperCostUsd: r.helperCostUsd } : {}),
       }
