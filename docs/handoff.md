@@ -15,6 +15,14 @@ GitHub issue comments hold the detailed notes; this file indexes the latest stat
 
 ## Entries (newest first)
 
+### 2026-10-27 - #107/#110/#134 closed today; CodeRabbit suspended (opencode)
+
+- Status: merged today: #108 (PR #127 `582d22b`), #109 (PR #128 `02ca1e8`), #107 (PR #133 `33ec967`), #110 spike (PR #137 `b608283`), #134 (PR #138 `bdc5553`); all Done on the board. Epic #102 reconciled as a tracking index (children table on the issue).
+- Governance: CodeRabbit suspended (trial credits; files kept) - the QA gate is now 2 differently-prompted QA subagents + a ponytail review for runtime merges; docs-only PRs need CI only (AGENTS.md rule 6, `docs/team/qa-engineer.md`). Bounded live-preflight protocol added the same day.
+- Open follow-ups (all LOW): #131 test edges, #135 controller split + shared retry constant, #136 restart cooldown truncation, #139 measurement-hold contention, #140 deferred-narrative window; #132 blocked by owner-gated #18. Owner-gated: #5/#18/#19.
+- Next: pick #136 (state seam, spike section 6 documents it) or #131 (cheapest); PM-groom first, never skip.
+- Blockers: none.
+
 ### 2026-10-25 - #82 docs refresh in flight; #72 deployed, #70 remediation pending (opencode)
 
 - Status: #72 done - merged build `90dffbb` installed at `~/.config/opencode/plugins/opencode-model-relay.js` (SHA-256 `7A97945B0A4DB8E98E08B9AFA4F4A18B8821D3B629A1709384B42F64D841E1A9`, `.disabled` absent, exclusive loading, manual hop + revert ledgered): [#72 evidence](https://github.com/malkavian-librarian/opencode-model-relay/issues/72#issuecomment-6389726018).
